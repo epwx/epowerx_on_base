@@ -136,94 +136,124 @@ export class VolumeGenerationStrategy {
   private async placeVolumeOrders(): Promise<void> {
     try {
       const ticker = await this.exchange.getTicker(this.symbol);
+      const orderBook = await this.exchange.getOrderBook(this.symbol);
       
-      logger.info(`Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
+      // Log full ticker for diagnostics
+      logger.info(`Ticker data: last=${ticker.price}, bid=${ticker.bid}, ask=${ticker.ask}, high=${ticker.high24h}, low=${ticker.low24h}`);
       
-      const lastPrice = ticker.price;
-      if (!lastPrice || lastPrice === 0) {
-        logger.warn('No price data available, skipping');
+      // Use the order book best bid/ask as reference if available (more reliable)
+      // Otherwise fall back to ticker price
+      let referencePrice = ticker.price;
+      if (orderBook.bids.length > 0 && orderBook.asks.length > 0) {
+        const bestBid = orderBook.bids[0][0];
+        const bestAsk = orderBook.asks[0][0];
+        referencePrice = (bestBid + bestAsk) / 2;
+        logger.info(`Using order book mid-price: ${referencePrice.toExponential(4)} (bid=${bestBid.toExponential(4)}, ask=${bestAsk.toExponential(4)})`);
+      } else {
+        logger.info(`Using ticker last price: ${referencePrice.toExponential(4)}`);
+      }
+
+      // If no price data, skip this round
+      if (referencePrice === 0 || !referencePrice) {
+        logger.warn('No price data available, skipping orders');
         return;
       }
 
-      // STEP 1: Check current open orders
-      const openOrders = await this.exchange.getOpenOrders(this.symbol);
-      const buyOrders = openOrders.filter(o => o.side === 'BUY');
-      const sellOrders = openOrders.filter(o => o.side === 'SELL');
+      // Calculate order size in USDT value, then convert to token amount
+      const orderSizeUSD = this.randomizeOrderSize();
+      const orderSize = orderSizeUSD / referencePrice; // Convert USD to token amount
+
+      // Calculate buy and sell prices with spread
+      // For ultra-low priced tokens, use wider spread to stay within exchange's 50-150% range
+      // Exchange validates: 50% <= order_price/latest_price <= 150%
+      // So order prices can be 0.5x to 1.5x the latest price
+      const minSpreadForSafety = 0.10; // 10% minimum spread for safety
+      const maxSpreadForVolume = 0.40; // 40% max spread (prices: 60% to 140% of market)
       
-      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: 20 each)`);
+      const spreadMultiplier = Math.min(
+        Math.max(config.volumeStrategy.spreadPercentage / 100, minSpreadForSafety),
+        maxSpreadForVolume
+      );
       
-      const targetOrdersPerSide = 20;
+      const buyPrice = referencePrice * (1 - spreadMultiplier);
+      const sellPrice = referencePrice * (1 + spreadMultiplier);
+
+      // PROFITABLE MARKET MAKING STRATEGY
+      // For tokens with wide spreads, use last price instead of order book
+      // Place tight orders around actual trade price for better fill rates
       
-      // STEP 2: If we need more orders, place them
-      if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
-        const needBuys = targetOrdersPerSide - buyOrders.length;
-        const needSells = targetOrdersPerSide - sellOrders.length;
+      // Cancel old orders periodically to keep book fresh
+      if (this.activeOrders.size > 50) {
+        const oldOrders = Array.from(this.activeOrders.keys()).slice(0, 20);
+        for (const orderId of oldOrders) {
+          try {
+            await this.exchange.cancelOrder(this.symbol, orderId);
+            this.activeOrders.delete(orderId);
+          } catch (error) {
+            logger.debug(`Could not cancel order ${orderId}`);
+          }
+        }
+      }
+      
+      let finalBuyPrice: number;
+      let finalSellPrice: number;
+      
+      // Use last price (actual trades) instead of order book for wide spreads
+      const lastPrice = ticker.price || referencePrice;
+      const targetSpread = 0.003; // 0.3% spread (tight but profitable)
+      
+      finalBuyPrice = lastPrice * (1 - targetSpread); // 0.3% below last price
+      finalSellPrice = lastPrice * (1 + targetSpread); // 0.3% above last price
+      
+      // Check order book for context
+      if (orderBook.asks.length > 0 && orderBook.bids.length > 0) {
+        const bestAsk = orderBook.asks[0][0];
+        const bestBid = orderBook.bids[0][0];
+        const bookSpreadPercent = ((bestAsk - bestBid) / lastPrice) * 100;
         
-        logger.info(`🔨 Placing ${needBuys} buy orders and ${needSells} sell orders`);
-        await this.fillOrderBook(lastPrice, needBuys, needSells);
-      } 
-      // STEP 3: If we have enough orders, do wash trade
-      else {
-        logger.info(`✅ Target orders reached. Executing wash trade...`);
-        await this.executeWashTrade(lastPrice);
+        logger.info(`Book spread: ${bookSpreadPercent.toFixed(1)}% (bid: ${bestBid.toExponential(4)}, ask: ${bestAsk.toExponential(4)})`);
+      }
+      
+      logger.info(`Profitable MM: Last price=$${lastPrice.toExponential(4)}, Buy at $${finalBuyPrice.toExponential(4)} (-0.3%), Sell at $${finalSellPrice.toExponential(4)} (+0.3%)`);
+      
+      // Safety check - verify prices are within exchange limits (50-150%)
+      const buyRatio = (finalBuyPrice / referencePrice) * 100;
+      const sellRatio = (finalSellPrice / referencePrice) * 100;
+      
+      if (buyRatio < 50 || sellRatio > 150) {
+        logger.error(`Price out of range: buy ${buyRatio.toFixed(1)}%, sell ${sellRatio.toFixed(1)}%`);
+        return;
+      }
+
+      // Check position limits before placing orders
+      if (config.risk.enablePositionLimits) {
+        const canBuy = Math.abs(this.currentPosition + orderSize) <= config.marketMaking.maxPositionSize;
+        const canSell = Math.abs(this.currentPosition - orderSize) <= config.marketMaking.maxPositionSize;
+
+        if (!canBuy && !canSell) {
+          logger.warn('Position limits reached, skipping orders');
+          return;
+        }
+
+        // Place orders based on position limits
+        if (canBuy) {
+          await this.placeBuyOrder(finalBuyPrice, orderSize);
+        }
+
+        if (canSell) {
+          await this.placeSellOrder(finalSellPrice, orderSize);
+        }
+      } else {
+        // Place both orders without position limits
+        await Promise.all([
+          this.placeBuyOrder(finalBuyPrice, orderSize),
+          this.placeSellOrder(finalSellPrice, orderSize),
+        ]);
       }
 
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
       logger.error('Error placing volume orders:', error);
-    }
-  }
-
-  private async fillOrderBook(lastPrice: number, needBuys: number, needSells: number): Promise<void> {
-    const targetSpread = 0.003; // 0.3% spread around last price
-    
-    // Place buy orders with staggered prices
-    for (let i = 0; i < needBuys; i++) {
-      const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
-      const buyPrice = lastPrice * priceOffset;
-      const orderSizeUSD = this.randomizeOrderSize();
-      const amount = orderSizeUSD / buyPrice;
-      
-      await this.placeBuyOrder(buyPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
-    }
-    
-    // Place sell orders with staggered prices
-    for (let i = 0; i < needSells; i++) {
-      const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
-      const sellPrice = lastPrice * priceOffset;
-      const orderSizeUSD = this.randomizeOrderSize();
-      const amount = orderSizeUSD / sellPrice;
-      
-      await this.placeSellOrder(sellPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
-    }
-    
-    logger.info(`✅ Placed ${needBuys} buys and ${needSells} sells`);
-  }
-
-  private async executeWashTrade(lastPrice: number): Promise<void> {
-    try {
-      // Wash trade: Buy and sell at SAME price (mid-market)
-      // With 0% fees, this costs nothing but generates volume
-      
-      const washPrice = lastPrice;
-      const washSizeUSD = 10; // $10 per wash trade
-      const washAmount = washSizeUSD / washPrice;
-      
-      logger.info(`🔄 Wash trade at $${washPrice.toExponential(4)}: ${Math.floor(washAmount).toLocaleString()} EPWX`);
-      
-      // Place both orders at SAME price - they will match
-      await Promise.all([
-        this.placeBuyOrder(washPrice, washAmount),
-        this.placeSellOrder(washPrice, washAmount)
-      ]);
-      
-      const volumeGenerated = washSizeUSD * 2; // Both sides count
-      logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: $0 (0% fees)`);
-      
-    } catch (error) {
-      logger.error('Error in wash trade:', error);
     }
   }
 
