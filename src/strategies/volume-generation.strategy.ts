@@ -152,12 +152,21 @@ export class VolumeGenerationStrategy {
       // Calculate order size (randomized for natural appearance)
       const orderSize = this.randomizeOrderSize();
 
-      // Calculate buy and sell prices with spread (wider spread to stay within 50-150% range)
-      const spreadMultiplier = Math.max(config.volumeStrategy.spreadPercentage / 100, 0.02); // Minimum 2% spread
+      // Calculate buy and sell prices with spread
+      // For ultra-low priced tokens, use much wider spread to avoid 50-150% range errors
+      // Exchange allows prices between 50% to 150% of market price
+      const minSpreadForSafety = 0.10; // 10% minimum spread for safety
+      const maxSpreadForVolume = 0.40; // 40% max spread (stays within 60-140% of market)
+      
+      const spreadMultiplier = Math.min(
+        Math.max(config.volumeStrategy.spreadPercentage / 100, minSpreadForSafety),
+        maxSpreadForVolume
+      );
+      
       const buyPrice = referencePrice * (1 - spreadMultiplier);
       const sellPrice = referencePrice * (1 + spreadMultiplier);
 
-      logger.debug(`Reference price: $${referencePrice.toExponential(2)}, Buy: $${buyPrice.toExponential(2)}, Sell: $${sellPrice.toExponential(2)}`);
+      logger.debug(`Reference price: $${referencePrice.toExponential(2)}, Spread: ${(spreadMultiplier * 100).toFixed(1)}%, Buy: $${buyPrice.toExponential(2)}, Sell: $${sellPrice.toExponential(2)}`);
 
       // Check position limits before placing orders
       if (config.risk.enablePositionLimits) {
