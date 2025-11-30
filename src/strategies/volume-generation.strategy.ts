@@ -190,6 +190,25 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      // For volume generation: alternate between maker and taker orders
+      // Maker orders add liquidity (sit in book), taker orders match immediately (generate volume)
+      const shouldTake = Math.random() > 0.5; // 50% chance to take liquidity
+      
+      let finalBuyPrice = buyPrice;
+      let finalSellPrice = sellPrice;
+      
+      if (shouldTake && orderBook.asks.length > 0 && orderBook.bids.length > 0) {
+        // Taker: buy at best ask (or slightly above), sell at best bid (or slightly below)
+        const bestAsk = orderBook.asks[0][0];
+        const bestBid = orderBook.bids[0][0];
+        
+        // Cross the spread to execute immediately
+        finalBuyPrice = bestAsk * 1.001; // Slightly above best ask to ensure execution
+        finalSellPrice = bestBid * 0.999; // Slightly below best bid to ensure execution
+        
+        logger.info(`TAKER mode: Buy at $${finalBuyPrice.toExponential(4)} (best ask), Sell at $${finalSellPrice.toExponential(4)} (best bid)`);
+      }
+
       // Check position limits before placing orders
       if (config.risk.enablePositionLimits) {
         const canBuy = Math.abs(this.currentPosition + orderSize) <= config.marketMaking.maxPositionSize;
@@ -202,17 +221,17 @@ export class VolumeGenerationStrategy {
 
         // Place orders based on position limits
         if (canBuy) {
-          await this.placeBuyOrder(buyPrice, orderSize);
+          await this.placeBuyOrder(finalBuyPrice, orderSize);
         }
 
         if (canSell) {
-          await this.placeSellOrder(sellPrice, orderSize);
+          await this.placeSellOrder(finalSellPrice, orderSize);
         }
       } else {
         // Place both orders without position limits
         await Promise.all([
-          this.placeBuyOrder(buyPrice, orderSize),
-          this.placeSellOrder(sellPrice, orderSize),
+          this.placeBuyOrder(finalBuyPrice, orderSize),
+          this.placeSellOrder(finalSellPrice, orderSize),
         ]);
       }
 
