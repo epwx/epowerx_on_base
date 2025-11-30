@@ -57,8 +57,13 @@ export class VolumeGenerationStrategy {
     this.isRunning = true;
 
     try {
-      // Cancel any existing orders
-      await this.exchange.cancelAllOrders(this.symbol);
+      // Cancel any existing orders (ignore errors if endpoint not available)
+      try {
+        await this.exchange.cancelAllOrders(this.symbol);
+        logger.info('Cancelled existing orders');
+      } catch (error: any) {
+        logger.warn('Could not cancel existing orders:', error.message);
+      }
 
       // Get initial balances
       await this.logBalances();
@@ -131,15 +136,28 @@ export class VolumeGenerationStrategy {
   private async placeVolumeOrders(): Promise<void> {
     try {
       const ticker = await this.exchange.getTicker(this.symbol);
-      const midPrice = (ticker.bid + ticker.ask) / 2;
+      
+      // Use last price if bid/ask are zero, otherwise use mid price
+      let referencePrice = ticker.price;
+      if (ticker.bid > 0 && ticker.ask > 0) {
+        referencePrice = (ticker.bid + ticker.ask) / 2;
+      }
+
+      // If no price data, skip this round
+      if (referencePrice === 0) {
+        logger.warn('No price data available, skipping orders');
+        return;
+      }
 
       // Calculate order size (randomized for natural appearance)
       const orderSize = this.randomizeOrderSize();
 
-      // Calculate buy and sell prices with tight spread
-      const spreadMultiplier = config.volumeStrategy.spreadPercentage / 100;
-      const buyPrice = midPrice * (1 - spreadMultiplier);
-      const sellPrice = midPrice * (1 + spreadMultiplier);
+      // Calculate buy and sell prices with spread (wider spread to stay within 50-150% range)
+      const spreadMultiplier = Math.max(config.volumeStrategy.spreadPercentage / 100, 0.02); // Minimum 2% spread
+      const buyPrice = referencePrice * (1 - spreadMultiplier);
+      const sellPrice = referencePrice * (1 + spreadMultiplier);
+
+      logger.debug(`Reference price: $${referencePrice.toExponential(2)}, Buy: $${buyPrice.toExponential(2)}, Sell: $${sellPrice.toExponential(2)}`);
 
       // Check position limits before placing orders
       if (config.risk.enablePositionLimits) {
