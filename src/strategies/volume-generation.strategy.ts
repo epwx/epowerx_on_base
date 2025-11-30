@@ -191,23 +191,36 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      // For volume generation: alternate between maker and taker orders
-      // Maker orders add liquidity (sit in book), taker orders match immediately (generate volume)
-      const shouldTake = Math.random() > 0.5; // 50% chance to take liquidity
+      // For volume generation: Use market orders or very aggressive limit orders
+      // Instead of maker/taker split, always cross the spread for immediate execution
+      
+      // Cancel a few old orders periodically to prevent buildup
+      if (this.activeOrders.size > 20) {
+        const oldOrders = Array.from(this.activeOrders.keys()).slice(0, 10);
+        for (const orderId of oldOrders) {
+          try {
+            await this.exchange.cancelOrder(this.symbol, orderId);
+            this.activeOrders.delete(orderId);
+          } catch (error) {
+            logger.debug(`Could not cancel order ${orderId}`);
+          }
+        }
+      }
       
       let finalBuyPrice = buyPrice;
       let finalSellPrice = sellPrice;
       
-      if (shouldTake && orderBook.asks.length > 0 && orderBook.bids.length > 0) {
-        // Taker: buy at best ask (or slightly above), sell at best bid (or slightly below)
+      if (orderBook.asks.length > 0 && orderBook.bids.length > 0) {
         const bestAsk = orderBook.asks[0][0];
         const bestBid = orderBook.bids[0][0];
         
-        // Cross the spread to execute immediately
-        finalBuyPrice = bestAsk * 1.001; // Slightly above best ask to ensure execution
-        finalSellPrice = bestBid * 0.999; // Slightly below best bid to ensure execution
+        // ALWAYS cross the spread - buy at ask, sell at bid for immediate execution
+        finalBuyPrice = bestAsk * 1.02; // 2% above best ask
+        finalSellPrice = bestBid * 0.98; // 2% below best bid
         
-        logger.info(`TAKER mode: Buy at $${finalBuyPrice.toExponential(4)} (best ask), Sell at $${finalSellPrice.toExponential(4)} (best bid)`);
+        logger.info(`Aggressive pricing: Buy at $${finalBuyPrice.toExponential(4)} (crosses ask), Sell at $${finalSellPrice.toExponential(4)} (crosses bid)`);
+      } else {
+        logger.warn('No order book data, using calculated prices');
       }
 
       // Check position limits before placing orders
