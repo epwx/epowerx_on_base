@@ -197,8 +197,9 @@ export class BiconomyExchangeService {
   ): Promise<Order> {
     try {
       const path = type === 'LIMIT' ? '/v1/private/trade/limit' : '/v1/private/trade/market';
-      // Format amount - use 2 decimals for standard tokens, or integer for large amounts
-      const amountStr = amount >= 1 ? amount.toFixed(2) : amount.toFixed(8);
+      // Format amount - different exchanges have different precision requirements
+      // For EPWX (large quantities), use integers. For small amounts, use appropriate decimals.
+      const amountStr = amount >= 1 ? Math.floor(amount).toString() : amount.toFixed(8);
       
       const params: any = {
         api_key: this.apiKey,
