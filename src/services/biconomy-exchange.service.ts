@@ -205,7 +205,21 @@ export class BiconomyExchangeService {
       };
 
       if (type === 'LIMIT' && price) {
-        params.price = price.toFixed(8);
+        // For ultra-low prices, need more decimal places
+        // Detect how many decimals needed to represent the price accurately
+        let priceStr: string;
+        if (price < 0.00000001) {
+          // For very small prices, convert to fixed with enough decimals
+          // Find number of leading zeros after decimal point
+          const priceScientific = price.toExponential();
+          const exponent = parseInt(priceScientific.split('e')[1]);
+          const decimals = Math.abs(exponent) + 3; // Add extra digits for precision
+          priceStr = price.toFixed(decimals);
+        } else {
+          priceStr = price.toFixed(8);
+        }
+        params.price = priceStr;
+        logger.info(`Placing ${side} order: amount=${amount}, price=${priceStr} (raw=${price})`);
       }
 
       const signature = this.signRequest(params);
