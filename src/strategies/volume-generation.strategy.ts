@@ -137,14 +137,15 @@ export class VolumeGenerationStrategy {
     try {
       const ticker = await this.exchange.getTicker(this.symbol);
       
-      // Use last price if bid/ask are zero, otherwise use mid price
+      // Log full ticker for diagnostics
+      logger.info(`Ticker data: last=${ticker.price}, bid=${ticker.bid}, ask=${ticker.ask}, high=${ticker.high24h}, low=${ticker.low24h}`);
+      
+      // ALWAYS use the ticker.price (which comes from ticker.last in API response)
+      // This is what the exchange uses for "latest price" validation
       let referencePrice = ticker.price;
-      if (ticker.bid > 0 && ticker.ask > 0) {
-        referencePrice = (ticker.bid + ticker.ask) / 2;
-      }
 
       // If no price data, skip this round
-      if (referencePrice === 0) {
+      if (referencePrice === 0 || !referencePrice) {
         logger.warn('No price data available, skipping orders');
         return;
       }
@@ -153,10 +154,11 @@ export class VolumeGenerationStrategy {
       const orderSize = this.randomizeOrderSize();
 
       // Calculate buy and sell prices with spread
-      // For ultra-low priced tokens, use much wider spread to avoid 50-150% range errors
-      // Exchange allows prices between 50% to 150% of market price
+      // For ultra-low priced tokens, use wider spread to stay within exchange's 50-150% range
+      // Exchange validates: 50% <= order_price/latest_price <= 150%
+      // So order prices can be 0.5x to 1.5x the latest price
       const minSpreadForSafety = 0.10; // 10% minimum spread for safety
-      const maxSpreadForVolume = 0.40; // 40% max spread (stays within 60-140% of market)
+      const maxSpreadForVolume = 0.40; // 40% max spread (prices: 60% to 140% of market)
       
       const spreadMultiplier = Math.min(
         Math.max(config.volumeStrategy.spreadPercentage / 100, minSpreadForSafety),
@@ -166,7 +168,18 @@ export class VolumeGenerationStrategy {
       const buyPrice = referencePrice * (1 - spreadMultiplier);
       const sellPrice = referencePrice * (1 + spreadMultiplier);
 
-      logger.debug(`Reference price: $${referencePrice.toExponential(2)}, Spread: ${(spreadMultiplier * 100).toFixed(1)}%, Buy: $${buyPrice.toExponential(2)}, Sell: $${sellPrice.toExponential(2)}`);
+      // Calculate price ratios to verify we're in range
+      const buyRatio = (buyPrice / referencePrice) * 100;
+      const sellRatio = (sellPrice / referencePrice) * 100;
+
+      logger.info(`Price calculation: reference=$${referencePrice.toExponential(4)}, spread=${(spreadMultiplier * 100).toFixed(1)}%`);
+      logger.info(`Buy price: $${buyPrice.toExponential(4)} (${buyRatio.toFixed(1)}% of last), Sell price: $${sellPrice.toExponential(4)} (${sellRatio.toFixed(1)}% of last)`);
+      
+      // Safety check - if prices are outside 50-150% range, skip
+      if (buyRatio < 50 || sellRatio > 150) {
+        logger.error(`Price calculation error: buy ratio ${buyRatio.toFixed(1)}% or sell ratio ${sellRatio.toFixed(1)}% outside 50-150% range!`);
+        return;
+      }
 
       // Check position limits before placing orders
       if (config.risk.enablePositionLimits) {
