@@ -329,6 +329,11 @@ export class BiconomyExchangeService {
       }
 
       const data = response.data.result;
+      
+      // Order might have been filled/canceled and removed from pending
+      if (!data || !data.id) {
+        throw new Error('Order not found or already completed');
+      }
 
       return {
         orderId: data.id.toString(),
