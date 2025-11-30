@@ -136,13 +136,22 @@ export class VolumeGenerationStrategy {
   private async placeVolumeOrders(): Promise<void> {
     try {
       const ticker = await this.exchange.getTicker(this.symbol);
+      const orderBook = await this.exchange.getOrderBook(this.symbol);
       
       // Log full ticker for diagnostics
       logger.info(`Ticker data: last=${ticker.price}, bid=${ticker.bid}, ask=${ticker.ask}, high=${ticker.high24h}, low=${ticker.low24h}`);
       
-      // ALWAYS use the ticker.price (which comes from ticker.last in API response)
-      // This is what the exchange uses for "latest price" validation
+      // Use the order book best bid/ask as reference if available (more reliable)
+      // Otherwise fall back to ticker price
       let referencePrice = ticker.price;
+      if (orderBook.bids.length > 0 && orderBook.asks.length > 0) {
+        const bestBid = orderBook.bids[0][0];
+        const bestAsk = orderBook.asks[0][0];
+        referencePrice = (bestBid + bestAsk) / 2;
+        logger.info(`Using order book mid-price: ${referencePrice.toExponential(4)} (bid=${bestBid.toExponential(4)}, ask=${bestAsk.toExponential(4)})`);
+      } else {
+        logger.info(`Using ticker last price: ${referencePrice.toExponential(4)}`);
+      }
 
       // If no price data, skip this round
       if (referencePrice === 0 || !referencePrice) {
