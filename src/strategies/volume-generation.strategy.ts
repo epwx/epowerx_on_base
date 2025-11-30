@@ -159,8 +159,9 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      // Calculate order size (randomized for natural appearance)
-      const orderSize = this.randomizeOrderSize();
+      // Calculate order size in USDT value, then convert to token amount
+      const orderSizeUSD = this.randomizeOrderSize();
+      const orderSize = orderSizeUSD / referencePrice; // Convert USD to token amount
 
       // Calculate buy and sell prices with spread
       // For ultra-low priced tokens, use wider spread to stay within exchange's 50-150% range
