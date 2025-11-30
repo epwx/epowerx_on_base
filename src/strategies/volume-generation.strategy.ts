@@ -179,7 +179,8 @@ export class VolumeGenerationStrategy {
       const sellPrice = referencePrice * (1 + spreadMultiplier);
 
       // PROFITABLE MARKET MAKING STRATEGY
-      // Place tight orders INSIDE the spread to capture profit instead of losing money
+      // For tokens with wide spreads, use last price instead of order book
+      // Place tight orders around actual trade price for better fill rates
       
       // Cancel old orders periodically to keep book fresh
       if (this.activeOrders.size > 50) {
@@ -197,33 +198,23 @@ export class VolumeGenerationStrategy {
       let finalBuyPrice: number;
       let finalSellPrice: number;
       
+      // Use last price (actual trades) instead of order book for wide spreads
+      const lastPrice = ticker.price || referencePrice;
+      const targetSpread = 0.003; // 0.3% spread (tight but profitable)
+      
+      finalBuyPrice = lastPrice * (1 - targetSpread); // 0.3% below last price
+      finalSellPrice = lastPrice * (1 + targetSpread); // 0.3% above last price
+      
+      // Check order book for context
       if (orderBook.asks.length > 0 && orderBook.bids.length > 0) {
         const bestAsk = orderBook.asks[0][0];
         const bestBid = orderBook.bids[0][0];
-        const spread = bestAsk - bestBid;
-        const spreadPercent = (spread / referencePrice) * 100;
+        const bookSpreadPercent = ((bestAsk - bestBid) / lastPrice) * 100;
         
-        // Place orders INSIDE the spread to capture profit
-        // Buy slightly above best bid, sell slightly below best ask
-        const tickSize = 0.002; // 0.2% improvement on best prices
-        finalBuyPrice = bestBid * (1 + tickSize); // Slightly better than best bid
-        finalSellPrice = bestAsk * (1 - tickSize); // Slightly better than best ask
-        
-        // Ensure prices don't cross
-        if (finalBuyPrice >= finalSellPrice) {
-          // Spread too tight, use mid-price with small spread
-          const midPrice = (bestBid + bestAsk) / 2;
-          finalBuyPrice = midPrice * 0.999;
-          finalSellPrice = midPrice * 1.001;
-        }
-        
-        logger.info(`Profitable MM: Spread=${spreadPercent.toFixed(2)}%, Buy at $${finalBuyPrice.toExponential(4)} (improves bid), Sell at $${finalSellPrice.toExponential(4)} (improves ask)`);
-      } else {
-        // No order book, use calculated prices with tight spread
-        finalBuyPrice = referencePrice * 0.999;
-        finalSellPrice = referencePrice * 1.001;
-        logger.info(`No book data, using tight spread: Buy $${finalBuyPrice.toExponential(4)}, Sell $${finalSellPrice.toExponential(4)}`);
+        logger.info(`Book spread: ${bookSpreadPercent.toFixed(1)}% (bid: ${bestBid.toExponential(4)}, ask: ${bestAsk.toExponential(4)})`);
       }
+      
+      logger.info(`Profitable MM: Last price=$${lastPrice.toExponential(4)}, Buy at $${finalBuyPrice.toExponential(4)} (-0.3%), Sell at $${finalSellPrice.toExponential(4)} (+0.3%)`);
       
       // Safety check - verify prices are within exchange limits (50-150%)
       const buyRatio = (finalBuyPrice / referencePrice) * 100;
