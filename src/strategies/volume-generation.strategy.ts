@@ -267,8 +267,14 @@ export class VolumeGenerationStrategy {
 
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;
+      
+      // For aggressive taker orders, assume they execute immediately and track volume
+      const volumeUSD = amount * price;
+      this.volumeStats.totalVolume += volumeUSD;
+      this.volumeStats.buyVolume += volumeUSD;
+      this.currentPosition += amount;
 
-      logger.debug(`📊 Buy order placed: ${amount} @ $${price.toFixed(6)}`);
+      logger.debug(`📊 Buy order placed: ${amount} @ $${price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
     } catch (error) {
       logger.error('Error placing buy order:', error);
     }
@@ -286,8 +292,14 @@ export class VolumeGenerationStrategy {
 
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;
+      
+      // For aggressive taker orders, assume they execute immediately and track volume
+      const volumeUSD = amount * price;
+      this.volumeStats.totalVolume += volumeUSD;
+      this.volumeStats.sellVolume += volumeUSD;
+      this.currentPosition -= amount;
 
-      logger.debug(`📊 Sell order placed: ${amount} @ $${price.toFixed(6)}`);
+      logger.debug(`📊 Sell order placed: ${amount} @ $${price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
     } catch (error) {
       logger.error('Error placing sell order:', error);
     }
