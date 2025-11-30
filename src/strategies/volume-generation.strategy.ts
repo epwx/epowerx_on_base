@@ -178,25 +178,12 @@ export class VolumeGenerationStrategy {
       const buyPrice = referencePrice * (1 - spreadMultiplier);
       const sellPrice = referencePrice * (1 + spreadMultiplier);
 
-      // Calculate price ratios to verify we're in range
-      const buyRatio = (buyPrice / referencePrice) * 100;
-      const sellRatio = (sellPrice / referencePrice) * 100;
-
-      logger.info(`Price calculation: reference=$${referencePrice.toExponential(4)}, spread=${(spreadMultiplier * 100).toFixed(1)}%`);
-      logger.info(`Buy price: $${buyPrice.toExponential(4)} (${buyRatio.toFixed(1)}% of last), Sell price: $${sellPrice.toExponential(4)} (${sellRatio.toFixed(1)}% of last)`);
+      // PROFITABLE MARKET MAKING STRATEGY
+      // Place tight orders INSIDE the spread to capture profit instead of losing money
       
-      // Safety check - if prices are outside 50-150% range, skip
-      if (buyRatio < 50 || sellRatio > 150) {
-        logger.error(`Price calculation error: buy ratio ${buyRatio.toFixed(1)}% or sell ratio ${sellRatio.toFixed(1)}% outside 50-150% range!`);
-        return;
-      }
-
-      // For volume generation: Use market orders or very aggressive limit orders
-      // Instead of maker/taker split, always cross the spread for immediate execution
-      
-      // Cancel a few old orders periodically to prevent buildup
-      if (this.activeOrders.size > 20) {
-        const oldOrders = Array.from(this.activeOrders.keys()).slice(0, 10);
+      // Cancel old orders periodically to keep book fresh
+      if (this.activeOrders.size > 50) {
+        const oldOrders = Array.from(this.activeOrders.keys()).slice(0, 20);
         for (const orderId of oldOrders) {
           try {
             await this.exchange.cancelOrder(this.symbol, orderId);
@@ -207,20 +194,44 @@ export class VolumeGenerationStrategy {
         }
       }
       
-      let finalBuyPrice = buyPrice;
-      let finalSellPrice = sellPrice;
+      let finalBuyPrice: number;
+      let finalSellPrice: number;
       
       if (orderBook.asks.length > 0 && orderBook.bids.length > 0) {
         const bestAsk = orderBook.asks[0][0];
         const bestBid = orderBook.bids[0][0];
+        const spread = bestAsk - bestBid;
+        const spreadPercent = (spread / referencePrice) * 100;
         
-        // ALWAYS cross the spread - buy at ask, sell at bid for immediate execution
-        finalBuyPrice = bestAsk * 1.02; // 2% above best ask
-        finalSellPrice = bestBid * 0.98; // 2% below best bid
+        // Place orders INSIDE the spread to capture profit
+        // Buy slightly above best bid, sell slightly below best ask
+        const tickSize = 0.002; // 0.2% improvement on best prices
+        finalBuyPrice = bestBid * (1 + tickSize); // Slightly better than best bid
+        finalSellPrice = bestAsk * (1 - tickSize); // Slightly better than best ask
         
-        logger.info(`Aggressive pricing: Buy at $${finalBuyPrice.toExponential(4)} (crosses ask), Sell at $${finalSellPrice.toExponential(4)} (crosses bid)`);
+        // Ensure prices don't cross
+        if (finalBuyPrice >= finalSellPrice) {
+          // Spread too tight, use mid-price with small spread
+          const midPrice = (bestBid + bestAsk) / 2;
+          finalBuyPrice = midPrice * 0.999;
+          finalSellPrice = midPrice * 1.001;
+        }
+        
+        logger.info(`Profitable MM: Spread=${spreadPercent.toFixed(2)}%, Buy at $${finalBuyPrice.toExponential(4)} (improves bid), Sell at $${finalSellPrice.toExponential(4)} (improves ask)`);
       } else {
-        logger.warn('No order book data, using calculated prices');
+        // No order book, use calculated prices with tight spread
+        finalBuyPrice = referencePrice * 0.999;
+        finalSellPrice = referencePrice * 1.001;
+        logger.info(`No book data, using tight spread: Buy $${finalBuyPrice.toExponential(4)}, Sell $${finalSellPrice.toExponential(4)}`);
+      }
+      
+      // Safety check - verify prices are within exchange limits (50-150%)
+      const buyRatio = (finalBuyPrice / referencePrice) * 100;
+      const sellRatio = (finalSellPrice / referencePrice) * 100;
+      
+      if (buyRatio < 50 || sellRatio > 150) {
+        logger.error(`Price out of range: buy ${buyRatio.toFixed(1)}%, sell ${sellRatio.toFixed(1)}%`);
+        return;
       }
 
       // Check position limits before placing orders
@@ -268,13 +279,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;
       
-      // For aggressive taker orders, assume they execute immediately and track volume
-      const volumeUSD = amount * price;
-      this.volumeStats.totalVolume += volumeUSD;
-      this.volumeStats.buyVolume += volumeUSD;
-      this.currentPosition += amount;
-
-      logger.debug(`📊 Buy order placed: ${amount} @ $${price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
+      logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
     } catch (error) {
       logger.error('Error placing buy order:', error);
     }
@@ -293,13 +298,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;
       
-      // For aggressive taker orders, assume they execute immediately and track volume
-      const volumeUSD = amount * price;
-      this.volumeStats.totalVolume += volumeUSD;
-      this.volumeStats.sellVolume += volumeUSD;
-      this.currentPosition -= amount;
-
-      logger.debug(`📊 Sell order placed: ${amount} @ $${price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
+      logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
     } catch (error) {
       logger.error('Error placing sell order:', error);
     }
