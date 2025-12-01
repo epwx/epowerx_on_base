@@ -204,23 +204,33 @@ export class VolumeGenerationStrategy {
 
   private async executeWashTrade(lastPrice: number): Promise<void> {
     try {
-      // Wash trade: Buy and sell at SAME price (mid-market)
-      // With 0% fees, this costs nothing but generates volume
+      // Natural-looking wash trades with varied amounts and slight price differences
+      // With 0% fees, any price matching still costs $0
       
-      const washPrice = lastPrice;
-      const washSizeUSD = 10; // $10 per wash trade
-      const washAmount = washSizeUSD / washPrice;
+      // Randomize the wash trade size between $8-15 for variety
+      const washSizeUSD = 8 + Math.random() * 7; // $8-15 USD
       
-      logger.info(`🔄 Wash trade at $${washPrice.toExponential(4)}: ${Math.floor(washAmount).toLocaleString()} EPWX`);
+      // Add small random price variation (±0.1%) to look natural
+      const priceVariation = 1 + (Math.random() - 0.5) * 0.002; // ±0.1%
+      const buyPrice = lastPrice * priceVariation;
+      const sellPrice = lastPrice * priceVariation; // Same price to ensure matching
       
-      // Place both orders at SAME price - they will match
-      await Promise.all([
-        this.placeBuyOrder(washPrice, washAmount),
-        this.placeSellOrder(washPrice, washAmount)
-      ]);
+      // Slightly vary the amounts (±5%) to look more organic
+      const buyAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
+      const sellAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
       
-      const volumeGenerated = washSizeUSD * 2; // Both sides count
-      logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: $0 (0% fees)`);
+      const buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
+      const sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
+      
+      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
+      
+      // Small delay between buy and sell to look more natural (50-150ms)
+      await this.placeBuyOrder(buyPrice, buyAmount);
+      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
+      await this.placeSellOrder(sellPrice, sellAmount);
+      
+      const volumeGenerated = washSizeUSD * 2;
+      logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
       
     } catch (error) {
       logger.error('Error in wash trade:', error);
