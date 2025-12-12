@@ -53,16 +53,23 @@ export class VolumeGenerationStrategy {
     logger.info(`Pair: ${this.symbol}`);
     logger.info(`Spread: ${config.volumeStrategy.spreadPercentage}%`);
     logger.info(`Order Frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    
+    // Check if ORDER_FREQUENCY is too high (potential misconfiguration)
+    if (config.volumeStrategy.orderFrequency > 60000) {
+      logger.warn(`⚠️  WARNING: ORDER_FREQUENCY is ${config.volumeStrategy.orderFrequency}ms (${(config.volumeStrategy.orderFrequency/1000).toFixed(1)}s) - this is very slow!`);
+      logger.warn(`   To place orders every 5 seconds, set ORDER_FREQUENCY=5000 in your .env file`);
+    }
 
     this.isRunning = true;
 
     try {
       // Cancel any existing orders (ignore errors if endpoint not available)
       try {
-        await this.exchange.cancelAllOrders(this.symbol);
-        logger.info('Cancelled existing orders');
+        logger.info('Attempting to cancel existing orders...');
+        const cancelled = await this.exchange.cancelAllOrders(this.symbol);
+        logger.info(`✅ Cancelled ${cancelled} existing orders`);
       } catch (error: any) {
-        logger.warn('Could not cancel existing orders:', error.message);
+        logger.warn('⚠️  Could not cancel existing orders (endpoint may not be available):', error.message);
       }
 
       // Get initial balances
