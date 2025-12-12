@@ -37,6 +37,7 @@ export class VolumeGenerationStrategy {
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
+  private readonly FEE_BUFFER_USD = 0.5; // Fee buffer for order guard
 
   constructor() {
     this.exchange = new BiconomyExchangeService();
@@ -248,15 +249,7 @@ export class VolumeGenerationStrategy {
     logger.info(`💰 Available USDT balance: $${freeUSDT.toFixed(2)}`);
     
     // Calculate reserved USD from active orders
-    let reservedForActiveOrdersUSD = 0;
-    for (const [orderId, order] of this.activeOrders.entries()) {
-      const orderInfo = this.orderPrices.get(orderId);
-      const price = orderInfo ? orderInfo.price : lastPrice;
-      // For buy orders, we reserve the USD value; for sell orders, we don't reserve USDT
-      if (order.side === 'BUY') {
-        reservedForActiveOrdersUSD += order.amount * price;
-      }
-    }
+    const reservedForActiveOrdersUSD = this.calculateReservedUSD(lastPrice);
     
     logger.info(`💼 Reserved for active orders: $${reservedForActiveOrdersUSD.toFixed(2)}`);
     
@@ -266,6 +259,7 @@ export class VolumeGenerationStrategy {
       freeUSDT,
       totalOrdersToPlace: totalOrdersNeeded,
       reservedForActiveOrdersUSD,
+      feeBufferUSD: this.FEE_BUFFER_USD,
     });
     
     if (!guardResult.allowed) {
@@ -284,8 +278,8 @@ export class VolumeGenerationStrategy {
       const buyPrice = lastPrice * priceOffset;
       const amount = safeOrderSizeUSD / buyPrice;
       
-      // Skip if amount rounds to zero or is too small
-      if (amount <= 0 || Math.floor(amount) === 0) {
+      // Skip if amount is not valid
+      if (!this.isValidOrderAmount(amount)) {
         logger.warn(`⚠️  Skipping buy order ${i+1}: amount too small (${amount.toFixed(6)})`);
         continue;
       }
@@ -301,8 +295,8 @@ export class VolumeGenerationStrategy {
       const sellPrice = lastPrice * priceOffset;
       const amount = safeOrderSizeUSD / sellPrice;
       
-      // Skip if amount rounds to zero or is too small
-      if (amount <= 0 || Math.floor(amount) === 0) {
+      // Skip if amount is not valid
+      if (!this.isValidOrderAmount(amount)) {
         logger.warn(`⚠️  Skipping sell order ${i+1}: amount too small (${amount.toFixed(6)})`);
         continue;
       }
@@ -323,19 +317,10 @@ export class VolumeGenerationStrategy {
       const freeUSDT = usdtBalance?.free || 0;
       
       // Calculate reserved USD from active orders
-      let reservedForActiveOrdersUSD = 0;
-      for (const [orderId, order] of this.activeOrders.entries()) {
-        const orderInfo = this.orderPrices.get(orderId);
-        const price = orderInfo ? orderInfo.price : lastPrice;
-        // For buy orders, we reserve the USD value
-        if (order.side === 'BUY') {
-          reservedForActiveOrdersUSD += order.amount * price;
-        }
-      }
+      const reservedForActiveOrdersUSD = this.calculateReservedUSD(lastPrice);
       
       // Calculate usable USDT after fee buffer and reservations
-      const feeBufferUSD = 0.5;
-      const usableUSDT = Math.max(0, freeUSDT - feeBufferUSD - reservedForActiveOrdersUSD);
+      const usableUSDT = Math.max(0, freeUSDT - this.FEE_BUFFER_USD - reservedForActiveOrdersUSD);
       
       logger.info(`💰 Wash trade balance check: free=$${freeUSDT.toFixed(2)}, reserved=$${reservedForActiveOrdersUSD.toFixed(2)}, usable=$${usableUSDT.toFixed(2)}`);
       
@@ -379,8 +364,8 @@ export class VolumeGenerationStrategy {
       const buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
       const sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
       
-      // Skip if amounts are too small
-      if (buyAmount <= 0 || sellAmount <= 0 || Math.floor(buyAmount) === 0 || Math.floor(sellAmount) === 0) {
+      // Skip if amounts are not valid
+      if (!this.isValidOrderAmount(buyAmount) || !this.isValidOrderAmount(sellAmount)) {
         logger.warn(`⚠️  Wash trade amounts too small (buy: ${buyAmount.toFixed(6)}, sell: ${sellAmount.toFixed(6)}), skipping`);
         return;
       }
@@ -458,6 +443,29 @@ export class VolumeGenerationStrategy {
     const { minOrderSize, maxOrderSize } = config.volumeStrategy;
     const range = maxOrderSize - minOrderSize;
     return minOrderSize + Math.random() * range;
+  }
+
+  /**
+   * Calculate total USD value reserved by active orders
+   */
+  private calculateReservedUSD(lastPrice: number): number {
+    let reservedUSD = 0;
+    for (const [orderId, order] of this.activeOrders.entries()) {
+      const orderInfo = this.orderPrices.get(orderId);
+      const price = orderInfo ? orderInfo.price : lastPrice;
+      // For buy orders, we reserve the USD value; for sell orders, we don't reserve USDT
+      if (order.side === 'BUY') {
+        reservedUSD += order.amount * price;
+      }
+    }
+    return reservedUSD;
+  }
+
+  /**
+   * Check if an order amount is valid (not zero or too small after rounding)
+   */
+  private isValidOrderAmount(amount: number): boolean {
+    return amount > 0 && Math.floor(amount) > 0;
   }
 
   private async updateOrderStatus(): Promise<void> {
