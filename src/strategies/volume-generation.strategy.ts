@@ -378,9 +378,15 @@ export class VolumeGenerationStrategy {
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
         }
-      } catch (error) {
-        logger.error(`Error checking order ${orderId}:`, error);
-        this.activeOrders.delete(orderId);
+      } catch (error: any) {
+        // Order not found or already completed - remove from tracking
+        if (error.message?.includes('not found') || error.message?.includes('already completed')) {
+          logger.debug(`Order ${orderId} no longer available (already filled/canceled), removing from tracking`);
+          this.activeOrders.delete(orderId);
+        } else {
+          logger.error(`Error checking order ${orderId}:`, error);
+          this.activeOrders.delete(orderId);
+        }
       }
     }
   }
