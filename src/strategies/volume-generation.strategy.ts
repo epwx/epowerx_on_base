@@ -11,6 +11,16 @@ interface VolumeStats {
   lastOrderTime: number;
 }
 
+interface ProfitStats {
+  realFills: number; // Count of orders filled by real users
+  washTrades: number; // Count of self-executed wash trades
+  totalProfit: number; // Total profit from spread captures
+  profitFromRealFills: number; // Profit specifically from real user fills
+  averageSpreadCaptured: number; // Average spread % captured
+  bestProfit: number; // Highest single fill profit
+  estimatedDailyProfit: number; // Projected 24h profit
+}
+
 /**
  * Volume Generation Strategy
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
@@ -20,7 +30,9 @@ export class VolumeGenerationStrategy {
   private isRunning: boolean = false;
   private symbol: string;
   private volumeStats: VolumeStats;
+  private profitStats: ProfitStats;
   private activeOrders: Map<string, Order> = new Map();
+  private orderPrices: Map<string, { side: string; price: number }> = new Map(); // Track original order prices for profit calculation
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
@@ -29,6 +41,7 @@ export class VolumeGenerationStrategy {
     this.exchange = new BiconomyExchangeService();
     this.symbol = config.trading.pair;
     this.volumeStats = this.initializeStats();
+    this.profitStats = this.initializeProfitStats();
   }
 
   private initializeStats(): VolumeStats {
@@ -39,6 +52,18 @@ export class VolumeGenerationStrategy {
       orderCount: 0,
       startTime: Date.now(),
       lastOrderTime: 0,
+    };
+  }
+
+  private initializeProfitStats(): ProfitStats {
+    return {
+      realFills: 0,
+      washTrades: 0,
+      totalProfit: 0,
+      profitFromRealFills: 0,
+      averageSpreadCaptured: 0,
+      bestProfit: 0,
+      estimatedDailyProfit: 0,
     };
   }
 
@@ -330,6 +355,7 @@ export class VolumeGenerationStrategy {
       }
 
       this.activeOrders.set(order.orderId, order);
+      this.orderPrices.set(order.orderId, { side: 'BUY', price });
       this.volumeStats.orderCount++;
       
       logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
@@ -356,6 +382,7 @@ export class VolumeGenerationStrategy {
       }
 
       this.activeOrders.set(order.orderId, order);
+      this.orderPrices.set(order.orderId, { side: 'SELL', price });
       this.volumeStats.orderCount++;
       
       logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
@@ -390,11 +417,57 @@ export class VolumeGenerationStrategy {
             this.currentPosition -= order.filled;
           }
 
+          // Calculate profit from spread capture
+          const originalPrice = this.orderPrices.get(orderId);
+          let profit = 0;
+          let spreadPercent = 0;
+          let isRealFill = true;
+
+          if (originalPrice) {
+            // Profit = actual fill price vs intended order price
+            // For buys: higher fill price than intended = loss, lower = gain
+            // For sells: lower fill price than intended = loss, higher = gain
+            if (order.side === 'BUY') {
+              profit = (originalPrice.price - order.price) * order.filled; // Profit when buying lower than intended
+              spreadPercent = ((originalPrice.price - order.price) / originalPrice.price) * 100;
+            } else {
+              profit = (order.price - originalPrice.price) * order.filled; // Profit when selling higher than intended
+              spreadPercent = ((order.price - originalPrice.price) / originalPrice.price) * 100;
+            }
+
+            // If spread is close to 0.3%, likely a wash trade fill; otherwise real user
+            isRealFill = Math.abs(spreadPercent - 0.3) > 0.05; // More than 0.05% deviation = likely real fill
+          }
+
+          this.profitStats.totalProfit += profit;
+          if (isRealFill) {
+            this.profitStats.realFills++;
+            this.profitStats.profitFromRealFills += profit;
+            logger.info(`💰 REAL FILL: ${order.side} ${order.filled.toFixed(0)} @ $${order.price.toExponential(4)} | Profit: $${profit.toFixed(4)} (${spreadPercent.toFixed(3)}%)`);
+          } else {
+            this.profitStats.washTrades++;
+            logger.info(`🔄 WASH TRADE FILLED: ${order.side} ${order.filled.toFixed(0)} @ $${order.price.toExponential(4)}`);
+          }
+
+          if (profit > this.profitStats.bestProfit) {
+            this.profitStats.bestProfit = profit;
+          }
+
+          // Update average spread captured
+          const totalFills = this.profitStats.realFills + this.profitStats.washTrades;
+          if (totalFills > 0) {
+            this.profitStats.averageSpreadCaptured = Math.abs(spreadPercent);
+            const runtimeHours = (Date.now() - this.volumeStats.startTime) / (1000 * 60 * 60);
+            this.profitStats.estimatedDailyProfit = (this.profitStats.totalProfit / Math.max(runtimeHours, 0.01)) * 24;
+          }
+
           logger.info(`✅ Order filled: ${order.side} ${order.filled} @ $${order.price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
           
           this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
         }
       } catch (error: any) {
         // Order not found or already completed - remove from tracking
@@ -468,6 +541,16 @@ export class VolumeGenerationStrategy {
     logger.info(`  Current Position: ${this.currentPosition.toFixed(2)}`);
     logger.info(`  Projected 24h: $${projectedDaily.toFixed(2)} (${targetProgress.toFixed(1)}% of target)`);
     logger.info(`  Runtime: ${runTimeHours.toFixed(2)} hours`);
+
+    // Log profit statistics
+    logger.info('💎 Profit Statistics:');
+    logger.info(`  Real Fills: ${this.profitStats.realFills}`);
+    logger.info(`  Wash Trades: ${this.profitStats.washTrades}`);
+    logger.info(`  Total Profit: $${this.profitStats.totalProfit.toFixed(4)}`);
+    logger.info(`  Real Fill Profit: $${this.profitStats.profitFromRealFills.toFixed(4)}`);
+    logger.info(`  Avg Spread: ${this.profitStats.averageSpreadCaptured.toFixed(3)}%`);
+    logger.info(`  Best Single Fill: $${this.profitStats.bestProfit.toFixed(4)}`);
+    logger.info(`  Projected 24h Profit: $${this.profitStats.estimatedDailyProfit.toFixed(2)}`);
   }
 
   private async logBalances(): Promise<void> {
