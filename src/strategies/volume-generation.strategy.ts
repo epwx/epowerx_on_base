@@ -213,16 +213,34 @@ export class VolumeGenerationStrategy {
 
   private async fillOrderBook(lastPrice: number, needBuys: number, needSells: number): Promise<void> {
     logger.info(`📚 fillOrderBook called: placing ${needBuys} buys and ${needSells} sells`);
+    
+    // Check available balance
+    const balances = await this.exchange.getBalances();
+    const usdtBalance = balances.find(b => b.asset === 'USDT');
+    const availableUSDT = usdtBalance?.free || 0;
+    
+    logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
+    
+    if (availableUSDT < 5) {
+      logger.warn(`⚠️  Insufficient USDT balance (need at least $5 per order, have $${availableUSDT.toFixed(2)})`);
+      return;
+    }
+    
+    // Calculate safe order size: divide available balance by number of orders
+    const totalOrdersNeeded = needBuys + needSells;
+    const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
+    
+    logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
+    
     const targetSpread = 0.003; // 0.3% spread around last price
     
     // Place buy orders with staggered prices
     for (let i = 0; i < needBuys; i++) {
       const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
       const buyPrice = lastPrice * priceOffset;
-      const orderSizeUSD = this.randomizeOrderSize();
-      const amount = orderSizeUSD / buyPrice;
+      const amount = safeOrderSizeUSD / buyPrice;
       
-      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} @ ${buyPrice.toExponential(4)}`);
+      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeBuyOrder(buyPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
     }
@@ -231,10 +249,9 @@ export class VolumeGenerationStrategy {
     for (let i = 0; i < needSells; i++) {
       const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
       const sellPrice = lastPrice * priceOffset;
-      const orderSizeUSD = this.randomizeOrderSize();
-      const amount = orderSizeUSD / sellPrice;
+      const amount = safeOrderSizeUSD / sellPrice;
       
-      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} @ ${sellPrice.toExponential(4)}`);
+      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeSellOrder(sellPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
     }
