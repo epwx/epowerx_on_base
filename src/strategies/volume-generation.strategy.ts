@@ -135,7 +135,14 @@ export class VolumeGenerationStrategy {
 
   private async placeVolumeOrders(): Promise<void> {
     try {
+      logger.debug('Starting placeVolumeOrders cycle');
+      
       const ticker = await this.exchange.getTicker(this.symbol);
+      
+      if (!ticker) {
+        logger.error('Ticker is undefined - API call failed');
+        return;
+      }
       
       logger.info(`Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
       
@@ -147,6 +154,12 @@ export class VolumeGenerationStrategy {
 
       // STEP 1: Check current open orders
       const openOrders = await this.exchange.getOpenOrders(this.symbol);
+      
+      if (!openOrders) {
+        logger.error('Failed to get open orders - openOrders is undefined');
+        return;
+      }
+      
       const buyOrders = openOrders.filter(o => o.side === 'BUY');
       const sellOrders = openOrders.filter(o => o.side === 'SELL');
       
@@ -239,6 +252,8 @@ export class VolumeGenerationStrategy {
 
   private async placeBuyOrder(price: number, amount: number): Promise<void> {
     try {
+      logger.debug(`Attempting to place buy order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      
       const order = await this.exchange.placeOrder(
         this.symbol,
         'BUY',
@@ -246,6 +261,11 @@ export class VolumeGenerationStrategy {
         amount,
         price
       );
+
+      if (!order) {
+        logger.error('Buy order placement returned undefined');
+        return;
+      }
 
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;
@@ -258,6 +278,8 @@ export class VolumeGenerationStrategy {
 
   private async placeSellOrder(price: number, amount: number): Promise<void> {
     try {
+      logger.debug(`Attempting to place sell order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      
       const order = await this.exchange.placeOrder(
         this.symbol,
         'SELL',
@@ -265,6 +287,11 @@ export class VolumeGenerationStrategy {
         amount,
         price
       );
+
+      if (!order) {
+        logger.error('Sell order placement returned undefined');
+        return;
+      }
 
       this.activeOrders.set(order.orderId, order);
       this.volumeStats.orderCount++;

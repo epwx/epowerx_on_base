@@ -107,7 +107,8 @@ export class BiconomyExchangeService {
         timestamp: Date.now(),
       };
     } catch (error) {
-      this.handleError(error, 'Failed to get order book');
+      logger.error('Failed to get order book:', error);
+      throw error;
     }
   }
 
@@ -135,7 +136,8 @@ export class BiconomyExchangeService {
         low24h: parseFloat(ticker.low),
       };
     } catch (error) {
-      this.handleError(error, 'Failed to get ticker');
+      logger.error('Failed to get ticker:', error);
+      throw error;
     }
   }
 
@@ -173,7 +175,8 @@ export class BiconomyExchangeService {
 
       return balances;
     } catch (error) {
-      this.handleError(error, 'Failed to get balances');
+      logger.error('Failed to get balances:', error);
+      throw error;
     }
   }
 
@@ -230,14 +233,18 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
+      logger.debug(`Sending POST request to ${path} with params:`, { ...params, api_key: '***', sign: '***' });
+      
       const response = await this.client.post(path, urlParams.toString());
       const data = response.data;
+
+      logger.debug(`Order response:`, data);
 
       if (data.code !== 0) {
         throw new Error(data.message || 'Failed to place order');
       }
 
-      logger.info(`Order placed: ${side} ${amount} ${symbol} @ ${price || 'MARKET'}`);
+      logger.info(`✅ Order placed successfully: ${side} ${amount} ${symbol} @ ${price || 'MARKET'} [ID: ${data.result.id}]`);
 
       return {
         orderId: data.result.id.toString(),
@@ -252,7 +259,8 @@ export class BiconomyExchangeService {
         fee: 0, // Zero fee for MM account
       };
     } catch (error) {
-      this.handleError(error, 'Failed to place order');
+      logger.error(`Failed to place ${side} order for ${symbol}:`, error);
+      throw error;
     }
   }
 
@@ -277,7 +285,8 @@ export class BiconomyExchangeService {
       logger.debug(`Order cancelled: ${orderId}`);
       return true;
     } catch (error) {
-      this.handleError(error, 'Failed to cancel order');
+      logger.error(`Failed to cancel order ${orderId}:`, error);
+      throw error;
     }
   }
 
@@ -306,7 +315,8 @@ export class BiconomyExchangeService {
       logger.info(`Cancelled ${count} orders`);
       return count;
     } catch (error) {
-      this.handleError(error, 'Failed to cancel all orders');
+      logger.error('Failed to cancel all orders:', error);
+      throw error;
     }
   }
 
@@ -348,7 +358,8 @@ export class BiconomyExchangeService {
         fee: 0,
       };
     } catch (error) {
-      this.handleError(error, 'Failed to get order');
+      logger.error(`Failed to get order ${orderId}:`, error);
+      throw error;
     }
   }
 
@@ -369,13 +380,17 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
+      logger.debug(`Fetching open orders for ${symbol}`);
       const response = await this.client.post('/v1/private/order/pending', urlParams.toString());
 
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get open orders');
       }
 
-      return response.data.result.records.map((order: any) => ({
+      const records = response.data.result?.records || [];
+      logger.debug(`Found ${records.length} open orders for ${symbol}`);
+
+      return records.map((order: any) => ({
         orderId: order.id.toString(),
         symbol,
         side: order.side === 1 ? 'SELL' : 'BUY',
@@ -388,7 +403,8 @@ export class BiconomyExchangeService {
         fee: 0,
       }));
     } catch (error) {
-      this.handleError(error, 'Failed to get open orders');
+      logger.error('Failed to get open orders:', error);
+      throw error;
     }
   }
 
@@ -427,7 +443,8 @@ export class BiconomyExchangeService {
         fee: parseFloat(trade.fee),
       }));
     } catch (error) {
-      this.handleError(error, 'Failed to get recent trades');
+      logger.error('Failed to get recent trades:', error);
+      throw error;
     }
   }
 
