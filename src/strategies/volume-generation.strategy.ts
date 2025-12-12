@@ -221,8 +221,9 @@ export class VolumeGenerationStrategy {
     
     logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
     
-    if (availableUSDT < 5) {
-      logger.warn(`⚠️  Insufficient USDT balance (need at least $5 per order, have $${availableUSDT.toFixed(2)})`);
+    // If USDT is very low, skip filling but don't block wash trades
+    if (availableUSDT < 0.5) {
+      logger.warn(`⚠️  Insufficient USDT balance for new orders (have $${availableUSDT.toFixed(2)})`);
       return;
     }
     
@@ -261,11 +262,28 @@ export class VolumeGenerationStrategy {
 
   private async executeWashTrade(lastPrice: number): Promise<void> {
     try {
-      // Natural-looking wash trades with varied amounts and slight price differences
-      // With 0% fees, any price matching still costs $0
+      // Check available USDT for wash trade
+      const balances = await this.exchange.getBalances();
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const availableUSDT = usdtBalance?.free || 0;
       
-      // Randomize the wash trade size between $8-15 for variety
-      const washSizeUSD = 8 + Math.random() * 7; // $8-15 USD
+      // Need at least $0.10 to execute a wash trade (very minimal)
+      if (availableUSDT < 0.10) {
+        logger.warn(`⚠️  Cannot execute wash trade - insufficient USDT ($${availableUSDT.toFixed(2)})`);
+        return;
+      }
+      
+      // Scale wash trade size based on available USDT
+      let washSizeUSD: number;
+      if (availableUSDT >= 10) {
+        washSizeUSD = 8 + Math.random() * 7; // $8-15 USD if plenty available
+      } else if (availableUSDT >= 5) {
+        washSizeUSD = 3 + Math.random() * 2; // $3-5 USD if moderate
+      } else if (availableUSDT >= 1) {
+        washSizeUSD = 0.5 + Math.random() * 0.4; // $0.5-0.9 USD if low
+      } else {
+        washSizeUSD = availableUSDT * 0.5; // Use 50% of what's left
+      }
       
       // Add small random price variation (±0.1%) to look natural
       const priceVariation = 1 + (Math.random() - 0.5) * 0.002; // ±0.1%
