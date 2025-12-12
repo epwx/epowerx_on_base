@@ -132,6 +132,7 @@ export class VolumeGenerationStrategy {
     try {
       await this.exchange.cancelAllOrders(this.symbol);
       this.activeOrders.clear();
+      this.orderPrices.clear();
       
       await this.logFinalStats();
       logger.info('✅ Volume generation bot stopped');
@@ -532,9 +533,11 @@ export class VolumeGenerationStrategy {
         if (error.message?.includes('not found') || error.message?.includes('already completed')) {
           logger.debug(`Order ${orderId} no longer available (already filled/canceled), removing from tracking`);
           this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
         } else {
           logger.error(`Error checking order ${orderId}:`, error);
           this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
         }
       }
     }
@@ -552,6 +555,7 @@ export class VolumeGenerationStrategy {
         // Cancel existing orders
         await this.exchange.cancelAllOrders(this.symbol);
         this.activeOrders.clear();
+        this.orderPrices.clear();
 
         // Place rebalancing order
         const ticker = await this.exchange.getTicker(this.symbol);
