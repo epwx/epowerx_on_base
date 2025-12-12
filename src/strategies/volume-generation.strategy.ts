@@ -1,6 +1,7 @@
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
 import { logger } from '../utils/logger';
 import { config } from '../config';
+import { computeSafeOrderSizeUSD } from '../utils/order-guard';
 
 interface VolumeStats {
   totalVolume: number;
@@ -242,21 +243,38 @@ export class VolumeGenerationStrategy {
     // Check available balance
     const balances = await this.exchange.getBalances();
     const usdtBalance = balances.find(b => b.asset === 'USDT');
-    const availableUSDT = usdtBalance?.free || 0;
+    const freeUSDT = usdtBalance?.free || 0;
     
-    logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
+    logger.info(`💰 Available USDT balance: $${freeUSDT.toFixed(2)}`);
     
-    // If USDT is very low, skip filling but don't block wash trades
-    if (availableUSDT < 0.5) {
-      logger.warn(`⚠️  Insufficient USDT balance for new orders (have $${availableUSDT.toFixed(2)})`);
+    // Calculate reserved USD from active orders
+    let reservedForActiveOrdersUSD = 0;
+    for (const [orderId, order] of this.activeOrders.entries()) {
+      const orderInfo = this.orderPrices.get(orderId);
+      const price = orderInfo ? orderInfo.price : lastPrice;
+      // For buy orders, we reserve the USD value; for sell orders, we don't reserve USDT
+      if (order.side === 'BUY') {
+        reservedForActiveOrdersUSD += order.amount * price;
+      }
+    }
+    
+    logger.info(`💼 Reserved for active orders: $${reservedForActiveOrdersUSD.toFixed(2)}`);
+    
+    // Use order guard to compute safe order size
+    const totalOrdersNeeded = needBuys + needSells;
+    const guardResult = computeSafeOrderSizeUSD({
+      freeUSDT,
+      totalOrdersToPlace: totalOrdersNeeded,
+      reservedForActiveOrdersUSD,
+    });
+    
+    if (!guardResult.allowed) {
+      logger.warn(`⚠️  Order guard blocked order placement: ${guardResult.reason}`);
       return;
     }
     
-    // Calculate safe order size: divide available balance by number of orders
-    const totalOrdersNeeded = needBuys + needSells;
-    const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
-    
-    logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
+    const safeOrderSizeUSD = guardResult.perOrderUSD;
+    logger.info(`🔧 Order guard approved: $${safeOrderSizeUSD.toFixed(2)} per order (usable: $${guardResult.usableUSD.toFixed(2)})`);
     
     const targetSpread = 0.003; // 0.3% spread around last price
     
@@ -265,6 +283,12 @@ export class VolumeGenerationStrategy {
       const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
       const buyPrice = lastPrice * priceOffset;
       const amount = safeOrderSizeUSD / buyPrice;
+      
+      // Skip if amount rounds to zero or is too small
+      if (amount <= 0 || Math.floor(amount) === 0) {
+        logger.warn(`⚠️  Skipping buy order ${i+1}: amount too small (${amount.toFixed(6)})`);
+        continue;
+      }
       
       logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeBuyOrder(buyPrice, amount);
@@ -276,6 +300,12 @@ export class VolumeGenerationStrategy {
       const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
       const sellPrice = lastPrice * priceOffset;
       const amount = safeOrderSizeUSD / sellPrice;
+      
+      // Skip if amount rounds to zero or is too small
+      if (amount <= 0 || Math.floor(amount) === 0) {
+        logger.warn(`⚠️  Skipping sell order ${i+1}: amount too small (${amount.toFixed(6)})`);
+        continue;
+      }
       
       logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeSellOrder(sellPrice, amount);
@@ -290,24 +320,51 @@ export class VolumeGenerationStrategy {
       // Check available USDT for wash trade
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
-      const availableUSDT = usdtBalance?.free || 0;
+      const freeUSDT = usdtBalance?.free || 0;
+      
+      // Calculate reserved USD from active orders
+      let reservedForActiveOrdersUSD = 0;
+      for (const [orderId, order] of this.activeOrders.entries()) {
+        const orderInfo = this.orderPrices.get(orderId);
+        const price = orderInfo ? orderInfo.price : lastPrice;
+        // For buy orders, we reserve the USD value
+        if (order.side === 'BUY') {
+          reservedForActiveOrdersUSD += order.amount * price;
+        }
+      }
+      
+      // Calculate usable USDT after fee buffer and reservations
+      const feeBufferUSD = 0.5;
+      const usableUSDT = Math.max(0, freeUSDT - feeBufferUSD - reservedForActiveOrdersUSD);
+      
+      logger.info(`💰 Wash trade balance check: free=$${freeUSDT.toFixed(2)}, reserved=$${reservedForActiveOrdersUSD.toFixed(2)}, usable=$${usableUSDT.toFixed(2)}`);
       
       // Need at least $0.10 to execute a wash trade (very minimal)
-      if (availableUSDT < 0.10) {
-        logger.warn(`⚠️  Cannot execute wash trade - insufficient USDT ($${availableUSDT.toFixed(2)})`);
+      if (usableUSDT < 0.10) {
+        logger.warn(`⚠️  Cannot execute wash trade - insufficient usable USDT ($${usableUSDT.toFixed(2)})`);
         return;
       }
       
       // Scale wash trade size based on available USDT
       let washSizeUSD: number;
-      if (availableUSDT >= 10) {
+      if (usableUSDT >= 10) {
         washSizeUSD = 8 + Math.random() * 7; // $8-15 USD if plenty available
-      } else if (availableUSDT >= 5) {
+      } else if (usableUSDT >= 5) {
         washSizeUSD = 3 + Math.random() * 2; // $3-5 USD if moderate
-      } else if (availableUSDT >= 1) {
+      } else if (usableUSDT >= 1) {
         washSizeUSD = 0.5 + Math.random() * 0.4; // $0.5-0.9 USD if low
       } else {
-        washSizeUSD = availableUSDT * 0.5; // Use 50% of what's left
+        washSizeUSD = usableUSDT * 0.5; // Use 50% of what's left
+      }
+      
+      // Ensure wash trade doesn't exceed usable USDT (need 2x for buy+sell)
+      const maxWashSize = usableUSDT * 0.4; // Use 40% max (since we need buy+sell)
+      washSizeUSD = Math.min(washSizeUSD, maxWashSize);
+      
+      // Skip if wash trade size is too small
+      if (washSizeUSD < 0.10) {
+        logger.warn(`⚠️  Wash trade size too small ($${washSizeUSD.toFixed(2)}), skipping`);
+        return;
       }
       
       // Add small random price variation (±0.1%) to look natural
@@ -322,7 +379,13 @@ export class VolumeGenerationStrategy {
       const buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
       const sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
       
-      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
+      // Skip if amounts are too small
+      if (buyAmount <= 0 || sellAmount <= 0 || Math.floor(buyAmount) === 0 || Math.floor(sellAmount) === 0) {
+        logger.warn(`⚠️  Wash trade amounts too small (buy: ${buyAmount.toFixed(6)}, sell: ${sellAmount.toFixed(6)}), skipping`);
+        return;
+      }
+      
+      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)} (~$${washSizeUSD.toFixed(2)} each)`);
       
       // Small delay between buy and sell to look more natural (50-150ms)
       await this.placeBuyOrder(buyPrice, buyAmount);
