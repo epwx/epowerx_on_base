@@ -114,17 +114,24 @@ export class BiconomyExchangeService {
 
   async getTicker(symbol: string): Promise<Ticker> {
     try {
+      logger.debug(`[getTicker] Fetching ticker for ${symbol}`);
       const response = await this.client.get('/v1/tickers');
 
+      logger.debug(`[getTicker] Got response, status: ${response.status}`);
       const data = response.data;
+      
+      logger.debug(`[getTicker] Response data type: ${typeof data}, has ticker? ${!!data?.ticker}`);
       
       // API returns array of tickers, find the matching symbol
       const targetSymbol = symbol.replace('/', '_').toUpperCase();
-      const ticker = data.ticker.find((t: any) => t.symbol === targetSymbol);
+      const ticker = data.ticker?.find((t: any) => t.symbol === targetSymbol);
       
       if (!ticker) {
+        logger.error(`[getTicker] Symbol ${targetSymbol} not found in ticker data. Available symbols: ${data.ticker?.map((t: any) => t.symbol).join(', ')}`);
         throw new Error(`Symbol ${symbol} not found in ticker data`);
       }
+
+      logger.debug(`[getTicker] Found ticker: ${JSON.stringify(ticker)}`);
 
       return {
         symbol,
@@ -136,7 +143,7 @@ export class BiconomyExchangeService {
         low24h: parseFloat(ticker.low),
       };
     } catch (error) {
-      logger.error('Failed to get ticker:', error);
+      logger.error(`[getTicker] Error fetching ticker for ${symbol}:`, error);
       throw error;
     }
   }
@@ -369,6 +376,8 @@ export class BiconomyExchangeService {
         throw new Error('Symbol is required for get open orders');
       }
 
+      logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
+
       const params: any = {
         api_key: this.apiKey,
         market: symbol.replace('/', '_').toUpperCase(),
@@ -380,15 +389,17 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      logger.debug(`Fetching open orders for ${symbol}`);
+      logger.debug(`[getOpenOrders] Making API call to /v1/private/order/pending`);
       const response = await this.client.post('/v1/private/order/pending', urlParams.toString());
 
+      logger.debug(`[getOpenOrders] Got response, code: ${response.data.code}`);
+      
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get open orders');
       }
 
       const records = response.data.result?.records || [];
-      logger.debug(`Found ${records.length} open orders for ${symbol}`);
+      logger.info(`[getOpenOrders] ✅ Found ${records.length} open orders for ${symbol}`);
 
       return records.map((order: any) => ({
         orderId: order.id.toString(),
@@ -403,7 +414,7 @@ export class BiconomyExchangeService {
         fee: 0,
       }));
     } catch (error) {
-      logger.error('Failed to get open orders:', error);
+      logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
       throw error;
     }
   }

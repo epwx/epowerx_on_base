@@ -108,13 +108,16 @@ export class VolumeGenerationStrategy {
   }
 
   private startOrderPlacementLoop(): void {
+    logger.info(`📅 Order placement loop starting with frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    
     this.orderTimer = setInterval(async () => {
       if (!this.isRunning) return;
 
       try {
+        logger.info('▶️  Calling placeVolumeOrders...');
         await this.placeVolumeOrders();
       } catch (error) {
-        logger.error('Error in order placement loop:', error);
+        logger.error('❌ Error in order placement loop:', error);
       }
     }, config.volumeStrategy.orderFrequency);
   }
