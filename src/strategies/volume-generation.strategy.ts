@@ -135,28 +135,42 @@ export class VolumeGenerationStrategy {
 
   private async placeVolumeOrders(): Promise<void> {
     try {
-      logger.debug('Starting placeVolumeOrders cycle');
+      logger.info('🔄 Starting order placement cycle');
       
-      const ticker = await this.exchange.getTicker(this.symbol);
-      
-      if (!ticker) {
-        logger.error('Ticker is undefined - API call failed');
+      let ticker;
+      try {
+        ticker = await this.exchange.getTicker(this.symbol);
+        logger.info(`✅ Got ticker: price=${ticker?.price}, bid=${ticker?.bid}, ask=${ticker?.ask}`);
+      } catch (error) {
+        logger.error('❌ Failed to get ticker:', error);
         return;
       }
       
-      logger.info(`Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
+      if (!ticker) {
+        logger.error('❌ Ticker is undefined - API call failed');
+        return;
+      }
+      
+      logger.info(`📈 Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
       
       const lastPrice = ticker.price;
       if (!lastPrice || lastPrice === 0) {
-        logger.warn('No price data available, skipping');
+        logger.warn('⚠️  No valid price data available, skipping');
         return;
       }
 
       // STEP 1: Check current open orders
-      const openOrders = await this.exchange.getOpenOrders(this.symbol);
+      let openOrders;
+      try {
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        logger.info(`✅ Got open orders: ${openOrders?.length || 0} total`);
+      } catch (error) {
+        logger.error('❌ Failed to get open orders:', error);
+        return;
+      }
       
       if (!openOrders) {
-        logger.error('Failed to get open orders - openOrders is undefined');
+        logger.error('❌ Failed to get open orders - openOrders is undefined');
         return;
       }
       
@@ -172,7 +186,7 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
         
-        logger.info(`🔨 Placing ${needBuys} buy orders and ${needSells} sell orders`);
+        logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
         await this.fillOrderBook(lastPrice, needBuys, needSells);
       } 
       // STEP 3: If we have enough orders, do wash trade
@@ -183,11 +197,12 @@ export class VolumeGenerationStrategy {
 
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
-      logger.error('Error placing volume orders:', error);
+      logger.error('💥 Unexpected error in placeVolumeOrders:', error);
     }
   }
 
   private async fillOrderBook(lastPrice: number, needBuys: number, needSells: number): Promise<void> {
+    logger.info(`📚 fillOrderBook called: placing ${needBuys} buys and ${needSells} sells`);
     const targetSpread = 0.003; // 0.3% spread around last price
     
     // Place buy orders with staggered prices
@@ -197,6 +212,7 @@ export class VolumeGenerationStrategy {
       const orderSizeUSD = this.randomizeOrderSize();
       const amount = orderSizeUSD / buyPrice;
       
+      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} @ ${buyPrice.toExponential(4)}`);
       await this.placeBuyOrder(buyPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
     }
@@ -208,11 +224,12 @@ export class VolumeGenerationStrategy {
       const orderSizeUSD = this.randomizeOrderSize();
       const amount = orderSizeUSD / sellPrice;
       
+      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} @ ${sellPrice.toExponential(4)}`);
       await this.placeSellOrder(sellPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
     }
     
-    logger.info(`✅ Placed ${needBuys} buys and ${needSells} sells`);
+    logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
   }
 
   private async executeWashTrade(lastPrice: number): Promise<void> {
