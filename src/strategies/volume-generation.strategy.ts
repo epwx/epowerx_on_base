@@ -210,9 +210,29 @@ export class VolumeGenerationStrategy {
       }
       const buyOrders = openOrders.filter(o => o.side === 'BUY');
       const sellOrders = openOrders.filter(o => o.side === 'SELL');
-      // Randomize target orders per side between 10 and 20 each cycle
-      const targetOrdersPerSide = Math.floor(10 + Math.random() * 11);
+      // Set fixed target orders per side
+      const targetOrdersPerSide = 20;
       logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      // Cancel excess buy orders
+      if (buyOrders.length > targetOrdersPerSide) {
+        const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
+        for (const order of excessBuyOrders) {
+          logger.info(`Cancelling excess BUY order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+          this.activeOrders.delete(order.orderId);
+          this.orderPrices.delete(order.orderId);
+        }
+      }
+      // Cancel excess sell orders
+      if (sellOrders.length > targetOrdersPerSide) {
+        const excessSellOrders = sellOrders.slice(targetOrdersPerSide);
+        for (const order of excessSellOrders) {
+          logger.info(`Cancelling excess SELL order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+          this.activeOrders.delete(order.orderId);
+          this.orderPrices.delete(order.orderId);
+        }
+      }
       
       // STEP 2: If we need more orders, place them
       if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
