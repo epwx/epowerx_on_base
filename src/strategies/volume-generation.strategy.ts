@@ -496,7 +496,7 @@ export class VolumeGenerationStrategy {
         logger.error('Error updating order status:', error);
       }
       // Add a delay between each order status check to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
 
