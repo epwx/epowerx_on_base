@@ -287,17 +287,17 @@ export class VolumeGenerationStrategy {
 
   private async executeWashTrade(lastPrice: number): Promise<void> {
     try {
-      // Check available USDT for wash trade
+      // Check available USDT and EPWX for wash trade
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableUSDT = usdtBalance?.free || 0;
-      
+      const availableEPWX = epwxBalance?.free || 0;
       // Need at least $0.10 to execute a wash trade (very minimal)
       if (availableUSDT < 0.10) {
         logger.warn(`⚠️  Cannot execute wash trade - insufficient USDT ($${availableUSDT.toFixed(2)})`);
         return;
       }
-      
       // Scale wash trade size based on available USDT
       let washSizeUSD: number;
       if (availableUSDT >= 10) {
@@ -309,29 +309,31 @@ export class VolumeGenerationStrategy {
       } else {
         washSizeUSD = availableUSDT * 0.5; // Use 50% of what's left
       }
-      
       // Add small random price variation (±0.1%) to look natural
       const priceVariation = 1 + (Math.random() - 0.5) * 0.002; // ±0.1%
       const buyPrice = lastPrice * priceVariation;
       const sellPrice = lastPrice * priceVariation; // Same price to ensure matching
-      
       // Slightly vary the amounts (±5%) to look more organic
       const buyAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
       const sellAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
-      
-      const buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
-      const sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
-      
+      let buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
+      let sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
+      // Ensure we never try to buy/sell more than available
+      if (buyAmount * buyPrice > availableUSDT) {
+        buyAmount = availableUSDT / buyPrice;
+        logger.warn(`⚠️  Adjusted wash buy amount to available USDT: ${buyAmount.toFixed(4)}`);
+      }
+      if (sellAmount > availableEPWX) {
+        sellAmount = availableEPWX;
+        logger.warn(`⚠️  Adjusted wash sell amount to available EPWX: ${sellAmount.toFixed(4)}`);
+      }
       logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
-      
       // Small delay between buy and sell to look more natural (50-150ms)
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
       await this.placeSellOrder(sellPrice, sellAmount);
-      
       const volumeGenerated = washSizeUSD * 2;
       logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
-      
     } catch (error) {
       logger.error('Error in wash trade:', error);
     }
@@ -339,8 +341,16 @@ export class VolumeGenerationStrategy {
 
   private async placeBuyOrder(price: number, amount: number): Promise<void> {
     try {
+      // Check available USDT before placing order
+      const balances = await this.exchange.getBalances();
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const availableUSDT = usdtBalance?.free || 0;
+      const orderValue = amount * price;
+      if (orderValue > availableUSDT) {
+        logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
+        return;
+      }
       logger.debug(`Attempting to place buy order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
-      
       const order = await this.exchange.placeOrder(
         this.symbol,
         'BUY',
@@ -348,16 +358,13 @@ export class VolumeGenerationStrategy {
         amount,
         price
       );
-
       if (!order) {
         logger.error('Buy order placement returned undefined');
         return;
       }
-
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
       this.volumeStats.orderCount++;
-      
       logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
     } catch (error) {
       logger.error('Error placing buy order:', error);
@@ -366,8 +373,15 @@ export class VolumeGenerationStrategy {
 
   private async placeSellOrder(price: number, amount: number): Promise<void> {
     try {
+      // Check available EPWX before placing order
+      const balances = await this.exchange.getBalances();
+      const epwxBalance = balances.find(b => b.asset === 'EPWX');
+      const availableEPWX = epwxBalance?.free || 0;
+      if (amount > availableEPWX) {
+        logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
+        return;
+      }
       logger.debug(`Attempting to place sell order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
-      
       const order = await this.exchange.placeOrder(
         this.symbol,
         'SELL',
@@ -375,16 +389,13 @@ export class VolumeGenerationStrategy {
         amount,
         price
       );
-
       if (!order) {
         logger.error('Sell order placement returned undefined');
         return;
       }
-
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
       this.volumeStats.orderCount++;
-      
       logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
     } catch (error) {
       logger.error('Error placing sell order:', error);
