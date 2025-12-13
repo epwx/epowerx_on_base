@@ -168,18 +168,6 @@ Press `Ctrl+C` to stop gracefully:
 ### "Insufficient balance"
 - Deposit more EPWX or USDT to your account
 - Reduce `MIN_ORDER_SIZE` and `MAX_ORDER_SIZE`
-- The bot now includes an **order guard** that automatically prevents placing orders larger than available funds
-- Order guard reserves a fee buffer (default $0.5) and uses only 80% of available funds by default
-- If orders are being blocked, check the logs for guard messages showing available vs. required balance
-
-### Order Guard Configuration
-The bot uses an intelligent order guard to prevent insufficient funds errors:
-- **Fee Buffer**: Reserves $0.5 USDT for fees (configurable)
-- **Order Size Percent**: Uses 80% of available funds (configurable)
-- **Max Order Cap**: Limits individual orders to $10 USD (configurable)
-- **Min Free Balance**: Requires minimum $1 USDT free (configurable)
-
-These settings ensure the bot never attempts orders that would fail due to low balance.
 
 ### "Orders not filling"
 - Tighten spread: reduce `SPREAD_PERCENTAGE` to 0.05
