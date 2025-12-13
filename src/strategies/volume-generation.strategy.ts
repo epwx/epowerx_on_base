@@ -204,18 +204,15 @@ export class VolumeGenerationStrategy {
         logger.error('❌ Failed to get open orders:', error);
         return;
       }
-      
       if (!openOrders) {
         logger.error('❌ Failed to get open orders - openOrders is undefined');
         return;
       }
-      
       const buyOrders = openOrders.filter(o => o.side === 'BUY');
       const sellOrders = openOrders.filter(o => o.side === 'SELL');
-      
-      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: 20 each)`);
-      
-      const targetOrdersPerSide = 20;
+      // Randomize target orders per side between 10 and 20 each cycle
+      const targetOrdersPerSide = Math.floor(10 + Math.random() * 11);
+      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
       
       // STEP 2: If we need more orders, place them
       if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
