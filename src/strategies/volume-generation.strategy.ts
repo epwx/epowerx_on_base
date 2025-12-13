@@ -410,7 +410,7 @@ export class VolumeGenerationStrategy {
 
   private async updateOrderStatus(): Promise<void> {
     const orderIds = Array.from(this.activeOrders.keys());
-    let backoff = 500; // Start with 0.5s
+    let backoff = 1000; // Start with 1s
     for (const orderId of orderIds) {
       try {
         const order = await this.exchange.getOrder(this.symbol, orderId);
@@ -484,11 +484,19 @@ export class VolumeGenerationStrategy {
         if (error.response && error.response.status === 429) {
           logger.warn('Rate limit hit (429). Backing off...');
           await new Promise(resolve => setTimeout(resolve, backoff));
-          backoff = Math.min(backoff * 2, 10000); // Exponential backoff up to 10s
+          backoff = Math.min(backoff * 2, 15000); // Exponential backoff up to 15s
+          continue;
+        }
+        if (error.message && error.message.includes('Order not found or already completed')) {
+          logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
+          this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
           continue;
         }
         logger.error('Error updating order status:', error);
       }
+      // Add a delay between each order status check to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 
