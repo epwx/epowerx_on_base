@@ -36,6 +36,7 @@ export class VolumeGenerationStrategy {
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
+  private orderStatusIndex: number = 0;
 
   constructor() {
     this.exchange = new BiconomyExchangeService();
@@ -410,8 +411,15 @@ export class VolumeGenerationStrategy {
 
   private async updateOrderStatus(): Promise<void> {
     const orderIds = Array.from(this.activeOrders.keys());
+    const batchSize = 5; // Only check 5 orders per cycle
+    if (orderIds.length === 0) return;
+    // Rotate through the list
+    const start = this.orderStatusIndex;
+    const end = Math.min(start + batchSize, orderIds.length);
+    const batch = orderIds.slice(start, end);
+    this.orderStatusIndex = end >= orderIds.length ? 0 : end;
     let backoff = 1000; // Start with 1s
-    for (const orderId of orderIds) {
+    for (const orderId of batch) {
       try {
         const order = await this.exchange.getOrder(this.symbol, orderId);
 
