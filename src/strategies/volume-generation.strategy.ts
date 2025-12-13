@@ -268,7 +268,7 @@ export class VolumeGenerationStrategy {
       
       logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeBuyOrder(buyPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
+      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
     }
     
     // Place sell orders with staggered prices
@@ -279,7 +279,7 @@ export class VolumeGenerationStrategy {
       
       logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeSellOrder(sellPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 50)); // Small delay
+      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
     }
     
     logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
@@ -410,7 +410,7 @@ export class VolumeGenerationStrategy {
 
   private async updateOrderStatus(): Promise<void> {
     const orderIds = Array.from(this.activeOrders.keys());
-
+    let backoff = 500; // Start with 0.5s
     for (const orderId of orderIds) {
       try {
         const order = await this.exchange.getOrder(this.symbol, orderId);
@@ -481,14 +481,13 @@ export class VolumeGenerationStrategy {
           this.orderPrices.delete(orderId);
         }
       } catch (error: any) {
-        // Order not found or already completed - remove from tracking
-        if (error.message?.includes('not found') || error.message?.includes('already completed')) {
-          logger.debug(`Order ${orderId} no longer available (already filled/canceled), removing from tracking`);
-          this.activeOrders.delete(orderId);
-        } else {
-          logger.error(`Error checking order ${orderId}:`, error);
-          this.activeOrders.delete(orderId);
+        if (error.response && error.response.status === 429) {
+          logger.warn('Rate limit hit (429). Backing off...');
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          backoff = Math.min(backoff * 2, 10000); // Exponential backoff up to 10s
+          continue;
         }
+        logger.error('Error updating order status:', error);
       }
     }
   }
