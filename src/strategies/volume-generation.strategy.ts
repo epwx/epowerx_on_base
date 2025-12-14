@@ -31,7 +31,7 @@ interface ProfitStats {
  */
 export class VolumeGenerationStrategy {
   static readonly DEX_PROVIDER_URL = 'https://mainnet.base.org';
-  static readonly DEX_PAIR_ADDRESS = '0x9793d47dd47024ac4e1f17988d2e92da53a94541';
+  static readonly DEX_PAIR_ADDRESS = '0x8c4fe7dd7f57c8da00ec0766a4767dacdab47bc8';
   static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
   private exchange: BiconomyExchangeService;
   private isRunning: boolean = false;
