@@ -278,26 +278,51 @@ export class VolumeGenerationStrategy {
     
     const targetSpread = 0.003; // 0.3% spread around last price
     
-    // Place buy orders with staggered prices
+    // Helper to generate variable, realistic trade quantities
+    function getVariableAmount(price: number): number {
+      // 20% chance: small (500-5,000), 50%: medium (10,000-1,000,000), 25%: large (1M-10B), 5%: huge (10B-50B)
+      const r = Math.random();
+      if (r < 0.2) {
+        // Small
+        return Math.floor(500 + Math.random() * 4500);
+      } else if (r < 0.7) {
+        // Medium
+        return Math.floor(10000 + Math.random() * (1_000_000 - 10000));
+      } else if (r < 0.95) {
+        // Large
+        return Math.floor(1_000_000 + Math.random() * (10_000_000_000 - 1_000_000));
+      } else {
+        // Huge
+        return Math.floor(10_000_000_000 + Math.random() * (50_000_000_000 - 10_000_000_000));
+      }
+    }
+
+    // Place buy orders with staggered prices and variable amounts
     for (let i = 0; i < needBuys; i++) {
       const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
       const buyPrice = lastPrice * priceOffset;
-      const amount = safeOrderSizeUSD / buyPrice;
-      
-      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
+      let amount = getVariableAmount(buyPrice);
+      // Optionally, cap by available USDT per order
+      const maxAffordable = Math.floor(safeOrderSizeUSD / buyPrice);
+      if (amount * buyPrice > safeOrderSizeUSD) amount = maxAffordable;
+      if (amount < 1) amount = 1;
+      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toLocaleString()} EPWX @ ${buyPrice.toExponential(4)} (~$${(amount*buyPrice).toFixed(2)})`);
       await this.placeBuyOrder(buyPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
-    
-    // Place sell orders with staggered prices
+
+    // Place sell orders with staggered prices and variable amounts
     for (let i = 0; i < needSells; i++) {
       const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
       const sellPrice = lastPrice * priceOffset;
-      const amount = safeOrderSizeUSD / sellPrice;
-      
-      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
+      let amount = getVariableAmount(sellPrice);
+      // Optionally, cap by available USDT per order
+      const maxAffordable = Math.floor(safeOrderSizeUSD / sellPrice);
+      if (amount * sellPrice > safeOrderSizeUSD) amount = maxAffordable;
+      if (amount < 1) amount = 1;
+      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toLocaleString()} EPWX @ ${sellPrice.toExponential(4)} (~$${(amount*sellPrice).toFixed(2)})`);
       await this.placeSellOrder(sellPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
     
     logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
