@@ -350,7 +350,7 @@ export class VolumeGenerationStrategy {
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
       // Cap MARKET sell order size to avoid 500 errors
-      const maxMarketSellAmount = 100000; // 100,000 EPWX
+      const maxMarketSellAmount = 1000; // 1,000 EPWX
       let cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
       if (sellAmount > maxMarketSellAmount) {
         logger.warn(`⚠️  Capping MARKET sell order amount from ${sellAmount} to ${maxMarketSellAmount} EPWX to avoid API errors.`);
@@ -389,10 +389,34 @@ export class VolumeGenerationStrategy {
         });
       }
       if (!marketSellOrderSuccess) {
-        logger.warn('MARKET sell order for wash trade failed. Consider reducing the cap further or checking exchange limits.', {
-          attemptedAmount: cappedSellAmount
+        logger.warn('MARKET sell order for wash trade failed. Retrying as LIMIT sell at lastPrice.', {
+          attemptedAmount: cappedSellAmount,
+          price: lastPrice
         });
-        return;
+        try {
+          logger.info(`Placing SELL LIMIT order for wash trade fallback: amount=${cappedSellAmount}, price=${lastPrice}`);
+          const limitOrder = await this.exchange.placeOrder(
+            this.symbol,
+            'SELL',
+            'LIMIT',
+            cappedSellAmount,
+            lastPrice
+          );
+          if (!limitOrder) {
+            logger.error('LIMIT sell order placement for wash trade fallback returned undefined', { symbol: this.symbol, amount: cappedSellAmount, price: lastPrice });
+            return;
+          } else {
+            logger.info(`✅ LIMIT sell order placed for wash trade fallback: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX @ $${lastPrice}`);
+          }
+        } catch (limitErr) {
+          logger.error('Error placing LIMIT sell order for wash trade fallback:', {
+            symbol: this.symbol,
+            amount: cappedSellAmount,
+            price: lastPrice,
+            error: limitErr
+          });
+          return;
+        }
       }
       const volumeGenerated = washSizeUSD * 2;
       // Update stats after successful wash trade
