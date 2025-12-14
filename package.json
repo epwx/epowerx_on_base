@@ -1,10 +1,35 @@
 {
+  "name": "biconomy-exchange-volume-bot",
+  "version": "1.0.0",
+  "description": "Volume generation bot for Biconomy Exchange with zero-fee MM account",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc -w",
+    "clean": "rm -rf dist",
+    "test:connection": "ts-node src/scripts/test-exchange-connection.ts"
+  },
+  "keywords": [
+    "biconomy",
+    "market-maker",
+    "volume-generation",
+    "crypto",
+    "trading-bot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0",
+    "ws": "^8.16.0"
+  },
   "devDependencies": {
     "@types/node": "^25.0.2",
     "@types/ws": "^8.5.10",
     "typescript": "^5.3.3",
     "ts-node": "^10.9.2"
   }
-  }
 }
-*** End Patch

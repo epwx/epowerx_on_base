@@ -1,0 +1,729 @@
+import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
+import { logger } from '../utils/logger';
+import { config } from '../config';
+
+interface VolumeStats {
+  totalVolume: number;
+  buyVolume: number;
+  sellVolume: number;
+  orderCount: number;
+  startTime: number;
+  lastOrderTime: number;
+}
+
+interface ProfitStats {
+  realFills: number; // Count of orders filled by real users
+  washTrades: number; // Count of self-executed wash trades
+  totalProfit: number; // Total profit from spread captures
+  profitFromRealFills: number; // Profit specifically from real user fills
+  averageSpreadCaptured: number; // Average spread % captured
+  bestProfit: number; // Highest single fill profit
+  estimatedDailyProfit: number; // Projected 24h profit
+}
+
+/**
+ * Volume Generation Strategy
+ * Generates trading volume on Biconomy Exchange using zero-fee MM account
+ */
+export class VolumeGenerationStrategy {
+  private exchange: BiconomyExchangeService;
+  private isRunning: boolean = false;
+  private symbol: string;
+  private volumeStats: VolumeStats;
+  private profitStats: ProfitStats;
+  private activeOrders: Map<string, Order> = new Map();
+  private orderPrices: Map<string, { side: string; price: number }> = new Map(); // Track original order prices for profit calculation
+  private updateTimer?: NodeJS.Timeout;
+  private orderTimer?: NodeJS.Timeout;
+  private currentPosition: number = 0;
+  private orderStatusIndex: number = 0;
+
+  constructor() {
+    this.exchange = new BiconomyExchangeService();
+    this.symbol = config.trading.pair;
+    this.volumeStats = this.initializeStats();
+    this.profitStats = this.initializeProfitStats();
+  }
+
+  private initializeStats(): VolumeStats {
+    return {
+      totalVolume: 0,
+      buyVolume: 0,
+      sellVolume: 0,
+      orderCount: 0,
+      startTime: Date.now(),
+      lastOrderTime: 0,
+    };
+  }
+
+  private initializeProfitStats(): ProfitStats {
+    return {
+      realFills: 0,
+      washTrades: 0,
+      totalProfit: 0,
+      profitFromRealFills: 0,
+      averageSpreadCaptured: 0,
+      bestProfit: 0,
+      estimatedDailyProfit: 0,
+    };
+  }
+
+  async start(): Promise<void> {
+    if (this.isRunning) {
+      logger.warn('Volume generation strategy is already running');
+      return;
+    }
+
+    logger.info('🚀 Starting Biconomy Exchange Volume Generation Bot...');
+    logger.info(`Target: $${config.volumeStrategy.volumeTargetDaily.toLocaleString()} daily volume`);
+    logger.info(`Pair: ${this.symbol}`);
+    logger.info(`Spread: ${config.volumeStrategy.spreadPercentage}%`);
+    logger.info(`Order Frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    
+    // Check if ORDER_FREQUENCY is too high (potential misconfiguration)
+    if (config.volumeStrategy.orderFrequency > 60000) {
+      logger.warn(`⚠️  WARNING: ORDER_FREQUENCY is ${config.volumeStrategy.orderFrequency}ms (${(config.volumeStrategy.orderFrequency/1000).toFixed(1)}s) - this is very slow!`);
+      logger.warn(`   To place orders every 5 seconds, set ORDER_FREQUENCY=5000 in your .env file`);
+    }
+
+    this.isRunning = true;
+
+    try {
+      // Cancel any existing orders (ignore errors if endpoint not available)
+      try {
+        logger.info('Attempting to cancel existing orders...');
+        const cancelled = await this.exchange.cancelAllOrders(this.symbol);
+        logger.info(`✅ Cancelled ${cancelled} existing orders`);
+      } catch (error: any) {
+        logger.warn('⚠️  Could not cancel existing orders (endpoint may not be available):', error.message);
+      }
+
+      // Get initial balances
+      await this.logBalances();
+
+      // Start order placement loop
+      this.startOrderPlacementLoop();
+
+      // Start monitoring loop
+      this.startMonitoringLoop();
+
+      logger.info('✅ Volume generation bot started successfully');
+    } catch (error) {
+      logger.error('Failed to start volume generation bot:', error);
+      this.isRunning = false;
+      throw error;
+    }
+  }
+
+  async stop(): Promise<void> {
+    logger.info('🛑 Stopping volume generation bot...');
+    this.isRunning = false;
+
+    if (this.orderTimer) {
+      clearInterval(this.orderTimer);
+      this.orderTimer = undefined;
+    }
+
+    if (this.updateTimer) {
+      clearInterval(this.updateTimer);
+      this.updateTimer = undefined;
+    }
+
+    try {
+      await this.exchange.cancelAllOrders(this.symbol);
+      this.activeOrders.clear();
+      
+      await this.logFinalStats();
+      logger.info('✅ Volume generation bot stopped');
+    } catch (error) {
+      logger.error('Error stopping bot:', error);
+    }
+  }
+
+  private startOrderPlacementLoop(): void {
+    logger.info(`📅 Order placement loop starting with frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    
+    this.orderTimer = setInterval(async () => {
+      if (!this.isRunning) return;
+
+      try {
+        logger.info('▶️  Calling placeVolumeOrders...');
+        await this.placeVolumeOrders();
+      } catch (error) {
+        logger.error('❌ Error in order placement loop:', error);
+      }
+    }, config.volumeStrategy.orderFrequency);
+  }
+
+  private startMonitoringLoop(): void {
+    this.updateTimer = setInterval(async () => {
+      if (!this.isRunning) return;
+
+      try {
+        await this.updateOrderStatus();
+        await this.checkAndRebalancePosition();
+        this.logPerformance();
+      } catch (error) {
+        logger.error('Error in monitoring loop:', error);
+      }
+    }, config.marketMaking.updateInterval);
+  }
+
+  private async placeVolumeOrders(): Promise<void> {
+    try {
+      logger.info('🔄 Starting order placement cycle');
+      
+      let ticker;
+      try {
+        ticker = await this.exchange.getTicker(this.symbol);
+        logger.info(`✅ Got ticker: price=${ticker?.price}, bid=${ticker?.bid}, ask=${ticker?.ask}`);
+      } catch (error) {
+        logger.error('❌ Failed to get ticker:', error);
+        return;
+      }
+      
+      if (!ticker) {
+        logger.error('❌ Ticker is undefined - API call failed');
+        return;
+      }
+      
+      logger.info(`📈 Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
+      
+      const lastPrice = ticker.price;
+      if (!lastPrice || lastPrice === 0) {
+        logger.warn('⚠️  No valid price data available, skipping');
+        return;
+      }
+
+      // STEP 1: Check current open orders
+      let openOrders;
+      try {
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        logger.info(`✅ Got open orders: ${openOrders?.length || 0} total`);
+      } catch (error) {
+        logger.error('❌ Failed to get open orders:', error);
+        return;
+      }
+      if (!openOrders) {
+        logger.error('❌ Failed to get open orders - openOrders is undefined');
+        return;
+      }
+      const buyOrders = openOrders.filter(o => o.side === 'BUY');
+      const sellOrders = openOrders.filter(o => o.side === 'SELL');
+      // Set fixed target orders per side
+      const targetOrdersPerSide = 20;
+      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      // Cancel excess buy orders
+      if (buyOrders.length > targetOrdersPerSide) {
+        const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
+        for (const order of excessBuyOrders) {
+          logger.info(`Cancelling excess BUY order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+          this.activeOrders.delete(order.orderId);
+          this.orderPrices.delete(order.orderId);
+        }
+      }
+      // Cancel excess sell orders
+      if (sellOrders.length > targetOrdersPerSide) {
+        const excessSellOrders = sellOrders.slice(targetOrdersPerSide);
+        for (const order of excessSellOrders) {
+          logger.info(`Cancelling excess SELL order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+          this.activeOrders.delete(order.orderId);
+          this.orderPrices.delete(order.orderId);
+        }
+      }
+      
+      // STEP 2: If we need more orders, place them
+      if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
+        const needBuys = targetOrdersPerSide - buyOrders.length;
+        const needSells = targetOrdersPerSide - sellOrders.length;
+        
+        logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
+        await this.fillOrderBook(lastPrice, needBuys, needSells);
+      } 
+      // STEP 3: If we have enough orders, do wash trade
+      else {
+        logger.info(`✅ Target orders reached. Executing wash trade...`);
+        await this.executeWashTrade(lastPrice);
+      }
+
+      this.volumeStats.lastOrderTime = Date.now();
+    } catch (error) {
+      logger.error('💥 Unexpected error in placeVolumeOrders:', error);
+    }
+  }
+
+  private async fillOrderBook(lastPrice: number, needBuys: number, needSells: number): Promise<void> {
+    logger.info(`📚 fillOrderBook called: placing ${needBuys} buys and ${needSells} sells`);
+    
+    // Check available balance
+    const balances = await this.exchange.getBalances();
+    const usdtBalance = balances.find(b => b.asset === 'USDT');
+    const availableUSDT = usdtBalance?.free || 0;
+    
+    logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
+    
+    // If USDT is very low, skip filling but don't block wash trades
+    if (availableUSDT < 0.5) {
+      logger.warn(`⚠️  Insufficient USDT balance for new orders (have $${availableUSDT.toFixed(2)})`);
+      return;
+    }
+    
+    // Calculate safe order size: divide available balance by number of orders
+    const totalOrdersNeeded = needBuys + needSells;
+    const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
+    
+    logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
+    
+    const targetSpread = 0.003; // 0.3% spread around last price
+    
+    // Helper to generate variable, realistic trade quantities
+    function getVariableAmount(price: number): number {
+      // 20% chance: small (500-5,000), 50%: medium (10,000-1,000,000), 25%: large (1M-10B), 5%: huge (10B-50B)
+      const r = Math.random();
+      if (r < 0.2) {
+        // Small
+        return Math.floor(500 + Math.random() * 4500);
+      } else if (r < 0.7) {
+        // Medium
+        return Math.floor(10000 + Math.random() * (1_000_000 - 10000));
+      } else if (r < 0.95) {
+        // Large
+        return Math.floor(1_000_000 + Math.random() * (10_000_000_000 - 1_000_000));
+      } else {
+        // Huge
+        return Math.floor(10_000_000_000 + Math.random() * (50_000_000_000 - 10_000_000_000));
+      }
+    }
+
+    // Place buy orders with staggered prices and variable amounts
+    for (let i = 0; i < needBuys; i++) {
+      const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
+      const buyPrice = lastPrice * priceOffset;
+      let amount = getVariableAmount(buyPrice);
+      // Optionally, cap by available USDT per order
+      const maxAffordable = Math.floor(safeOrderSizeUSD / buyPrice);
+      if (amount * buyPrice > safeOrderSizeUSD) amount = maxAffordable;
+      if (amount < 1) amount = 1;
+      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toLocaleString()} EPWX @ ${buyPrice.toExponential(4)} (~$${(amount*buyPrice).toFixed(2)})`);
+      await this.placeBuyOrder(buyPrice, amount);
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    // Place sell orders with staggered prices and variable amounts
+    for (let i = 0; i < needSells; i++) {
+      const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
+      const sellPrice = lastPrice * priceOffset;
+      let amount = getVariableAmount(sellPrice);
+      // Optionally, cap by available USDT per order
+      const maxAffordable = Math.floor(safeOrderSizeUSD / sellPrice);
+      if (amount * sellPrice > safeOrderSizeUSD) amount = maxAffordable;
+      if (amount < 1) amount = 1;
+      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toLocaleString()} EPWX @ ${sellPrice.toExponential(4)} (~$${(amount*sellPrice).toFixed(2)})`);
+      await this.placeSellOrder(sellPrice, amount);
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
+  }
+
+  private async executeWashTrade(lastPrice: number): Promise<void> {
+    try {
+      // Check available USDT and EPWX for wash trade
+      const balances = await this.exchange.getBalances();
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const epwxBalance = balances.find(b => b.asset === 'EPWX');
+      const availableUSDT = usdtBalance?.free || 0;
+      const availableEPWX = epwxBalance?.free || 0;
+      // Need at least $0.10 to execute a wash trade (very minimal)
+      if (availableUSDT < 0.10) {
+        logger.warn(`⚠️  Cannot execute wash trade - insufficient USDT ($${availableUSDT.toFixed(2)})`);
+        return;
+      }
+      // Scale wash trade size based on available USDT
+      let washSizeUSD: number;
+      if (availableUSDT >= 10) {
+        washSizeUSD = 8 + Math.random() * 7; // $8-15 USD if plenty available
+      } else if (availableUSDT >= 5) {
+        washSizeUSD = 3 + Math.random() * 2; // $3-5 USD if moderate
+      } else if (availableUSDT >= 1) {
+        washSizeUSD = 0.5 + Math.random() * 0.4; // $0.5-0.9 USD if low
+      } else {
+        washSizeUSD = availableUSDT * 0.5; // Use 50% of what's left
+      }
+      // Add small random price variation (±0.1%) to look natural
+      const priceVariation = 1 + (Math.random() - 0.5) * 0.002; // ±0.1%
+      const buyPrice = lastPrice * priceVariation;
+      const sellPrice = lastPrice * priceVariation; // Same price to ensure matching
+      // Slightly vary the amounts (±5%) to look more organic
+      const buyAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
+      const sellAmountVariation = 1 + (Math.random() - 0.5) * 0.1; // ±5%
+      let buyAmount = (washSizeUSD / buyPrice) * buyAmountVariation;
+      let sellAmount = (washSizeUSD / sellPrice) * sellAmountVariation;
+      // Ensure we never try to buy/sell more than available
+      if (buyAmount * buyPrice > availableUSDT) {
+        buyAmount = availableUSDT / buyPrice;
+        logger.warn(`⚠️  Adjusted wash buy amount to available USDT: ${buyAmount.toFixed(4)}`);
+      }
+      if (sellAmount > availableEPWX) {
+        sellAmount = availableEPWX;
+        logger.warn(`⚠️  Adjusted wash sell amount to available EPWX: ${sellAmount.toFixed(4)}`);
+      }
+      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)} (LIMIT), Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)} (MARKET)`);
+      // Place LIMIT buy order, then MARKET sell order for guaranteed fill
+      await this.placeBuyOrder(buyPrice, buyAmount);
+      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
+      // Cap MARKET sell order size to avoid 500 errors
+      const maxMarketSellAmount = 1000; // 1,000 EPWX
+      let cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
+      if (sellAmount > maxMarketSellAmount) {
+        logger.warn(`⚠️  Capping MARKET sell order amount from ${sellAmount} to ${maxMarketSellAmount} EPWX to avoid API errors.`);
+      }
+      let marketSellOrderSuccess = false;
+      try {
+        logger.info(`Placing SELL MARKET order: amount=${cappedSellAmount}`);
+        const order = await this.exchange.placeOrder(
+          this.symbol,
+          'SELL',
+          'MARKET',
+          cappedSellAmount
+        );
+        if (!order) {
+          logger.error('Market sell order placement returned undefined', { symbol: this.symbol, amount: cappedSellAmount });
+        } else {
+          logger.info(`✅ Market sell order placed: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX`);
+          marketSellOrderSuccess = true;
+        }
+      } catch (err) {
+        let errorData = err;
+        let errorMsg = '';
+        if (err && typeof err === 'object') {
+          if ('response' in err && err.response && typeof err.response === 'object' && 'data' in err.response) {
+            errorData = (err as any).response.data;
+            errorMsg = JSON.stringify(errorData);
+          } else if ('message' in err) {
+            errorMsg = (err as any).message;
+          }
+        }
+        logger.error('Error placing market sell order for wash trade:', {
+          symbol: this.symbol,
+          amount: cappedSellAmount,
+          error: errorData,
+          errorMsg
+        });
+      }
+      if (!marketSellOrderSuccess) {
+        logger.warn('MARKET sell order for wash trade failed. Retrying as LIMIT sell at lastPrice.', {
+          attemptedAmount: cappedSellAmount,
+          price: lastPrice
+        });
+        try {
+          logger.info(`Placing SELL LIMIT order for wash trade fallback: amount=${cappedSellAmount}, price=${lastPrice}`);
+          const limitOrder = await this.exchange.placeOrder(
+            this.symbol,
+            'SELL',
+            'LIMIT',
+            cappedSellAmount,
+            lastPrice
+          );
+          if (!limitOrder) {
+            logger.error('LIMIT sell order placement for wash trade fallback returned undefined', { symbol: this.symbol, amount: cappedSellAmount, price: lastPrice });
+            return;
+          } else {
+            logger.info(`✅ LIMIT sell order placed for wash trade fallback: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX @ $${lastPrice}`);
+          }
+        } catch (limitErr) {
+          logger.error('Error placing LIMIT sell order for wash trade fallback:', {
+            symbol: this.symbol,
+            amount: cappedSellAmount,
+            price: lastPrice,
+            error: limitErr
+          });
+          return;
+        }
+      }
+      const volumeGenerated = washSizeUSD * 2;
+      // Update stats after successful wash trade
+      this.profitStats.washTrades++;
+      this.volumeStats.totalVolume += volumeGenerated;
+      this.volumeStats.buyVolume += washSizeUSD;
+      this.volumeStats.sellVolume += washSizeUSD;
+      logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
+    } catch (error) {
+      logger.error('Error in wash trade:', error);
+    }
+  }
+
+  private async placeBuyOrder(price: number, amount: number): Promise<void> {
+    try {
+      // Check available USDT before placing order
+      const balances = await this.exchange.getBalances();
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const availableUSDT = usdtBalance?.free || 0;
+      const orderValue = amount * price;
+      if (orderValue > availableUSDT) {
+        logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
+        return;
+      }
+      logger.debug(`Attempting to place buy order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      const order = await this.exchange.placeOrder(
+        this.symbol,
+        'BUY',
+        'LIMIT',
+        amount,
+        price
+      );
+      if (!order) {
+        logger.error('Buy order placement returned undefined');
+        return;
+      }
+      this.activeOrders.set(order.orderId, order);
+      this.orderPrices.set(order.orderId, { side: 'BUY', price });
+      this.volumeStats.orderCount++;
+      logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+    } catch (error) {
+      logger.error('Error placing buy order:', error);
+    }
+  }
+
+  private async placeSellOrder(price: number, amount: number): Promise<void> {
+    try {
+      // Check available EPWX before placing order
+      const balances = await this.exchange.getBalances();
+      const epwxBalance = balances.find(b => b.asset === 'EPWX');
+      const availableEPWX = epwxBalance?.free || 0;
+      if (amount > availableEPWX) {
+        logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
+        return;
+      }
+      logger.debug(`Attempting to place sell order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      const order = await this.exchange.placeOrder(
+        this.symbol,
+        'SELL',
+        'LIMIT',
+        amount,
+        price
+      );
+      if (!order) {
+        logger.error('Sell order placement returned undefined');
+        return;
+      }
+      this.activeOrders.set(order.orderId, order);
+      this.orderPrices.set(order.orderId, { side: 'SELL', price });
+      this.volumeStats.orderCount++;
+      logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+    } catch (error) {
+      logger.error('Error placing sell order:', error);
+    }
+  }
+
+  private randomizeOrderSize(): number {
+    const { minOrderSize, maxOrderSize } = config.volumeStrategy;
+    const range = maxOrderSize - minOrderSize;
+    return minOrderSize + Math.random() * range;
+  }
+
+  private async updateOrderStatus(): Promise<void> {
+    const orderIds = Array.from(this.activeOrders.keys());
+    const batchSize = 5; // Only check 5 orders per cycle
+    if (orderIds.length === 0) return;
+    // Rotate through the list
+    const start = this.orderStatusIndex;
+    const end = Math.min(start + batchSize, orderIds.length);
+    const batch = orderIds.slice(start, end);
+    this.orderStatusIndex = end >= orderIds.length ? 0 : end;
+    let backoff = 1000; // Start with 1s
+    for (const orderId of batch) {
+      try {
+        const order = await this.exchange.getOrder(this.symbol, orderId);
+
+        if (order.status === 'FILLED') {
+          // Update volume stats
+          const volumeUSD = order.filled * order.price;
+          this.volumeStats.totalVolume += volumeUSD;
+
+          if (order.side === 'BUY') {
+            this.volumeStats.buyVolume += volumeUSD;
+            this.currentPosition += order.filled;
+          } else {
+            this.volumeStats.sellVolume += volumeUSD;
+            this.currentPosition -= order.filled;
+          }
+
+          // Calculate profit from spread capture
+          const originalPrice = this.orderPrices.get(orderId);
+          let profit = 0;
+          let spreadPercent = 0;
+          let isRealFill = true;
+
+          if (originalPrice) {
+            // Profit = actual fill price vs intended order price
+            // For buys: higher fill price than intended = loss, lower = gain
+            // For sells: lower fill price than intended = loss, higher = gain
+            if (order.side === 'BUY') {
+              profit = (originalPrice.price - order.price) * order.filled; // Profit when buying lower than intended
+              spreadPercent = ((originalPrice.price - order.price) / originalPrice.price) * 100;
+            } else {
+              profit = (order.price - originalPrice.price) * order.filled; // Profit when selling higher than intended
+              spreadPercent = ((order.price - originalPrice.price) / originalPrice.price) * 100;
+            }
+
+            // If spread is close to 0.3%, likely a wash trade fill; otherwise real user
+            isRealFill = Math.abs(spreadPercent - 0.3) > 0.05; // More than 0.05% deviation = likely real fill
+          }
+
+          this.profitStats.totalProfit += profit;
+          if (isRealFill) {
+            this.profitStats.realFills++;
+            this.profitStats.profitFromRealFills += profit;
+            logger.info(`💰 REAL FILL: ${order.side} ${order.filled.toFixed(0)} @ $${order.price.toExponential(4)} | Profit: $${profit.toFixed(4)} (${spreadPercent.toFixed(3)}%)`);
+          } else {
+            this.profitStats.washTrades++;
+            logger.info(`🔄 WASH TRADE FILLED: ${order.side} ${order.filled.toFixed(0)} @ $${order.price.toExponential(4)}`);
+          }
+
+          if (profit > this.profitStats.bestProfit) {
+            this.profitStats.bestProfit = profit;
+          }
+
+          // Update average spread captured
+          const totalFills = this.profitStats.realFills + this.profitStats.washTrades;
+          if (totalFills > 0) {
+            this.profitStats.averageSpreadCaptured = Math.abs(spreadPercent);
+            const runtimeHours = (Date.now() - this.volumeStats.startTime) / (1000 * 60 * 60);
+            this.profitStats.estimatedDailyProfit = (this.profitStats.totalProfit / Math.max(runtimeHours, 0.01)) * 24;
+          }
+
+          logger.info(`✅ Order filled: ${order.side} ${order.filled} @ $${order.price.toFixed(6)} | Volume: $${volumeUSD.toFixed(2)}`);
+          
+          this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
+        } else if (order.status === 'CANCELED') {
+          this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
+        }
+      } catch (error: any) {
+        if (error.response && error.response.status === 429) {
+          logger.warn('Rate limit hit (429). Backing off...');
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          backoff = Math.min(backoff * 2, 15000); // Exponential backoff up to 15s
+          continue;
+        }
+        if (error.message && error.message.includes('Order not found or already completed')) {
+          logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
+          this.activeOrders.delete(orderId);
+          this.orderPrices.delete(orderId);
+          continue;
+        }
+        logger.error('Error updating order status:', error);
+      }
+      // Add a delay between each order status check to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+
+  private async checkAndRebalancePosition(): Promise<void> {
+    if (!config.risk.enablePositionLimits) return;
+
+    const positionThreshold = config.marketMaking.positionRebalanceThreshold;
+
+    if (Math.abs(this.currentPosition) > positionThreshold) {
+      logger.warn(`⚖️ Position rebalance needed: ${this.currentPosition.toFixed(2)}`);
+
+      try {
+        // Cancel existing orders
+        await this.exchange.cancelAllOrders(this.symbol);
+        this.activeOrders.clear();
+
+        // Place rebalancing order
+        const ticker = await this.exchange.getTicker(this.symbol);
+        const rebalanceAmount = Math.abs(this.currentPosition) * 0.5; // Rebalance 50%
+
+        if (this.currentPosition > 0) {
+          // We have too much, sell
+          await this.exchange.placeOrder(
+            this.symbol,
+            'SELL',
+            'LIMIT',
+            rebalanceAmount,
+            ticker.ask
+          );
+          logger.info(`📉 Rebalancing: Selling ${rebalanceAmount.toFixed(2)}`);
+        } else {
+          // We're short, buy
+          await this.exchange.placeOrder(
+            this.symbol,
+            'BUY',
+            'LIMIT',
+            rebalanceAmount,
+            ticker.bid
+          );
+          logger.info(`📈 Rebalancing: Buying ${rebalanceAmount.toFixed(2)}`);
+        }
+      } catch (error) {
+        logger.error('Error rebalancing position:', error);
+      }
+    }
+  }
+
+  private logPerformance(): void {
+    const runTimeHours = (Date.now() - this.volumeStats.startTime) / (1000 * 60 * 60);
+    const volumeRate = this.volumeStats.totalVolume / runTimeHours;
+    const projectedDaily = volumeRate * 24;
+    const targetProgress = (projectedDaily / config.volumeStrategy.volumeTargetDaily) * 100;
+
+    logger.info('📊 Volume Statistics:');
+    logger.info(`  Total Volume: $${this.volumeStats.totalVolume.toFixed(2)}`);
+    logger.info(`  Buy Volume: $${this.volumeStats.buyVolume.toFixed(2)}`);
+    logger.info(`  Sell Volume: $${this.volumeStats.sellVolume.toFixed(2)}`);
+    logger.info(`  Orders: ${this.volumeStats.orderCount}`);
+    logger.info(`  Active Orders: ${this.activeOrders.size}`);
+    logger.info(`  Current Position: ${this.currentPosition.toFixed(2)}`);
+    logger.info(`  Projected 24h: $${projectedDaily.toFixed(2)} (${targetProgress.toFixed(1)}% of target)`);
+    logger.info(`  Runtime: ${runTimeHours.toFixed(2)} hours`);
+
+    // Log profit statistics
+    logger.info('💎 Profit Statistics:');
+    logger.info(`  Real Fills: ${this.profitStats.realFills}`);
+    logger.info(`  Wash Trades: ${this.profitStats.washTrades}`);
+    logger.info(`  Total Profit: $${this.profitStats.totalProfit.toFixed(4)}`);
+    logger.info(`  Real Fill Profit: $${this.profitStats.profitFromRealFills.toFixed(4)}`);
+    logger.info(`  Avg Spread: ${this.profitStats.averageSpreadCaptured.toFixed(3)}%`);
+    logger.info(`  Best Single Fill: $${this.profitStats.bestProfit.toFixed(4)}`);
+    logger.info(`  Projected 24h Profit: $${this.profitStats.estimatedDailyProfit.toFixed(2)}`);
+  }
+
+  private async logBalances(): Promise<void> {
+    try {
+      const balances = await this.exchange.getBalances();
+      logger.info('💰 Account Balances:');
+      balances
+        .filter(b => b.total > 0)
+        .forEach(b => {
+          logger.info(`  ${b.asset}: ${b.total.toFixed(8)} (Free: ${b.free.toFixed(8)}, Locked: ${b.locked.toFixed(8)})`);
+        });
+    } catch (error) {
+      logger.error('Error fetching balances:', error);
+    }
+  }
+
+  private async logFinalStats(): Promise<void> {
+    const runTimeHours = (Date.now() - this.volumeStats.startTime) / (1000 * 60 * 60);
+
+    logger.info('');
+    logger.info('═══════════════════════════════════════');
+    logger.info('📈 FINAL VOLUME GENERATION REPORT');
+    logger.info('═══════════════════════════════════════');
+    logger.info(`Total Volume Generated: $${this.volumeStats.totalVolume.toFixed(2)}`);
+    logger.info(`Buy Volume: $${this.volumeStats.buyVolume.toFixed(2)}`);
+    logger.info(`Sell Volume: $${this.volumeStats.sellVolume.toFixed(2)}`);
+    logger.info(`Total Orders: ${this.volumeStats.orderCount}`);
+    logger.info(`Runtime: ${runTimeHours.toFixed(2)} hours`);
+    logger.info(`Average Volume/Hour: $${(this.volumeStats.totalVolume / runTimeHours).toFixed(2)}`);
+    logger.info('═══════════════════════════════════════');
+    logger.info('');
+
+    await this.logBalances();
+  }
+}
