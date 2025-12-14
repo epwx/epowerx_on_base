@@ -234,6 +234,9 @@ export class BiconomyExchangeService {
         }
         params.price = priceStr;
         logger.info(`Placing ${side} order: amount=${amountStr}, price=${priceStr} (raw price=${price})`);
+      } else if (type === 'MARKET') {
+        // Do NOT include price for MARKET orders
+        logger.info(`Placing ${side} MARKET order: amount=${amountStr}`);
       }
 
       const signature = this.signRequest(params);
