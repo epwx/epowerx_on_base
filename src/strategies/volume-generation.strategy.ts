@@ -349,23 +349,37 @@ export class VolumeGenerationStrategy {
       // Place LIMIT buy order, then MARKET sell order for guaranteed fill
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
-      // Place MARKET sell order (guaranteed to fill against our buy)
+      // Cap MARKET sell order size to avoid 500 errors
+      const maxMarketSellAmount = 10000000; // 10 million EPWX
+      const cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
+      if (sellAmount > maxMarketSellAmount) {
+        logger.warn(`⚠️  Capping MARKET sell order amount from ${sellAmount} to ${maxMarketSellAmount} EPWX to avoid API errors.`);
+      }
       try {
         const order = await this.exchange.placeOrder(
           this.symbol,
           'SELL',
           'MARKET',
-          sellAmount
+          cappedSellAmount
         );
         if (!order) {
-          logger.error('Market sell order placement returned undefined');
+          logger.error('Market sell order placement returned undefined', { symbol: this.symbol, amount: cappedSellAmount });
         } else {
-          logger.info(`✅ Market sell order placed: ${Math.floor(sellAmount).toLocaleString()} EPWX`);
+          logger.info(`✅ Market sell order placed: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX`);
         }
       } catch (err) {
-        logger.error('Error placing market sell order for wash trade:', err);
+        logger.error('Error placing market sell order for wash trade:', {
+          symbol: this.symbol,
+          amount: cappedSellAmount,
+          error: err && err.response ? err.response.data : err
+        });
       }
       const volumeGenerated = washSizeUSD * 2;
+      // Update stats after successful wash trade
+      this.profitStats.washTrades++;
+      this.volumeStats.totalVolume += volumeGenerated;
+      this.volumeStats.buyVolume += washSizeUSD;
+      this.volumeStats.sellVolume += washSizeUSD;
       logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
     } catch (error) {
       logger.error('Error in wash trade:', error);
