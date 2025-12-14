@@ -368,10 +368,14 @@ export class VolumeGenerationStrategy {
           logger.info(`✅ Market sell order placed: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX`);
         }
       } catch (err) {
+        let errorData = err;
+        if (err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response) {
+          errorData = (err as any).response.data;
+        }
         logger.error('Error placing market sell order for wash trade:', {
           symbol: this.symbol,
           amount: cappedSellAmount,
-          error: err && err.response ? err.response.data : err
+          error: errorData
         });
       }
       const volumeGenerated = washSizeUSD * 2;
