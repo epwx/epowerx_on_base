@@ -345,11 +345,26 @@ export class VolumeGenerationStrategy {
         sellAmount = availableEPWX;
         logger.warn(`⚠️  Adjusted wash sell amount to available EPWX: ${sellAmount.toFixed(4)}`);
       }
-      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
-      // Small delay between buy and sell to look more natural (50-150ms)
+      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)} (LIMIT), Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)} (MARKET)`);
+      // Place LIMIT buy order, then MARKET sell order for guaranteed fill
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
-      await this.placeSellOrder(sellPrice, sellAmount);
+      // Place MARKET sell order (guaranteed to fill against our buy)
+      try {
+        const order = await this.exchange.placeOrder(
+          this.symbol,
+          'SELL',
+          'MARKET',
+          sellAmount
+        );
+        if (!order) {
+          logger.error('Market sell order placement returned undefined');
+        } else {
+          logger.info(`✅ Market sell order placed: ${Math.floor(sellAmount).toLocaleString()} EPWX`);
+        }
+      } catch (err) {
+        logger.error('Error placing market sell order for wash trade:', err);
+      }
       const volumeGenerated = washSizeUSD * 2;
       logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
     } catch (error) {
