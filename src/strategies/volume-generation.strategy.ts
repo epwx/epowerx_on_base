@@ -350,12 +350,14 @@ export class VolumeGenerationStrategy {
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
       // Cap MARKET sell order size to avoid 500 errors
-      const maxMarketSellAmount = 10000000; // 10 million EPWX
-      const cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
+      const maxMarketSellAmount = 100000; // 100,000 EPWX
+      let cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
       if (sellAmount > maxMarketSellAmount) {
         logger.warn(`⚠️  Capping MARKET sell order amount from ${sellAmount} to ${maxMarketSellAmount} EPWX to avoid API errors.`);
       }
+      let marketSellOrderSuccess = false;
       try {
+        logger.info(`Placing SELL MARKET order: amount=${cappedSellAmount}`);
         const order = await this.exchange.placeOrder(
           this.symbol,
           'SELL',
@@ -366,17 +368,31 @@ export class VolumeGenerationStrategy {
           logger.error('Market sell order placement returned undefined', { symbol: this.symbol, amount: cappedSellAmount });
         } else {
           logger.info(`✅ Market sell order placed: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX`);
+          marketSellOrderSuccess = true;
         }
       } catch (err) {
         let errorData = err;
-        if (err && typeof err === 'object' && 'response' in err && err.response && typeof err.response === 'object' && 'data' in err.response) {
-          errorData = (err as any).response.data;
+        let errorMsg = '';
+        if (err && typeof err === 'object') {
+          if ('response' in err && err.response && typeof err.response === 'object' && 'data' in err.response) {
+            errorData = (err as any).response.data;
+            errorMsg = JSON.stringify(errorData);
+          } else if ('message' in err) {
+            errorMsg = (err as any).message;
+          }
         }
         logger.error('Error placing market sell order for wash trade:', {
           symbol: this.symbol,
           amount: cappedSellAmount,
-          error: errorData
+          error: errorData,
+          errorMsg
         });
+      }
+      if (!marketSellOrderSuccess) {
+        logger.warn('MARKET sell order for wash trade failed. Consider reducing the cap further or checking exchange limits.', {
+          attemptedAmount: cappedSellAmount
+        });
+        return;
       }
       const volumeGenerated = washSizeUSD * 2;
       // Update stats after successful wash trade
