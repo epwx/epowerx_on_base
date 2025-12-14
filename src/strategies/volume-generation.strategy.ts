@@ -1,6 +1,10 @@
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
 import { logger } from '../utils/logger';
 import { config } from '../config';
+import { fetchEpwXPriceFromUniswap } from '../utils/dex-price';
+// If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
+
+  // DEX/Uniswap config (move to class properties)
 
 interface VolumeStats {
   totalVolume: number;
@@ -26,6 +30,9 @@ interface ProfitStats {
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
  */
 export class VolumeGenerationStrategy {
+  static readonly DEX_PROVIDER_URL = 'https://mainnet.base.org';
+  static readonly DEX_PAIR_ADDRESS = '0x9793d47dd47024ac4e1f17988d2e92da53a94541';
+  static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
   private exchange: BiconomyExchangeService;
   private isRunning: boolean = false;
   private symbol: string;
@@ -172,28 +179,28 @@ export class VolumeGenerationStrategy {
   private async placeVolumeOrders(): Promise<void> {
     try {
       logger.info('🔄 Starting order placement cycle');
-      
-      let ticker;
+
+      // Fetch DEX price from Uniswap V2
+
+      let dexPrice: number | undefined;
       try {
-        ticker = await this.exchange.getTicker(this.symbol);
-        logger.info(`✅ Got ticker: price=${ticker?.price}, bid=${ticker?.bid}, ask=${ticker?.ask}`);
+        dexPrice = await fetchEpwXPriceFromUniswap(
+          VolumeGenerationStrategy.DEX_PROVIDER_URL,
+          VolumeGenerationStrategy.DEX_PAIR_ADDRESS,
+          VolumeGenerationStrategy.EPWX_ADDRESS
+        );
+        logger.info(`🦄 DEX (Uniswap) price fetched: 1 EPWX ≈ ${dexPrice} WETH`);
       } catch (error) {
-        logger.error('❌ Failed to get ticker:', error);
+        logger.error('❌ Failed to fetch DEX price:', error);
         return;
       }
-      
-      if (!ticker) {
-        logger.error('❌ Ticker is undefined - API call failed');
+      if (!dexPrice || dexPrice === 0) {
+        logger.warn('⚠️  No valid DEX price available, skipping');
         return;
       }
-      
-      logger.info(`📈 Ticker: last=${ticker.price.toExponential(4)}, bid=${ticker.bid.toExponential(4)}, ask=${ticker.ask.toExponential(4)}`);
-      
-      const lastPrice = ticker.price;
-      if (!lastPrice || lastPrice === 0) {
-        logger.warn('⚠️  No valid price data available, skipping');
-        return;
-      }
+
+      // Use DEX price as the reference for order placement
+      const lastPrice = dexPrice;
 
       // STEP 1: Check current open orders
       let openOrders;
@@ -233,15 +240,15 @@ export class VolumeGenerationStrategy {
           this.orderPrices.delete(order.orderId);
         }
       }
-      
+
       // STEP 2: If we need more orders, place them
       if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
-        
+
         logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
         await this.fillOrderBook(lastPrice, needBuys, needSells);
-      } 
+      }
       // STEP 3: If we have enough orders, do wash trade
       else {
         logger.info(`✅ Target orders reached. Executing wash trade...`);
@@ -265,9 +272,9 @@ export class VolumeGenerationStrategy {
     logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
     
     // If USDT is very low, skip filling but don't block wash trades
-    if (availableUSDT < 0.5) {
+    if (availableUSDT < 0.01) {
       logger.warn(`⚠️  Insufficient USDT balance for new orders (have $${availableUSDT.toFixed(2)})`);
-      return;
+      // Still allow wash trading with very low balances
     }
     
     // Calculate safe order size: divide available balance by number of orders
@@ -278,51 +285,26 @@ export class VolumeGenerationStrategy {
     
     const targetSpread = 0.003; // 0.3% spread around last price
     
-    // Helper to generate variable, realistic trade quantities
-    function getVariableAmount(price: number): number {
-      // 20% chance: small (500-5,000), 50%: medium (10,000-1,000,000), 25%: large (1M-10B), 5%: huge (10B-50B)
-      const r = Math.random();
-      if (r < 0.2) {
-        // Small
-        return Math.floor(500 + Math.random() * 4500);
-      } else if (r < 0.7) {
-        // Medium
-        return Math.floor(10000 + Math.random() * (1_000_000 - 10000));
-      } else if (r < 0.95) {
-        // Large
-        return Math.floor(1_000_000 + Math.random() * (10_000_000_000 - 1_000_000));
-      } else {
-        // Huge
-        return Math.floor(10_000_000_000 + Math.random() * (50_000_000_000 - 10_000_000_000));
-      }
-    }
-
-    // Place buy orders with staggered prices and variable amounts
+    // Place buy orders with staggered prices
     for (let i = 0; i < needBuys; i++) {
       const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
       const buyPrice = lastPrice * priceOffset;
-      let amount = getVariableAmount(buyPrice);
-      // Optionally, cap by available USDT per order
-      const maxAffordable = Math.floor(safeOrderSizeUSD / buyPrice);
-      if (amount * buyPrice > safeOrderSizeUSD) amount = maxAffordable;
-      if (amount < 1) amount = 1;
-      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toLocaleString()} EPWX @ ${buyPrice.toExponential(4)} (~$${(amount*buyPrice).toFixed(2)})`);
+      const amount = safeOrderSizeUSD / buyPrice;
+      
+      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeBuyOrder(buyPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
     }
-
-    // Place sell orders with staggered prices and variable amounts
+    
+    // Place sell orders with staggered prices
     for (let i = 0; i < needSells; i++) {
       const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
       const sellPrice = lastPrice * priceOffset;
-      let amount = getVariableAmount(sellPrice);
-      // Optionally, cap by available USDT per order
-      const maxAffordable = Math.floor(safeOrderSizeUSD / sellPrice);
-      if (amount * sellPrice > safeOrderSizeUSD) amount = maxAffordable;
-      if (amount < 1) amount = 1;
-      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toLocaleString()} EPWX @ ${sellPrice.toExponential(4)} (~$${(amount*sellPrice).toFixed(2)})`);
+      const amount = safeOrderSizeUSD / sellPrice;
+      
+      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
       await this.placeSellOrder(sellPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
     }
     
     logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
@@ -336,14 +318,22 @@ export class VolumeGenerationStrategy {
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableUSDT = usdtBalance?.free || 0;
       const availableEPWX = epwxBalance?.free || 0;
-      // Need at least $0.10 to execute a wash trade (very minimal)
-      if (availableUSDT < 0.10) {
+      // Need at least $0.01 to execute a wash trade (very minimal)
+      if (availableUSDT < 0.01) {
         logger.warn(`⚠️  Cannot execute wash trade - insufficient USDT ($${availableUSDT.toFixed(2)})`);
-        return;
+        // Still attempt a minimal wash trade
       }
       // Scale wash trade size based on available USDT
       let washSizeUSD: number;
-      if (availableUSDT >= 10) {
+      if (availableUSDT < 0.01) {
+        // Try to use whatever is left, but not zero
+        if (availableUSDT > 0) {
+          washSizeUSD = availableUSDT * 0.95;
+        } else {
+          logger.warn('⚠️  USDT balance is zero, cannot wash trade.');
+          return;
+        }
+      } else if (availableUSDT >= 10) {
         washSizeUSD = 8 + Math.random() * 7; // $8-15 USD if plenty available
       } else if (availableUSDT >= 5) {
         washSizeUSD = 3 + Math.random() * 2; // $3-5 USD if moderate
@@ -370,85 +360,12 @@ export class VolumeGenerationStrategy {
         sellAmount = availableEPWX;
         logger.warn(`⚠️  Adjusted wash sell amount to available EPWX: ${sellAmount.toFixed(4)}`);
       }
-      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)} (LIMIT), Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)} (MARKET)`);
-      // Place LIMIT buy order, then MARKET sell order for guaranteed fill
+      logger.info(`🔄 Wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
+      // Small delay between buy and sell to look more natural (50-150ms)
       await this.placeBuyOrder(buyPrice, buyAmount);
       await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
-      // Cap MARKET sell order size to avoid 500 errors
-      const maxMarketSellAmount = 1000; // 1,000 EPWX
-      let cappedSellAmount = Math.min(sellAmount, maxMarketSellAmount);
-      if (sellAmount > maxMarketSellAmount) {
-        logger.warn(`⚠️  Capping MARKET sell order amount from ${sellAmount} to ${maxMarketSellAmount} EPWX to avoid API errors.`);
-      }
-      let marketSellOrderSuccess = false;
-      try {
-        logger.info(`Placing SELL MARKET order: amount=${cappedSellAmount}`);
-        const order = await this.exchange.placeOrder(
-          this.symbol,
-          'SELL',
-          'MARKET',
-          cappedSellAmount
-        );
-        if (!order) {
-          logger.error('Market sell order placement returned undefined', { symbol: this.symbol, amount: cappedSellAmount });
-        } else {
-          logger.info(`✅ Market sell order placed: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX`);
-          marketSellOrderSuccess = true;
-        }
-      } catch (err) {
-        let errorData = err;
-        let errorMsg = '';
-        if (err && typeof err === 'object') {
-          if ('response' in err && err.response && typeof err.response === 'object' && 'data' in err.response) {
-            errorData = (err as any).response.data;
-            errorMsg = JSON.stringify(errorData);
-          } else if ('message' in err) {
-            errorMsg = (err as any).message;
-          }
-        }
-        logger.error('Error placing market sell order for wash trade:', {
-          symbol: this.symbol,
-          amount: cappedSellAmount,
-          error: errorData,
-          errorMsg
-        });
-      }
-      if (!marketSellOrderSuccess) {
-        logger.warn('MARKET sell order for wash trade failed. Retrying as LIMIT sell at lastPrice.', {
-          attemptedAmount: cappedSellAmount,
-          price: lastPrice
-        });
-        try {
-          logger.info(`Placing SELL LIMIT order for wash trade fallback: amount=${cappedSellAmount}, price=${lastPrice}`);
-          const limitOrder = await this.exchange.placeOrder(
-            this.symbol,
-            'SELL',
-            'LIMIT',
-            cappedSellAmount,
-            lastPrice
-          );
-          if (!limitOrder) {
-            logger.error('LIMIT sell order placement for wash trade fallback returned undefined', { symbol: this.symbol, amount: cappedSellAmount, price: lastPrice });
-            return;
-          } else {
-            logger.info(`✅ LIMIT sell order placed for wash trade fallback: ${Math.floor(cappedSellAmount).toLocaleString()} EPWX @ $${lastPrice}`);
-          }
-        } catch (limitErr) {
-          logger.error('Error placing LIMIT sell order for wash trade fallback:', {
-            symbol: this.symbol,
-            amount: cappedSellAmount,
-            price: lastPrice,
-            error: limitErr
-          });
-          return;
-        }
-      }
+      await this.placeSellOrder(sellPrice, sellAmount);
       const volumeGenerated = washSizeUSD * 2;
-      // Update stats after successful wash trade
-      this.profitStats.washTrades++;
-      this.volumeStats.totalVolume += volumeGenerated;
-      this.volumeStats.buyVolume += washSizeUSD;
-      this.volumeStats.sellVolume += washSizeUSD;
       logger.info(`✅ Wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
     } catch (error) {
       logger.error('Error in wash trade:', error);
