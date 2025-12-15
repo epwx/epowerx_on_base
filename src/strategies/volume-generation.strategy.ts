@@ -182,6 +182,7 @@ export class VolumeGenerationStrategy {
       logger.debug('DEBUG: Entered placeVolumeOrders');
 
       // Fetch DEX price from Uniswap V2
+      logger.info('🔄 [DEX] Starting DEX price fetch process...');
       logger.debug('DEBUG: About to fetch DEX price from Uniswap');
       let dexPrice: number | undefined;
       try {
