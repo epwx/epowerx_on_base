@@ -197,10 +197,12 @@ export class VolumeGenerationStrategy {
         // Fetch WETH/USDT price and convert
         const wethUsdt = await fetchWethUsdtPrice();
         const epwxUsdt = dexPrice * wethUsdt;
+        logger.info(`🔹 DEX price in USDT (before markup): 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt})`);
         // Apply markup for CEX mirroring
         const markupPercent = config.volumeStrategy.mirrorMarkupPercentage || 0;
         const markupMultiplier = 1 + markupPercent / 100;
         const mirroredPrice = epwxUsdt * markupMultiplier;
+        logger.info(`🔸 DEX price after ${markupPercent}% markup: 1 EPWX ≈ ${mirroredPrice} USDT`);
         logger.info(`💲 Mirrored DEX price: 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt}), applying markup: ${markupPercent}% → Final CEX price: ${mirroredPrice} USDT`);
         // Use mirroredPrice as the reference for order placement
         var lastPrice = mirroredPrice;
