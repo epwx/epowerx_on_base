@@ -1,7 +1,7 @@
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { fetchEpwXPriceFromUniswap, fetchWethUsdtPrice } from '../utils/dex-price';
+import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
   // DEX/Uniswap config (move to class properties)
@@ -181,39 +181,30 @@ export class VolumeGenerationStrategy {
       logger.info('🔄 Starting order placement cycle');
       logger.debug('DEBUG: Entered placeVolumeOrders');
 
-      // Fetch DEX price from Uniswap V2
-      logger.info('🔄 [DEX] Starting DEX price fetch process...');
-      logger.debug('DEBUG: About to fetch DEX price from Uniswap');
-      let dexPrice: number | undefined;
+      // Fetch DEX price from PancakeSwap (EPWX/WETH + CoinGecko ETH/USD)
+      logger.info('🔄 [DEX] Fetching EPWX price from PancakeSwap...');
+      let dexPriceUSD: number | undefined;
       try {
-        logger.debug(`DEBUG: fetchEpwXPriceFromUniswap params: provider=${VolumeGenerationStrategy.DEX_PROVIDER_URL}, pair=${VolumeGenerationStrategy.DEX_PAIR_ADDRESS}, epwx=${VolumeGenerationStrategy.EPWX_ADDRESS}`);
-        dexPrice = await fetchEpwXPriceFromUniswap(
-          VolumeGenerationStrategy.DEX_PROVIDER_URL,
-          VolumeGenerationStrategy.DEX_PAIR_ADDRESS,
-          VolumeGenerationStrategy.EPWX_ADDRESS
+        dexPriceUSD = await fetchEpwXPriceFromPancake(
+          config.trading.baseRpcUrl,
+          config.trading.epwxWethPairAddress,
+          config.trading.epwxAddress
         );
-        logger.info(`🦄 DEX (Uniswap) price fetched: 1 EPWX ≈ ${dexPrice} WETH`);
-        logger.debug(`DEBUG: DEX price fetch success, dexPrice=${dexPrice}`);
-        // Fetch WETH/USDT price and convert
-        const wethUsdt = await fetchWethUsdtPrice();
-        const epwxUsdt = dexPrice * wethUsdt;
-        logger.info(`🔹 DEX price in USDT (before markup): 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt})`);
+        logger.info(`🥞 DEX (PancakeSwap) price fetched: 1 EPWX ≈ ${dexPriceUSD} USD`);
         // Apply markup for CEX mirroring
         const markupPercent = config.volumeStrategy.mirrorMarkupPercentage || 0;
         const markupMultiplier = 1 + markupPercent / 100;
-        const mirroredPrice = epwxUsdt * markupMultiplier;
-        logger.info(`🔸 DEX price after ${markupPercent}% markup: 1 EPWX ≈ ${mirroredPrice} USDT`);
-        logger.info(`💲 Mirrored DEX price: 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt}), applying markup: ${markupPercent}% → Final CEX price: ${mirroredPrice} USDT`);
+        const mirroredPrice = dexPriceUSD * markupMultiplier;
+        logger.info(`🔸 DEX price after ${markupPercent}% markup: 1 EPWX ≈ ${mirroredPrice} USD`);
         // Use mirroredPrice as the reference for order placement
         var lastPrice = mirroredPrice;
       } catch (error) {
-        logger.error('❌ Failed to fetch DEX price or convert to USDT:', error);
-        logger.debug('DEBUG: Error thrown during fetchEpwXPriceFromUniswap or fetchWethUsdtPrice');
+        logger.error('❌ Failed to fetch DEX price from PancakeSwap:', error);
         return;
       }
-      logger.debug(`DEBUG: After DEX price fetch and conversion, lastPrice=${lastPrice}`);
+      logger.debug(`DEBUG: After DEX price fetch and markup, lastPrice=${lastPrice}`);
       if (!lastPrice || lastPrice === 0) {
-        logger.warn('⚠️  No valid DEX price available after USDT conversion, skipping');
+        logger.warn('⚠️  No valid DEX price available after USD conversion, skipping');
         logger.debug('DEBUG: Early return due to invalid lastPrice');
         return;
       }
