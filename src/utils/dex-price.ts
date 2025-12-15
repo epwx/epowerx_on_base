@@ -17,6 +17,9 @@ export async function fetchWethUsdtPrice(): Promise<number> {
   if (cachedWethUsdt !== undefined && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
     logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
     return cachedWethUsdt;
+  } else if (cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
+    logger.warn(`⚠️ fetchWethUsdtPrice: Cached value is undefined, using fallback value ${FALLBACK_WETH_USDT} USDT`);
+    return FALLBACK_WETH_USDT;
   }
   const url = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usdt';
   try {
