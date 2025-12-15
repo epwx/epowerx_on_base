@@ -21,6 +21,7 @@ interface Config {
     spreadPercentage: number;
     orderFrequency: number;
     selfTradeEnabled: boolean;
+    mirrorMarkupPercentage: number;
   };
   
   marketMaking: {
