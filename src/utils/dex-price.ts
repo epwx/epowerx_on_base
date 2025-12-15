@@ -65,30 +65,6 @@ export async function fetchEpwXPriceFromPancake(
   const epwxPriceInUsd = epwxPriceInWeth * ethPriceUSD;
   return epwxPriceInUsd;
 }
-// ...existing code...
-    return FALLBACK_WETH_USDT;
-  }
-}
-
-// Uniswap V2 Pair ABI (minimal, only for getReserves and token addresses)
-const UNISWAP_V2_PAIR_ABI = [
-  'function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)',
-  'function token0() external view returns (address)',
-  'function token1() external view returns (address)'
-];
-
-/**
- * Fetches the price of EPWX in WETH from the Uniswap V2 pool.
- * @param providerUrl Ethereum RPC URL
- * @param pairAddress Uniswap V2 pair address (EPWX/WETH)
- * @param epwxAddress EPWX token address
- * @returns Price of 1 EPWX in WETH
- */
-
-// Minimal ERC20 ABI for decimals
-const ERC20_ABI = [
-  'function decimals() view returns (uint8)'
-];
 
 export async function fetchEpwXPriceFromUniswap(
   providerUrl: string,
