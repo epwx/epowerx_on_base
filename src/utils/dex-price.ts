@@ -1,4 +1,14 @@
 import { ethers } from 'ethers';
+import axios from 'axios';
+/**
+ * Fetches the price of WETH in USDT from CoinGecko.
+ * @returns Price of 1 WETH in USDT
+ */
+export async function fetchWethUsdtPrice(): Promise<number> {
+  const url = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usdt';
+  const response = await axios.get(url);
+  return response.data.ethereum.usdt;
+}
 
 // Uniswap V2 Pair ABI (minimal, only for getReserves and token addresses)
 const UNISWAP_V2_PAIR_ABI = [

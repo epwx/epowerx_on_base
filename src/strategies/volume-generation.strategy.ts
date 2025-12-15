@@ -1,7 +1,7 @@
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { fetchEpwXPriceFromUniswap } from '../utils/dex-price';
+import { fetchEpwXPriceFromUniswap, fetchWethUsdtPrice } from '../utils/dex-price';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
   // DEX/Uniswap config (move to class properties)
@@ -194,20 +194,23 @@ export class VolumeGenerationStrategy {
         );
         logger.info(`🦄 DEX (Uniswap) price fetched: 1 EPWX ≈ ${dexPrice} WETH`);
         logger.debug(`DEBUG: DEX price fetch success, dexPrice=${dexPrice}`);
+        // Fetch WETH/USDT price and convert
+        const wethUsdt = await fetchWethUsdtPrice();
+        const epwxUsdt = dexPrice * wethUsdt;
+        logger.info(`💲 Mirrored DEX price: 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt})`);
+        // Use epwxUsdt as the reference for order placement
+        var lastPrice = epwxUsdt;
       } catch (error) {
-        logger.error('❌ Failed to fetch DEX price:', error);
-        logger.debug('DEBUG: Error thrown during fetchEpwXPriceFromUniswap');
+        logger.error('❌ Failed to fetch DEX price or convert to USDT:', error);
+        logger.debug('DEBUG: Error thrown during fetchEpwXPriceFromUniswap or fetchWethUsdtPrice');
         return;
       }
-      logger.debug(`DEBUG: After DEX price fetch, dexPrice=${dexPrice}`);
-      if (!dexPrice || dexPrice === 0) {
-        logger.warn('⚠️  No valid DEX price available, skipping');
-        logger.debug('DEBUG: Early return due to invalid dexPrice');
+      logger.debug(`DEBUG: After DEX price fetch and conversion, lastPrice=${lastPrice}`);
+      if (!lastPrice || lastPrice === 0) {
+        logger.warn('⚠️  No valid DEX price available after USDT conversion, skipping');
+        logger.debug('DEBUG: Early return due to invalid lastPrice');
         return;
       }
-
-      // Use DEX price as the reference for order placement
-      const lastPrice = dexPrice;
 
       // STEP 1: Check current open orders
       let openOrders;
