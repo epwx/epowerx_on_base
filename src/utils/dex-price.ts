@@ -59,6 +59,12 @@ const UNISWAP_V2_PAIR_ABI = [
  * @param epwxAddress EPWX token address
  * @returns Price of 1 EPWX in WETH
  */
+
+// Minimal ERC20 ABI for decimals
+const ERC20_ABI = [
+  'function decimals() view returns (uint8)'
+];
+
 export async function fetchEpwXPriceFromUniswap(
   providerUrl: string,
   pairAddress: string,
@@ -71,16 +77,33 @@ export async function fetchEpwXPriceFromUniswap(
   const token0 = await pair.token0();
   const token1 = await pair.token1();
 
+  // Get decimals for both tokens
+  const token0Contract = new ethers.Contract(token0, ERC20_ABI, provider);
+  const token1Contract = new ethers.Contract(token1, ERC20_ABI, provider);
+  const [decimals0, decimals1] = await Promise.all([
+    token0Contract.decimals(),
+    token1Contract.decimals()
+  ]);
+
   // Determine which reserve is EPWX and which is WETH
-  let epwxReserve, wethReserve;
+  let epwxReserve, wethReserve, epwxDecimals, wethDecimals;
   if (token0.toLowerCase() === epwxAddress.toLowerCase()) {
     epwxReserve = reserve0;
     wethReserve = reserve1;
+    epwxDecimals = decimals0;
+    wethDecimals = decimals1;
   } else {
     epwxReserve = reserve1;
     wethReserve = reserve0;
+    epwxDecimals = decimals1;
+    wethDecimals = decimals0;
   }
 
-  // Price = WETH reserve / EPWX reserve
-  return Number(wethReserve) / Number(epwxReserve);
+  // Adjust reserves to 18 decimals for both tokens
+  const epwxReserveNorm = Number(epwxReserve) / Math.pow(10, epwxDecimals);
+  const wethReserveNorm = Number(wethReserve) / Math.pow(10, wethDecimals);
+
+  // Price = WETH reserve / EPWX reserve (in WETH per EPWX)
+  const priceInWeth = wethReserveNorm / epwxReserveNorm;
+  return priceInWeth;
 }
