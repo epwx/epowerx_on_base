@@ -14,12 +14,14 @@ const FALLBACK_WETH_USDT = 2200; // fallback value if all requests fail
 
 export async function fetchWethUsdtPrice(): Promise<number> {
   const now = Date.now();
-  if (cachedWethUsdt !== undefined && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
-    logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
-    return cachedWethUsdt;
-  } else if (cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
-    logger.warn(`⚠️ fetchWethUsdtPrice: Cached value is undefined, using fallback value ${FALLBACK_WETH_USDT} USDT`);
-    return FALLBACK_WETH_USDT;
+  if (cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
+    if (typeof cachedWethUsdt === 'number') {
+      logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
+      return typeof cachedWethUsdt === 'number' ? cachedWethUsdt : FALLBACK_WETH_USDT;
+    } else {
+      logger.warn(`⚠️ fetchWethUsdtPrice: Cached value is undefined, using fallback value ${FALLBACK_WETH_USDT} USDT`);
+      return FALLBACK_WETH_USDT;
+    }
   }
   const url = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usdt';
   try {
