@@ -33,17 +33,18 @@ const ERC20_ABI = [
   'function decimals() external view returns (uint8)'
 ];
 
-export async function fetchEpwXPriceFromPancake(
   providerUrl: string,
   epwxWethPairAddress: string,
   epwxAddress: string
 ): Promise<number> {
   const provider = new ethers.providers.JsonRpcProvider(providerUrl);
-  let reserve0, reserve1, token0, token1, decimals0, decimals1;
+  let reserve0: ethers.BigNumber, reserve1: ethers.BigNumber, token0: string, token1: string, decimals0: number, decimals1: number;
   try {
-    [reserve0, reserve1] = await retry(() => {
+    const reserves: [ethers.BigNumber, ethers.BigNumber, number] = await retry(() => {
       return new ethers.Contract(epwxWethPairAddress, UNISWAP_V2_PAIR_ABI, provider).getReserves();
     }, 3, 1500, 'getReserves');
+    reserve0 = reserves[0];
+    reserve1 = reserves[1];
     token0 = await retry(() => {
       return new ethers.Contract(epwxWethPairAddress, UNISWAP_V2_PAIR_ABI, provider).token0();
     }, 3, 1000, 'token0');
@@ -61,7 +62,7 @@ export async function fetchEpwXPriceFromPancake(
     // Return -1 to indicate error
     return -1;
   }
-  let epwxReserve, wethReserve, epwxDecimals, wethDecimals;
+  let epwxReserve: ethers.BigNumber, wethReserve: ethers.BigNumber, epwxDecimals: number, wethDecimals: number;
   if (token0.toLowerCase() === epwxAddress.toLowerCase()) {
     epwxReserve = reserve0;
     wethReserve = reserve1;
@@ -73,8 +74,8 @@ export async function fetchEpwXPriceFromPancake(
     epwxDecimals = decimals1;
     wethDecimals = decimals0;
   }
-  const epwxReserveNorm = Number(epwxReserve) / Math.pow(10, epwxDecimals);
-  const wethReserveNorm = Number(wethReserve) / Math.pow(10, wethDecimals);
+  const epwxReserveNorm = Number(epwxReserve.toString()) / Math.pow(10, epwxDecimals);
+  const wethReserveNorm = Number(wethReserve.toString()) / Math.pow(10, wethDecimals);
   const epwxPriceInWeth = wethReserveNorm / epwxReserveNorm;
 
   // Fetch ETH/USD price from CoinGecko with retry and fallback
