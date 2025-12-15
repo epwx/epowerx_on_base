@@ -6,11 +6,12 @@ import axios from 'axios';
  */
 import { logger } from './logger';
 
+
 let cachedWethUsdt: number | undefined = undefined;
 let cacheTimestamp: number | undefined = undefined;
-const CACHE_DURATION_MS = 60 * 1000; // 60 seconds
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+const FALLBACK_WETH_USDT = 2200; // fallback value if all requests fail
 
-export async function fetchWethUsdtPrice(): Promise<number> {
   const now = Date.now();
   if (cachedWethUsdt !== undefined && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
     logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
@@ -29,7 +30,12 @@ export async function fetchWethUsdtPrice(): Promise<number> {
     return cachedWethUsdt;
   } catch (error) {
     logger.error('❌ fetchWethUsdtPrice: Failed to fetch WETH/USDT price from CoinGecko', { error });
-    throw error;
+    if (cachedWethUsdt !== undefined) {
+      logger.warn(`⚠️ fetchWethUsdtPrice: Using last cached value ${cachedWethUsdt} USDT due to error`);
+      return cachedWethUsdt;
+    }
+    logger.warn(`⚠️ fetchWethUsdtPrice: Using static fallback value ${FALLBACK_WETH_USDT} USDT due to error`);
+    return FALLBACK_WETH_USDT;
   }
 }
 
