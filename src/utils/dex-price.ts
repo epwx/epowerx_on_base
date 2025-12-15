@@ -33,6 +33,7 @@ const ERC20_ABI = [
   'function decimals() external view returns (uint8)'
 ];
 
+export async function fetchEpwXPriceFromPancake(
   providerUrl: string,
   epwxWethPairAddress: string,
   epwxAddress: string
