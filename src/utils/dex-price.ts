@@ -33,12 +33,12 @@ export async function fetchWethUsdtPrice(): Promise<number> {
     cachedWethUsdt = response.data.ethereum.usdt;
     cacheTimestamp = now;
     logger.info(`✅ fetchWethUsdtPrice: 1 WETH = ${cachedWethUsdt} USDT (fresh)`);
-    return cachedWethUsdt;
+    return typeof cachedWethUsdt === 'number' ? cachedWethUsdt : FALLBACK_WETH_USDT;
   } catch (error) {
     logger.error('❌ fetchWethUsdtPrice: Failed to fetch WETH/USDT price from CoinGecko', { error });
-    if (cachedWethUsdt !== undefined) {
+    if (typeof cachedWethUsdt === 'number') {
       logger.warn(`⚠️ fetchWethUsdtPrice: Using last cached value ${cachedWethUsdt} USDT due to error`);
-      return cachedWethUsdt;
+      return typeof cachedWethUsdt === 'number' ? cachedWethUsdt : FALLBACK_WETH_USDT;
     }
     logger.warn(`⚠️ fetchWethUsdtPrice: Using static fallback value ${FALLBACK_WETH_USDT} USDT due to error`);
     return FALLBACK_WETH_USDT;
