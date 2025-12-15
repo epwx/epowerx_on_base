@@ -179,23 +179,29 @@ export class VolumeGenerationStrategy {
   private async placeVolumeOrders(): Promise<void> {
     try {
       logger.info('🔄 Starting order placement cycle');
+      logger.debug('DEBUG: Entered placeVolumeOrders');
 
       // Fetch DEX price from Uniswap V2
-
+      logger.debug('DEBUG: About to fetch DEX price from Uniswap');
       let dexPrice: number | undefined;
       try {
+        logger.debug(`DEBUG: fetchEpwXPriceFromUniswap params: provider=${VolumeGenerationStrategy.DEX_PROVIDER_URL}, pair=${VolumeGenerationStrategy.DEX_PAIR_ADDRESS}, epwx=${VolumeGenerationStrategy.EPWX_ADDRESS}`);
         dexPrice = await fetchEpwXPriceFromUniswap(
           VolumeGenerationStrategy.DEX_PROVIDER_URL,
           VolumeGenerationStrategy.DEX_PAIR_ADDRESS,
           VolumeGenerationStrategy.EPWX_ADDRESS
         );
         logger.info(`🦄 DEX (Uniswap) price fetched: 1 EPWX ≈ ${dexPrice} WETH`);
+        logger.debug(`DEBUG: DEX price fetch success, dexPrice=${dexPrice}`);
       } catch (error) {
         logger.error('❌ Failed to fetch DEX price:', error);
+        logger.debug('DEBUG: Error thrown during fetchEpwXPriceFromUniswap');
         return;
       }
+      logger.debug(`DEBUG: After DEX price fetch, dexPrice=${dexPrice}`);
       if (!dexPrice || dexPrice === 0) {
         logger.warn('⚠️  No valid DEX price available, skipping');
+        logger.debug('DEBUG: Early return due to invalid dexPrice');
         return;
       }
 
