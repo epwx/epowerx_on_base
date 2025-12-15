@@ -12,6 +12,7 @@ let cacheTimestamp: number | undefined = undefined;
 const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const FALLBACK_WETH_USDT = 2200; // fallback value if all requests fail
 
+export async function fetchWethUsdtPrice(): Promise<number> {
   const now = Date.now();
   if (cachedWethUsdt !== undefined && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
     logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
