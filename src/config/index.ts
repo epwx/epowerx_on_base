@@ -76,6 +76,7 @@ export const config: Config = {
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
+    mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 5), // default 5%
   },
   
   marketMaking: {

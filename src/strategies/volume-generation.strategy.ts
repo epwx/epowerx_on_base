@@ -197,9 +197,13 @@ export class VolumeGenerationStrategy {
         // Fetch WETH/USDT price and convert
         const wethUsdt = await fetchWethUsdtPrice();
         const epwxUsdt = dexPrice * wethUsdt;
-        logger.info(`💲 Mirrored DEX price: 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt})`);
-        // Use epwxUsdt as the reference for order placement
-        var lastPrice = epwxUsdt;
+        // Apply markup for CEX mirroring
+        const markupPercent = config.volumeStrategy.mirrorMarkupPercentage || 0;
+        const markupMultiplier = 1 + markupPercent / 100;
+        const mirroredPrice = epwxUsdt * markupMultiplier;
+        logger.info(`💲 Mirrored DEX price: 1 EPWX ≈ ${epwxUsdt} USDT (WETH/USDT=${wethUsdt}), applying markup: ${markupPercent}% → Final CEX price: ${mirroredPrice} USDT`);
+        // Use mirroredPrice as the reference for order placement
+        var lastPrice = mirroredPrice;
       } catch (error) {
         logger.error('❌ Failed to fetch DEX price or convert to USDT:', error);
         logger.debug('DEBUG: Error thrown during fetchEpwXPriceFromUniswap or fetchWethUsdtPrice');
