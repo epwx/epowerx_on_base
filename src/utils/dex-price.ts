@@ -4,10 +4,33 @@ import axios from 'axios';
  * Fetches the price of WETH in USDT from CoinGecko.
  * @returns Price of 1 WETH in USDT
  */
+import { logger } from './logger';
+
+let cachedWethUsdt: number | undefined = undefined;
+let cacheTimestamp: number | undefined = undefined;
+const CACHE_DURATION_MS = 60 * 1000; // 60 seconds
+
 export async function fetchWethUsdtPrice(): Promise<number> {
+  const now = Date.now();
+  if (cachedWethUsdt !== undefined && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION_MS)) {
+    logger.debug(`fetchWethUsdtPrice: Returning cached value ${cachedWethUsdt} USDT`);
+    return cachedWethUsdt;
+  }
   const url = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usdt';
-  const response = await axios.get(url);
-  return response.data.ethereum.usdt;
+  try {
+    const response = await axios.get(url);
+    if (!response.data || !response.data.ethereum || typeof response.data.ethereum.usdt !== 'number') {
+      logger.error('❌ fetchWethUsdtPrice: Unexpected response from CoinGecko', { data: response.data });
+      throw new Error('Invalid CoinGecko response');
+    }
+    cachedWethUsdt = response.data.ethereum.usdt;
+    cacheTimestamp = now;
+    logger.info(`✅ fetchWethUsdtPrice: 1 WETH = ${cachedWethUsdt} USDT (fresh)`);
+    return cachedWethUsdt;
+  } catch (error) {
+    logger.error('❌ fetchWethUsdtPrice: Failed to fetch WETH/USDT price from CoinGecko', { error });
+    throw error;
+  }
 }
 
 // Uniswap V2 Pair ABI (minimal, only for getReserves and token addresses)
