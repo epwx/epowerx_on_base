@@ -379,46 +379,32 @@ export class BiconomyExchangeService {
     while (attempt < maxRetries) {
       try {
         logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
-      logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
-      const timestamp = Date.now();
-      const params: any = { timestamp };
-      if (symbol) {
-        params.symbol = symbol.replace('/', '_').toUpperCase();
-      }
-      const signature = this.signRequest(params);
-      params.signature = signature;
-      logger.info(`[getOpenOrders] Params:`, params);
-      logger.info(`[getOpenOrders] Signature:`, signature);
-      logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, params);
-      const response = await this.client.get(
-        '/api/v1/orders/open',
-        {
-          try {
-            logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
-            // Build params with only allowed keys
-            const filteredParams: any = {};
-            filteredParams.timestamp = Date.now();
-            if (symbol) {
-              filteredParams.symbol = symbol.replace('/', '_').toUpperCase();
-            }
-            // Generate signature with only allowed params
-            filteredParams.signature = this.signRequest({
-              ...(filteredParams.symbol ? { symbol: filteredParams.symbol } : {}),
-              timestamp: filteredParams.timestamp
-            });
-            logger.info(`[getOpenOrders] Filtered Params:`, filteredParams);
-            logger.info(`[getOpenOrders] Signature:`, filteredParams.signature);
-            logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, filteredParams);
-            const response = await this.client.get(
-              '/api/v1/orders/open',
-              {
-                params: filteredParams,
-                headers: {
-                  'X-API-KEY': this.apiKey,
-                },
-              }
-            );
-      }));
+        logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
+        // Build params with only allowed keys
+        const filteredParams: any = {};
+        filteredParams.timestamp = Date.now();
+        if (symbol) {
+          filteredParams.symbol = symbol.replace('/', '_').toUpperCase();
+        }
+        // Generate signature with only allowed params
+        filteredParams.signature = this.signRequest({
+          ...(filteredParams.symbol ? { symbol: filteredParams.symbol } : {}),
+          timestamp: filteredParams.timestamp
+        });
+        logger.info(`[getOpenOrders] Filtered Params:`, filteredParams);
+        logger.info(`[getOpenOrders] Signature:`, filteredParams.signature);
+        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, filteredParams);
+        const response = await this.client.get(
+          '/api/v1/orders/open',
+          {
+            params: filteredParams,
+            headers: {
+              'X-API-KEY': this.apiKey,
+            },
+          }
+        );
+        // Assuming response.data.result is the array of open orders
+        return response.data.result || [];
       } catch (error) {
         const err = error as any;
         if (err.response && err.response.status === 503) {
