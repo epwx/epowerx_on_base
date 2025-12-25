@@ -383,7 +383,9 @@ export class BiconomyExchangeService {
       }
       const signature = this.signRequest(params);
       params.signature = signature;
-      logger.debug(`[getOpenOrders] Making API call to /api/v1/orders/open (GET) with params:`, params);
+      logger.debug(`[getOpenOrders] Params:`, params);
+      logger.debug(`[getOpenOrders] Signature:`, signature);
+      logger.debug(`[getOpenOrders] Making API call to https://api.biconomy.com/api/v1/orders/open (GET) with params:`, params);
       const response = await this.client.get(
         '/api/v1/orders/open',
         {
