@@ -380,24 +380,30 @@ export class BiconomyExchangeService {
       try {
         logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
         logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
-        // Build params with only allowed keys
-        const filteredParams: any = {};
-        filteredParams.timestamp = Date.now();
+        // Only allowed params
+        const params: Record<string, any> = {
+          timestamp: Date.now(),
+        };
         if (symbol) {
-          filteredParams.symbol = symbol.replace('/', '_').toUpperCase();
+          params.symbol = symbol.replace('/', '_').toUpperCase();
         }
-        // Generate signature with only allowed params
-        filteredParams.signature = this.signRequest({
-          ...(filteredParams.symbol ? { symbol: filteredParams.symbol } : {}),
-          timestamp: filteredParams.timestamp
-        });
-        logger.info(`[getOpenOrders] Filtered Params:`, filteredParams);
-        logger.info(`[getOpenOrders] Signature:`, filteredParams.signature);
-        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, filteredParams);
+        // Only use allowed keys for signature
+        const signaturePayload: Record<string, any> = {};
+        if (params.symbol) signaturePayload.symbol = params.symbol;
+        signaturePayload.timestamp = params.timestamp;
+        params.signature = this.signRequest(signaturePayload);
+        // Log params and signature separately, do not merge logger context
+        logger.info(`[getOpenOrders] Params:`, { symbol: params.symbol, timestamp: params.timestamp });
+        logger.info(`[getOpenOrders] Signature:`, params.signature);
+        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, { symbol: params.symbol, timestamp: params.timestamp, signature: params.signature });
         const response = await this.client.get(
           '/api/v1/orders/open',
           {
-            params: filteredParams,
+            params: {
+              ...(params.symbol ? { symbol: params.symbol } : {}),
+              timestamp: params.timestamp,
+              signature: params.signature,
+            },
             headers: {
               'X-API-KEY': this.apiKey,
             },
