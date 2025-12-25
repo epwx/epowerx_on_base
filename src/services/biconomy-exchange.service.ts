@@ -393,26 +393,31 @@ export class BiconomyExchangeService {
       const response = await this.client.get(
         '/api/v1/orders/open',
         {
-          params,
-          headers: {
-            'X-API-KEY': this.apiKey,
-          },
-        }
-      );
-      logger.debug(`[getOpenOrders] Raw response:`, response.data);
-      const orders = Array.isArray(response.data) ? response.data : response.data.result || response.data.orders || [];
-      logger.info(`[getOpenOrders] ✅ Found ${orders.length} open orders for ${symbol}`);
-      return orders.map((order: any) => ({
-        orderId: order.orderId?.toString() || order.id?.toString() || '',
-        symbol: order.symbol || symbol || '',
-        side: order.side || (order.side === 1 ? 'SELL' : 'BUY'),
-        type: order.type || (order.type === 1 ? 'LIMIT' : 'MARKET'),
-        price: parseFloat(order.price),
-        amount: parseFloat(order.origQty || order.amount),
-        filled: parseFloat(order.executedQty || order.filled || 0),
-        status: order.status || 'NEW',
-        timestamp: order.time || order.timestamp || Date.now(),
-        fee: 0,
+          try {
+            logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
+            // Build params with only allowed keys
+            const filteredParams: any = {};
+            filteredParams.timestamp = Date.now();
+            if (symbol) {
+              filteredParams.symbol = symbol.replace('/', '_').toUpperCase();
+            }
+            // Generate signature with only allowed params
+            filteredParams.signature = this.signRequest({
+              ...(filteredParams.symbol ? { symbol: filteredParams.symbol } : {}),
+              timestamp: filteredParams.timestamp
+            });
+            logger.info(`[getOpenOrders] Filtered Params:`, filteredParams);
+            logger.info(`[getOpenOrders] Signature:`, filteredParams.signature);
+            logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, filteredParams);
+            const response = await this.client.get(
+              '/api/v1/orders/open',
+              {
+                params: filteredParams,
+                headers: {
+                  'X-API-KEY': this.apiKey,
+                },
+              }
+            );
       }));
       } catch (error) {
         const err = error as any;
