@@ -411,8 +411,9 @@ export class BiconomyExchangeService {
         }));
       } catch (apiError) {
         logger.error(`[getOpenOrders] API error. Params:`, params);
-        if (apiError.response) {
-          logger.error(`[getOpenOrders] API error response:`, apiError.response.data);
+        const err = apiError as any;
+        if (err.response) {
+          logger.error(`[getOpenOrders] API error response:`, err.response.data);
         }
         throw apiError;
       }
