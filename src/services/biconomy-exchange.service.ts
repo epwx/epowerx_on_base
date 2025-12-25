@@ -374,7 +374,10 @@ export class BiconomyExchangeService {
   }
 
   async getOpenOrders(symbol?: string): Promise<Order[]> {
-    try {
+    const maxRetries = 3;
+    let attempt = 0;
+    while (attempt < maxRetries) {
+      try {
       logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
       const timestamp = Date.now();
       const params: any = { timestamp };
@@ -410,11 +413,18 @@ export class BiconomyExchangeService {
         timestamp: order.time || order.timestamp || Date.now(),
         fee: 0,
       }));
-    } catch (error) {
-      logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
-      throw error;
+      } catch (error) {
+        if (error.response && error.response.status === 503) {
+          attempt++;
+          logger.warn(`[getOpenOrders] 503 Service Unavailable, retrying (${attempt}/${maxRetries})...`);
+          await new Promise(res => setTimeout(res, 1000 * attempt));
+          continue;
+        }
+        logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
+        throw error;
+      }
     }
-  }
+    throw new Error('Failed to fetch open orders after retries');
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
     try {
