@@ -425,9 +425,15 @@ export class BiconomyExchangeService {
         logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
         throw error;
       }
-    }
+              // Remove any extraneous properties (like 'service') from params
+              const allowedKeys = ['symbol', 'timestamp', 'signature'];
+              const filteredParams: any = {};
+              for (const key of allowedKeys) {
+                if (params[key]) filteredParams[key] = params[key];
+              }
+              logger.info(`[getOpenOrders] Filtered Params:`, filteredParams);
     throw new Error('Failed to fetch open orders after retries');
-  }
+              logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, filteredParams);
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
     try {
