@@ -414,7 +414,8 @@ export class BiconomyExchangeService {
         fee: 0,
       }));
       } catch (error) {
-        if (error.response && error.response.status === 503) {
+        const err = error as any;
+        if (err.response && err.response.status === 503) {
           attempt++;
           logger.warn(`[getOpenOrders] 503 Service Unavailable, retrying (${attempt}/${maxRetries})...`);
           await new Promise(res => setTimeout(res, 1000 * attempt));
