@@ -384,39 +384,30 @@ export class BiconomyExchangeService {
       const signature = this.signRequest(params);
       params.signature = signature;
       logger.debug(`[getOpenOrders] Making API call to /api/v1/orders/open (GET) with params:`, params);
-      try {
-        const response = await this.client.get(
-          '/api/v1/orders/open',
-          {
-            params,
-            headers: {
-              'X-API-KEY': this.apiKey,
-            },
-          }
-        );
-        logger.debug(`[getOpenOrders] Raw response:`, response.data);
-        const records = response.data.result?.records || [];
-        logger.info(`[getOpenOrders] ✅ Found ${records.length} open orders for ${symbol}`);
-        return records.map((order: any) => ({
-          orderId: order.id.toString(),
-          symbol,
-          side: order.side === 1 ? 'SELL' : 'BUY',
-          type: order.type === 1 ? 'LIMIT' : 'MARKET',
-          price: parseFloat(order.price),
-          amount: parseFloat(order.amount),
-          filled: parseFloat(order.deal_stock),
-          status: 'NEW',
-          timestamp: order.ctime * 1000,
-          fee: 0,
-        }));
-      } catch (apiError) {
-        logger.error(`[getOpenOrders] API error. Params:`, params);
-        const err = apiError as any;
-        if (err.response) {
-          logger.error(`[getOpenOrders] API error response:`, err.response.data);
+      const response = await this.client.get(
+        '/api/v1/orders/open',
+        {
+          params,
+          headers: {
+            'X-API-KEY': this.apiKey,
+          },
         }
-        throw apiError;
-      }
+      );
+      logger.debug(`[getOpenOrders] Raw response:`, response.data);
+      const orders = Array.isArray(response.data) ? response.data : response.data.result || response.data.orders || [];
+      logger.info(`[getOpenOrders] ✅ Found ${orders.length} open orders for ${symbol}`);
+      return orders.map((order: any) => ({
+        orderId: order.orderId?.toString() || order.id?.toString() || '',
+        symbol: order.symbol || symbol || '',
+        side: order.side || (order.side === 1 ? 'SELL' : 'BUY'),
+        type: order.type || (order.type === 1 ? 'LIMIT' : 'MARKET'),
+        price: parseFloat(order.price),
+        amount: parseFloat(order.origQty || order.amount),
+        filled: parseFloat(order.executedQty || order.filled || 0),
+        status: order.status || 'NEW',
+        timestamp: order.time || order.timestamp || Date.now(),
+        fee: 0,
+      }));
     } catch (error) {
       logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
       throw error;
