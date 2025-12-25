@@ -382,32 +382,29 @@ export class BiconomyExchangeService {
       logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
 
       const params: any = {
-        api_key: this.apiKey,
-        market: symbol.replace('/', '_').toUpperCase(),
-        offset: 0,
-        limit: 100,
-      };
-
-      const signature = this.signRequest(params);
-      params.sign = signature;
-
-      const urlParams = new URLSearchParams(params);
-      logger.debug(`[getOpenOrders] Making API call to /v1/private/order/pending`);
-      const response = await this.client.post(
-        '/v1/private/order/pending',
-        urlParams.toString(),
-        {
-          headers: {
-            'X-SITE-ID': '127',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        }
-      );
-
-      logger.debug(`[getOpenOrders] Got response, code: ${response.data.code}`);
       
+          logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
       if (response.data.code !== 0) {
+          const timestamp = Date.now();
+          const params: any = {
+            timestamp,
+          };
+          if (symbol) {
+            params.symbol = symbol.replace('/', '_').toUpperCase();
+          }
+          const signature = this.signRequest(params);
+          params.signature = signature;
         throw new Error(response.data.message || 'Failed to get open orders');
+          logger.debug(`[getOpenOrders] Making API call to /api/v1/orders/open (GET)`);
+          const response = await this.client.get(
+            '/api/v1/orders/open',
+            {
+              params,
+              headers: {
+                'X-API-KEY': this.apiKey,
+              },
+            }
+          );
       }
 
       const records = response.data.result?.records || [];
