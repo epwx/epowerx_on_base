@@ -393,7 +393,16 @@ export class BiconomyExchangeService {
 
       const urlParams = new URLSearchParams(params);
       logger.debug(`[getOpenOrders] Making API call to /v1/private/order/pending`);
-      const response = await this.client.post('/v1/private/order/pending', urlParams.toString());
+      const response = await this.client.post(
+        '/v1/private/order/pending',
+        urlParams.toString(),
+        {
+          headers: {
+            'X-SITE-ID': '127',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }
+      );
 
       logger.debug(`[getOpenOrders] Got response, code: ${response.data.code}`);
       
