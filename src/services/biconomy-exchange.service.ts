@@ -375,41 +375,26 @@ export class BiconomyExchangeService {
 
   async getOpenOrders(symbol?: string): Promise<Order[]> {
     try {
-      if (!symbol) {
-        throw new Error('Symbol is required for get open orders');
-      }
-
       logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
-
-      const params: any = {
-      
-          logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
-      if (response.data.code !== 0) {
-          const timestamp = Date.now();
-          const params: any = {
-            timestamp,
-          };
-          if (symbol) {
-            params.symbol = symbol.replace('/', '_').toUpperCase();
-          }
-          const signature = this.signRequest(params);
-          params.signature = signature;
-        throw new Error(response.data.message || 'Failed to get open orders');
-          logger.debug(`[getOpenOrders] Making API call to /api/v1/orders/open (GET)`);
-          const response = await this.client.get(
-            '/api/v1/orders/open',
-            {
-              params,
-              headers: {
-                'X-API-KEY': this.apiKey,
-              },
-            }
-          );
+      const timestamp = Date.now();
+      const params: any = { timestamp };
+      if (symbol) {
+        params.symbol = symbol.replace('/', '_').toUpperCase();
       }
-
+      const signature = this.signRequest(params);
+      params.signature = signature;
+      logger.debug(`[getOpenOrders] Making API call to /api/v1/orders/open (GET)`);
+      const response = await this.client.get(
+        '/api/v1/orders/open',
+        {
+          params,
+          headers: {
+            'X-API-KEY': this.apiKey,
+          },
+        }
+      );
       const records = response.data.result?.records || [];
       logger.info(`[getOpenOrders] ✅ Found ${records.length} open orders for ${symbol}`);
-
       return records.map((order: any) => ({
         orderId: order.id.toString(),
         symbol,
