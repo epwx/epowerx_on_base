@@ -393,9 +393,9 @@ export class BiconomyExchangeService {
         signaturePayload.timestamp = params.timestamp;
         params.signature = this.signRequest(signaturePayload);
         // Log params and signature separately, do not merge logger context
-        logger.info(`[getOpenOrders] Params:`, { symbol: params.symbol, timestamp: params.timestamp });
-        logger.info(`[getOpenOrders] Signature:`, params.signature);
-        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, { symbol: params.symbol, timestamp: params.timestamp, signature: params.signature });
+        logger.info(`[getOpenOrders] Params: ${JSON.stringify({ symbol: params.symbol, timestamp: params.timestamp })}`);
+        logger.info(`[getOpenOrders] Signature: ${params.signature}`);
+        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params: ${JSON.stringify({ symbol: params.symbol, timestamp: params.timestamp, signature: params.signature })}`);
         const response = await this.client.get(
           '/api/v1/orders/open',
           {
