@@ -425,6 +425,7 @@ export class BiconomyExchangeService {
       }
     }
     throw new Error('Failed to fetch open orders after retries');
+  }
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
     try {
