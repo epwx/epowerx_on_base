@@ -378,6 +378,7 @@ export class BiconomyExchangeService {
     let attempt = 0;
     while (attempt < maxRetries) {
       try {
+        logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
       logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
       const timestamp = Date.now();
       const params: any = { timestamp };
@@ -386,9 +387,9 @@ export class BiconomyExchangeService {
       }
       const signature = this.signRequest(params);
       params.signature = signature;
-      logger.debug(`[getOpenOrders] Params:`, params);
-      logger.debug(`[getOpenOrders] Signature:`, signature);
-      logger.debug(`[getOpenOrders] Making API call to https://api.biconomy.com/api/v1/orders/open (GET) with params:`, params);
+      logger.info(`[getOpenOrders] Params:`, params);
+      logger.info(`[getOpenOrders] Signature:`, signature);
+      logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params:`, params);
       const response = await this.client.get(
         '/api/v1/orders/open',
         {
