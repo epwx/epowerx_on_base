@@ -280,9 +280,58 @@ export class VolumeGenerationStrategy {
       // Log buy/sell order counts after enforcement
       logger.info(`📊 [ENFORCED] Buy Orders: ${buyOrders.length}, Sell Orders: ${sellOrders.length}`);
 
-      // DIAGNOSTIC MODE: Always execute wash trade for guaranteed match test
-      logger.info(`🧪 [DIAGNOSTIC] Forcing wash trade (ignoring order book fill)...`);
-      await this.executeWashTrade(priceReference);
+      // Place and maintain at least 30 buy and 30 sell orders in the order book
+      const targetOrdersPerSide = 30;
+      let openOrders = await this.exchange.getOpenOrders(this.symbol);
+      let buyOrders = openOrders.filter(o => o.side === 'BUY');
+      let sellOrders = openOrders.filter(o => o.side === 'SELL');
+      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+
+      // Cancel excess buy orders
+      if (buyOrders.length > targetOrdersPerSide) {
+        const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
+        for (const order of excessBuyOrders) {
+          logger.info(`Cancelling excess BUY order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+        }
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        buyOrders = openOrders.filter(o => o.side === 'BUY');
+        sellOrders = openOrders.filter(o => o.side === 'SELL');
+      }
+      // Cancel excess sell orders
+      if (sellOrders.length > targetOrdersPerSide) {
+        const excessSellOrders = sellOrders.slice(targetOrdersPerSide);
+        for (const order of excessSellOrders) {
+          logger.info(`Cancelling excess SELL order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+        }
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        buyOrders = openOrders.filter(o => o.side === 'BUY');
+        sellOrders = openOrders.filter(o => o.side === 'SELL');
+      }
+
+      // Place new buy orders if needed
+      if (buyOrders.length < targetOrdersPerSide) {
+        const needBuys = targetOrdersPerSide - buyOrders.length;
+        for (let i = 0; i < needBuys; i++) {
+          // Place buy orders below reference price so they do not match instantly
+          const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
+          const buyAmount = 1; // Set a reasonable amount per order
+          await this.placeBuyOrder(buyPrice, buyAmount);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+      // Place new sell orders if needed
+      if (sellOrders.length < targetOrdersPerSide) {
+        const needSells = targetOrdersPerSide - sellOrders.length;
+        for (let i = 0; i < needSells; i++) {
+          // Place sell orders above reference price so they do not match instantly
+          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
+          const sellAmount = 1; // Set a reasonable amount per order
+          await this.placeSellOrder(sellPrice, sellAmount);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
 
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
