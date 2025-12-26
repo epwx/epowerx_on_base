@@ -261,14 +261,19 @@ export class VolumeGenerationStrategy {
       }
 
       // Place new buy orders if needed
+      // Calculate safe order size: divide available balance by number of orders
+      const totalOrdersNeeded = targetOrdersPerSide * 2;
+      const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
+      logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
+
       if (buyOrders.length < targetOrdersPerSide) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys; i++) {
           // Place buy orders below reference price so they do not match instantly
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-        const amount = safeOrderSizeUSD / buyPrice;
-        logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
-        await this.placeBuyOrder(buyPrice, amount);
+          const amount = safeOrderSizeUSD / buyPrice;
+          logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          await this.placeBuyOrder(buyPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -278,9 +283,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells; i++) {
           // Place sell orders above reference price so they do not match instantly
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-        const amount = safeOrderSizeUSD / sellPrice;
-        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
-        await this.placeSellOrder(sellPrice, amount);
+          const amount = safeOrderSizeUSD / sellPrice;
+          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          await this.placeSellOrder(sellPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
