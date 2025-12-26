@@ -270,22 +270,26 @@ export class VolumeGenerationStrategy {
       const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
       logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
 
-      // 1. Maintain at least 30 buy and 30 sell orders at staggered prices for book depth
-      const needBuys = targetOrdersPerSide - buyOrders.length;
-      for (let i = 0; i < needBuys; i++) {
-        const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-        const amount = safeOrderSizeUSD / buyPrice;
-        logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
-        await this.placeBuyOrder(buyPrice, amount);
-        await new Promise(resolve => setTimeout(resolve, 50));
+      // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
+      if (buyOrders.length < targetOrdersPerSide) {
+        const needBuys = targetOrdersPerSide - buyOrders.length;
+        for (let i = 0; i < needBuys; i++) {
+          const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
+          const amount = safeOrderSizeUSD / buyPrice;
+          logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
+          await this.placeBuyOrder(buyPrice, amount);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
       }
-      const needSells = targetOrdersPerSide - sellOrders.length;
-      for (let i = 0; i < needSells; i++) {
-        const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-        const amount = safeOrderSizeUSD / sellPrice;
-        logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-        await this.placeSellOrder(sellPrice, amount);
-        await new Promise(resolve => setTimeout(resolve, 50));
+      if (sellOrders.length < targetOrdersPerSide) {
+        const needSells = targetOrdersPerSide - sellOrders.length;
+        for (let i = 0; i < needSells; i++) {
+          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
+          const amount = safeOrderSizeUSD / sellPrice;
+          logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
+          await this.placeSellOrder(sellPrice, amount);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
       }
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
