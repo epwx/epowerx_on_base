@@ -399,55 +399,31 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      // Fetch order book to get best bid/ask
-      let bestBid = 0, bestAsk = 0;
-      try {
-        const ticker = await this.exchange.getTicker(this.symbol);
-        bestBid = ticker.bid;
-        bestAsk = ticker.ask;
-      } catch (error) {
-        logger.warn('Could not fetch order book for crossing wash trade, using lastPrice.');
-        bestBid = lastPrice * 0.999;
-        bestAsk = lastPrice * 1.001;
+      // Use the lastPrice as the match price for both orders
+      const matchPrice = lastPrice;
+
+      // Determine the maximum possible size for both buy and sell (in EPWX)
+      // Limit to available USDT and EPWX, and keep it reasonable (e.g., $5 max)
+      const maxUSD = Math.min(availableUSDT, 5);
+      let amount = maxUSD / matchPrice;
+      if (amount > availableEPWX) {
+        amount = availableEPWX;
+      }
+      if (amount * matchPrice > availableUSDT) {
+        amount = availableUSDT / matchPrice;
+      }
+      if (amount < 0.01) {
+        logger.warn(`⚠️  Wash trade amount too small: ${amount}`);
+        return;
       }
 
-      // Determine wash trade size
-      let washSizeUSD: number;
-      if (availableUSDT >= 10) {
-        washSizeUSD = 8 + Math.random() * 7; // $8-15 USD if plenty available
-      } else if (availableUSDT >= 5) {
-        washSizeUSD = 3 + Math.random() * 2; // $3-5 USD if moderate
-      } else if (availableUSDT >= 1) {
-        washSizeUSD = 0.5 + Math.random() * 0.4; // $0.5-0.9 USD if low
-      } else {
-        washSizeUSD = availableUSDT * 0.5; // Use 50% of what's left
-      }
-
-      // Place a buy order just above best ask, and a sell order just below best bid
-      const priceStep = lastPrice * 0.0002; // 0.02% step
-      const buyPrice = bestAsk > 0 ? bestAsk + priceStep : lastPrice * 1.001;
-      const sellPrice = bestBid > 0 ? bestBid - priceStep : lastPrice * 0.999;
-
-      // Amounts
-      let buyAmount = washSizeUSD / buyPrice;
-      let sellAmount = washSizeUSD / sellPrice;
-      // Ensure we never try to buy/sell more than available
-      if (buyAmount * buyPrice > availableUSDT) {
-        buyAmount = availableUSDT / buyPrice;
-        logger.warn(`⚠️  Adjusted wash buy amount to available USDT: ${buyAmount.toFixed(4)}`);
-      }
-      if (sellAmount > availableEPWX) {
-        sellAmount = availableEPWX;
-        logger.warn(`⚠️  Adjusted wash sell amount to available EPWX: ${sellAmount.toFixed(4)}`);
-      }
-
-      logger.info(`🔄 Crossing wash trade: Buy ${Math.floor(buyAmount).toLocaleString()} @ $${buyPrice.toExponential(4)}, Sell ${Math.floor(sellAmount).toLocaleString()} @ $${sellPrice.toExponential(4)}`);
-      // Place crossing orders
-      await this.placeBuyOrder(buyPrice, buyAmount);
-      await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
-      await this.placeSellOrder(sellPrice, sellAmount);
-      const volumeGenerated = (buyAmount * buyPrice) + (sellAmount * sellPrice);
-      logger.info(`✅ Crossing wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
+      logger.info(`🔄 Direct match wash trade: Buy & Sell ${amount.toFixed(4)} EPWX @ $${matchPrice.toExponential(4)}`);
+      // Place buy and sell orders at the exact same price and size
+      await this.placeBuyOrder(matchPrice, amount);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      await this.placeSellOrder(matchPrice, amount);
+      const volumeGenerated = 2 * (amount * matchPrice);
+      logger.info(`✅ Direct match wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
     } catch (error) {
       logger.error('Error in wash trade:', error);
     }
