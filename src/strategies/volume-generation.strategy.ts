@@ -14,6 +14,7 @@ interface VolumeStats {
 }
 
 interface ProfitStats {
+    cost?: number; // Total cost for profit % calculation
   realFills: number; // Count of orders filled by real users
   washTrades: number; // Count of self-executed wash trades
   totalProfit: number; // Total profit from spread captures
@@ -28,16 +29,19 @@ interface ProfitStats {
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
  */
 export class VolumeGenerationStrategy {
+    public getProfitStats(): ProfitStats {
+      return this.profitStats;
+    }
   // Track active wash trade pairs for fill detection
-  private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
+  protected washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
   static readonly DEX_PROVIDER_URL = 'https://mainnet.base.org';
   static readonly DEX_PAIR_ADDRESS = '0x8c4fe7dd7f57c8da00ec0766a4767dacdab47bc8';
   static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
-  private exchange: BiconomyExchangeService;
+  protected exchange: BiconomyExchangeService;
   private isRunning: boolean = false;
   private symbol: string;
   private volumeStats: VolumeStats;
-  private profitStats: ProfitStats;
+  protected profitStats: ProfitStats;
   private activeOrders: Map<string, Order> = new Map();
   private orderPrices: Map<string, { side: string; price: number }> = new Map(); // Track original order prices for profit calculation
   private updateTimer?: NodeJS.Timeout;
@@ -45,8 +49,8 @@ export class VolumeGenerationStrategy {
   private currentPosition: number = 0;
   private orderStatusIndex: number = 0;
 
-  constructor() {
-    this.exchange = new BiconomyExchangeService();
+  constructor(exchange?: BiconomyExchangeService) {
+    this.exchange = exchange || new BiconomyExchangeService();
     this.symbol = config.trading.pair;
     this.volumeStats = this.initializeStats();
     this.profitStats = this.initializeProfitStats();
@@ -470,7 +474,7 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
       // Check available USDT before placing order
       const balances = await this.exchange.getBalances();
@@ -506,7 +510,7 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
@@ -554,7 +558,7 @@ export class VolumeGenerationStrategy {
   }
 
   // Poll for fills after placing an order
-  private async pollOrderFills(orderId: string, side: 'BUY' | 'SELL', isWashTrade: boolean = false) {
+  protected async pollOrderFills(orderId: string, side: 'BUY' | 'SELL', isWashTrade: boolean = false) {
     try {
       // Wait a short time for matching to occur
       await new Promise(resolve => setTimeout(resolve, 1000));
