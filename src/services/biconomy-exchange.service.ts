@@ -473,4 +473,33 @@ export class BiconomyExchangeService {
     logger.error(`[Biconomy Exchange] ${context}:`, error);
     throw error;
   }
+    /**
+     * Batch cancel orders by array of {market, order_id}
+     * Returns number of successfully cancelled orders
+     */
+    async cancelOrdersBatch(orders: Array<{ market: string; order_id: string }>): Promise<number> {
+      let cancelled = 0;
+      for (const order of orders) {
+        try {
+          const params: any = {
+            api_key: this.apiKey,
+            market: order.market,
+            order_id: order.order_id,
+          };
+          const signature = this.signRequest(params);
+          params.sign = signature;
+          const urlParams = new URLSearchParams(params);
+          const response = await this.client.post('/api/v1/private/trade/cancel', urlParams.toString());
+          if (response.data.code === 0) {
+            cancelled++;
+            logger.info(`Batch cancelled order: ${order.order_id}`);
+          } else {
+            logger.warn(`Failed to cancel order ${order.order_id}: ${response.data.message}`);
+          }
+        } catch (error) {
+          logger.error(`Error cancelling order ${order.order_id}:`, error);
+        }
+      }
+      return cancelled;
+    }
 }
