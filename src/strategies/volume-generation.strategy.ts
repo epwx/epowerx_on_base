@@ -270,35 +270,33 @@ export class VolumeGenerationStrategy {
       const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
       logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
 
-      if (buyOrders.length < targetOrdersPerSide) {
-        const needBuys = targetOrdersPerSide - buyOrders.length;
-        const needSells = targetOrdersPerSide - sellOrders.length;
-        const numPairs = Math.min(needBuys, needSells);
-        // Place matching buy/sell orders for wash trading
-        for (let i = 0; i < numPairs; i++) {
-          const matchPrice = priceReference;
-          const amount = safeOrderSizeUSD / matchPrice;
-          logger.info(`🛒 [${i+1}/${numPairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Wash Trade]`);
-          await this.placeBuyOrder(matchPrice, amount);
-          await this.placeSellOrder(matchPrice, amount);
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        // Maintain at least 30 buy orders (staggered below reference)
-        for (let i = buyOrders.length + numPairs; i < targetOrdersPerSide; i++) {
-          const buyPrice = priceReference * (1 - 0.01 - (i-numPairs) * 0.0002);
-          const amount = safeOrderSizeUSD / buyPrice;
-          logger.info(`🛒 [${i+1}/${targetOrdersPerSide}] Placing extra buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
-          await this.placeBuyOrder(buyPrice, amount);
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        // Maintain at least 30 sell orders (staggered above reference)
-        for (let i = sellOrders.length + numPairs; i < targetOrdersPerSide; i++) {
-          const sellPrice = priceReference * (1 + 0.01 + (i-numPairs) * 0.0002);
-          const amount = safeOrderSizeUSD / sellPrice;
-          logger.info(`💰 [${i+1}/${targetOrdersPerSide}] Placing extra sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-          await this.placeSellOrder(sellPrice, amount);
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
+      // 1. Maintain at least 30 buy and 30 sell orders at staggered prices for book depth
+      const needBuys = targetOrdersPerSide - buyOrders.length;
+      for (let i = 0; i < needBuys; i++) {
+        const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
+        const amount = safeOrderSizeUSD / buyPrice;
+        logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
+        await this.placeBuyOrder(buyPrice, amount);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      const needSells = targetOrdersPerSide - sellOrders.length;
+      for (let i = 0; i < needSells; i++) {
+        const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
+        const amount = safeOrderSizeUSD / sellPrice;
+        logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
+        await this.placeSellOrder(sellPrice, amount);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
+      const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
+      for (let i = 0; i < washTradePairs; i++) {
+        const matchPrice = priceReference;
+        const amount = safeOrderSizeUSD / matchPrice;
+        logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
+        await this.placeBuyOrder(matchPrice, amount);
+        await this.placeSellOrder(matchPrice, amount);
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
       // Place new sell orders if needed
       if (sellOrders.length < targetOrdersPerSide) {
