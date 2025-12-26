@@ -296,18 +296,9 @@ export class VolumeGenerationStrategy {
       // Log buy/sell order counts after enforcement
       logger.info(`📊 [ENFORCED] Buy Orders: ${buyOrders.length}, Sell Orders: ${sellOrders.length}`);
 
-      // STEP 2: If we need more orders, place them
-      if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
-        const needBuys = targetOrdersPerSide - buyOrders.length;
-        const needSells = targetOrdersPerSide - sellOrders.length;
-        logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
-        await this.fillOrderBook(priceReference, needBuys, needSells, priceSource, biconomyBid, biconomyAsk);
-      }
-      // STEP 3: If we have enough orders, do wash trade
-      else {
-        logger.info(`✅ Target orders reached. Executing wash trade...`);
-        await this.executeWashTrade(priceReference);
-      }
+      // DIAGNOSTIC MODE: Always execute wash trade for guaranteed match test
+      logger.info(`🧪 [DIAGNOSTIC] Forcing wash trade (ignoring order book fill)...`);
+      await this.executeWashTrade(priceReference);
 
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
