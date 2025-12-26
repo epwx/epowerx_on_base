@@ -4,16 +4,6 @@ import { config } from '../config';
 import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
-/**
- * Volume Generation Strategy
- * Generates trading volume on Biconomy Exchange using zero-fee MM account
- */
-export class VolumeGenerationStrategy {
-  // Track active wash trade pairs for fill detection
-  private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
-
-  // DEX/Uniswap config (move to class properties)
-
 interface VolumeStats {
   totalVolume: number;
   buyVolume: number;
@@ -38,6 +28,8 @@ interface ProfitStats {
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
  */
 export class VolumeGenerationStrategy {
+  // Track active wash trade pairs for fill detection
+  private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
   static readonly DEX_PROVIDER_URL = 'https://mainnet.base.org';
   static readonly DEX_PAIR_ADDRESS = '0x8c4fe7dd7f57c8da00ec0766a4767dacdab47bc8';
   static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
