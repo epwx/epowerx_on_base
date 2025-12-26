@@ -1,3 +1,9 @@
+import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
+import { logger } from '../utils/logger';
+import { config } from '../config';
+import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
+// If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
+
 /**
  * Volume Generation Strategy
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
@@ -5,11 +11,6 @@
 export class VolumeGenerationStrategy {
   // Track active wash trade pairs for fill detection
   private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
-import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
-import { logger } from '../utils/logger';
-import { config } from '../config';
-import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
-// If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
   // DEX/Uniswap config (move to class properties)
 
