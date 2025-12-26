@@ -129,6 +129,17 @@ npm run build
 print_success "Project built successfully"
 echo ""
 
+echo "Step 8.5: Test Biconomy Open Orders (Production Only)"
+echo "----------------------------------------"
+print_info "Running test-biconomy-openorders.js to verify Biconomy API connectivity..."
+if node test-biconomy-openorders.js; then
+    print_success "Biconomy open orders test passed!"
+else
+    print_error "Biconomy open orders test failed. Aborting deployment."
+    exit 1
+fi
+echo ""
+
 echo "Step 9: Test Connection"
 echo "----------------------------------------"
 print_info "Testing Biconomy Exchange connection..."
