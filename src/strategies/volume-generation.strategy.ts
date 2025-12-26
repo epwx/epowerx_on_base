@@ -290,12 +290,18 @@ export class VolumeGenerationStrategy {
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
       const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
+      // Track wash trade pairs for reliable fill detection
+      this.washTradePairsActive = [];
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
         const amount = safeOrderSizeUSD / matchPrice;
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
-        await this.placeBuyOrder(matchPrice, amount);
-        await this.placeSellOrder(matchPrice, amount);
+        const buyOrderId = await this.placeBuyOrder(matchPrice, amount, true);
+        const sellOrderId = await this.placeSellOrder(matchPrice, amount, true);
+        if (buyOrderId && sellOrderId) {
+          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
+          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toExponential(4)} (${amount.toFixed(2)} EPWX)`);
+        }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       // Place new sell orders if needed
@@ -438,7 +444,7 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private async placeBuyOrder(price: number, amount: number): Promise<void> {
+  private async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
       // Check available USDT before placing order
       const balances = await this.exchange.getBalances();
@@ -467,13 +473,14 @@ export class VolumeGenerationStrategy {
       logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
-      await this.pollOrderFills(order.orderId, 'BUY');
+      await this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
+      return order.orderId;
     } catch (error) {
       logger.error('Error placing buy order:', error);
     }
   }
 
-  private async placeSellOrder(price: number, amount: number): Promise<void> {
+  private async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
@@ -501,14 +508,15 @@ export class VolumeGenerationStrategy {
       logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
-      await this.pollOrderFills(order.orderId, 'SELL');
+      await this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
+      return order.orderId;
     } catch (error) {
       logger.error('Error placing sell order:', error);
     }
   }
 
   // Poll for fills after placing an order
-  private async pollOrderFills(orderId: string, side: 'BUY' | 'SELL') {
+  private async pollOrderFills(orderId: string, side: 'BUY' | 'SELL', isWashTrade: boolean = false) {
     try {
       // Wait a short time for matching to occur
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -521,6 +529,10 @@ export class VolumeGenerationStrategy {
           this.volumeStats.totalVolume += trade.amount * trade.price;
           if (trade.side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
           if (trade.side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
+          if (isWashTrade) {
+            this.profitStats.washTrades++;
+            logger.info(`🔄 WASH TRADE FILL: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+          }
         }
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
