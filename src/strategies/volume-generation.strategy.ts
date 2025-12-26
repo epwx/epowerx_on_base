@@ -266,8 +266,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needBuys; i++) {
           // Place buy orders below reference price so they do not match instantly
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          const buyAmount = 1; // Set a reasonable amount per order
-          await this.placeBuyOrder(buyPrice, buyAmount);
+        const amount = safeOrderSizeUSD / buyPrice;
+        logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        await this.placeBuyOrder(buyPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -277,8 +278,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells; i++) {
           // Place sell orders above reference price so they do not match instantly
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const sellAmount = 1; // Set a reasonable amount per order
-          await this.placeSellOrder(sellPrice, sellAmount);
+        const amount = safeOrderSizeUSD / sellPrice;
+        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        await this.placeSellOrder(sellPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
