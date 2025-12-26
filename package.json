@@ -4,6 +4,7 @@
   "description": "Volume generation bot for Biconomy Exchange with zero-fee MM account",
   "main": "dist/index.js",
   "scripts": {
+    "prebuild": "node ./src/scripts/cancel-all-orders.js",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
