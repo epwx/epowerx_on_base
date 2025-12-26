@@ -1,3 +1,5 @@
+  // Track active wash trade pairs for fill detection
+  private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
 import { logger } from '../utils/logger';
 import { config } from '../config';
