@@ -1,3 +1,31 @@
+  /**
+   * Cancel up to 10 orders in a batch using /api/v1/private/trade/cancel_batch
+   * @param ordersJson Array of { market, order_id }
+   * @returns Number of successfully cancelled orders
+   */
+  async cancelOrdersBatch(ordersJson: Array<{ market: string, order_id: string }>): Promise<number> {
+    try {
+      const params: any = {
+        api_key: this.apiKey,
+        orders_json: JSON.stringify(ordersJson),
+      };
+      const signature = this.signRequest(params);
+      params.sign = signature;
+      const urlParams = new URLSearchParams(params);
+      const response = await this.client.post('/api/v1/private/trade/cancel_batch', urlParams.toString());
+      if (response.data.code !== 0) {
+        throw new Error(response.data.message || 'Failed to batch cancel orders');
+      }
+      // Count successful cancels
+      const results = response.data.result || [];
+      const successCount = results.filter((r: any) => r.result === true).length;
+      logger.info(`Batch cancelled ${successCount} orders.`);
+      return successCount;
+    } catch (error) {
+      logger.error('Failed to batch cancel orders:', error);
+      throw error;
+    }
+  }
 import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
