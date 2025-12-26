@@ -232,33 +232,33 @@ export class VolumeGenerationStrategy {
 
       // Place and maintain at least 30 buy and 30 sell orders in the order book
       const targetOrdersPerSide = 30;
+      // Always cleanup excess orders at the start of the cycle
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
       let sellOrders = openOrders.filter(o => o.side === 'SELL');
-      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
-
-      // Cancel excess buy orders
+      logger.info(`📊 [PRE-CLEANUP] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
       if (buyOrders.length > targetOrdersPerSide) {
-        const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
+        // Sort by timestamp descending, keep newest 30
+        const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
+        const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
         for (const order of excessBuyOrders) {
-          logger.info(`Cancelling excess BUY order: ${order.orderId}`);
+          logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
         }
-        openOrders = await this.exchange.getOpenOrders(this.symbol);
-        buyOrders = openOrders.filter(o => o.side === 'BUY');
-        sellOrders = openOrders.filter(o => o.side === 'SELL');
       }
-      // Cancel excess sell orders
       if (sellOrders.length > targetOrdersPerSide) {
-        const excessSellOrders = sellOrders.slice(targetOrdersPerSide);
+        const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
+        const excessSellOrders = sortedSells.slice(targetOrdersPerSide);
         for (const order of excessSellOrders) {
-          logger.info(`Cancelling excess SELL order: ${order.orderId}`);
+          logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
         }
-        openOrders = await this.exchange.getOpenOrders(this.symbol);
-        buyOrders = openOrders.filter(o => o.side === 'BUY');
-        sellOrders = openOrders.filter(o => o.side === 'SELL');
       }
+      // Re-fetch open orders after cleanup
+      openOrders = await this.exchange.getOpenOrders(this.symbol);
+      buyOrders = openOrders.filter(o => o.side === 'BUY');
+      sellOrders = openOrders.filter(o => o.side === 'SELL');
+      logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
 
       // Place new buy orders if needed
       // Fetch available USDT balance
