@@ -230,56 +230,6 @@ export class VolumeGenerationStrategy {
       let priceSource = 'DEX';
       logger.info('Using DEX price as reference for all wash trades.');
 
-      // ...existing code...
-      let openOrders;
-      try {
-        openOrders = await this.exchange.getOpenOrders(this.symbol);
-        logger.info(`✅ Got open orders: ${openOrders?.length || 0} total`);
-      } catch (error) {
-        logger.error('❌ Failed to get open orders:', error);
-        return;
-      }
-      if (!openOrders) {
-        logger.error('❌ Failed to get open orders - openOrders is undefined');
-        return;
-      }
-      let buyOrders = openOrders.filter(o => o.side === 'BUY');
-      let sellOrders = openOrders.filter(o => o.side === 'SELL');
-      const targetOrdersPerSide = 20;
-      logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
-
-      // Cancel excess buy orders
-      if (buyOrders.length > targetOrdersPerSide) {
-        const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
-        for (const order of excessBuyOrders) {
-          logger.info(`Cancelling excess BUY order: ${order.orderId}`);
-          await this.exchange.cancelOrder(this.symbol, order.orderId);
-          this.activeOrders.delete(order.orderId);
-          this.orderPrices.delete(order.orderId);
-        }
-        // Refresh open orders after cancellation
-        openOrders = await this.exchange.getOpenOrders(this.symbol);
-        buyOrders = openOrders.filter(o => o.side === 'BUY');
-        sellOrders = openOrders.filter(o => o.side === 'SELL');
-      }
-      // Cancel excess sell orders
-      if (sellOrders.length > targetOrdersPerSide) {
-        const excessSellOrders = sellOrders.slice(targetOrdersPerSide);
-        for (const order of excessSellOrders) {
-          logger.info(`Cancelling excess SELL order: ${order.orderId}`);
-          await this.exchange.cancelOrder(this.symbol, order.orderId);
-          this.activeOrders.delete(order.orderId);
-          this.orderPrices.delete(order.orderId);
-        }
-        // Refresh open orders after cancellation
-        openOrders = await this.exchange.getOpenOrders(this.symbol);
-        buyOrders = openOrders.filter(o => o.side === 'BUY');
-        sellOrders = openOrders.filter(o => o.side === 'SELL');
-      }
-
-      // Log buy/sell order counts after enforcement
-      logger.info(`📊 [ENFORCED] Buy Orders: ${buyOrders.length}, Sell Orders: ${sellOrders.length}`);
-
       // Place and maintain at least 30 buy and 30 sell orders in the order book
       const targetOrdersPerSide = 30;
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
