@@ -321,6 +321,28 @@ export class VolumeGenerationStrategy {
         }
       }
 
+      // Final check: cancel excess orders after all placements (keep only newest 30 per side)
+      openOrders = await this.exchange.getOpenOrders(this.symbol);
+      buyOrders = openOrders.filter(o => o.side === 'BUY');
+      sellOrders = openOrders.filter(o => o.side === 'SELL');
+      if (buyOrders.length > targetOrdersPerSide) {
+        // Sort by timestamp descending, keep newest 30
+        const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
+        const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
+        for (const order of excessBuyOrders) {
+          logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+        }
+      }
+      if (sellOrders.length > targetOrdersPerSide) {
+        const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
+        const excessSellOrders = sortedSells.slice(targetOrdersPerSide);
+        for (const order of excessSellOrders) {
+          logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+        }
+      }
+
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
       logger.error('💥 Unexpected error in placeVolumeOrders:', error);
