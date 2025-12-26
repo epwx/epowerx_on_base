@@ -512,6 +512,18 @@ export class VolumeGenerationStrategy {
       const balances = await this.exchange.getBalances();
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableEPWX = epwxBalance?.free || 0;
+      // Check total USD balance (free + locked)
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const totalUSDT = (usdtBalance?.free || 0) + (usdtBalance?.locked || 0);
+      // If not a wash trade and not a market value order, skip if total USD < 1000
+      // Assume market value order means price is within 0.5% of current market price
+      const ticker = await this.exchange.getTicker(this.symbol);
+      const marketPrice = ticker.price;
+      const isMarketValueOrder = Math.abs(price - marketPrice) / marketPrice < 0.005;
+      if (!isWashTrade && !isMarketValueOrder && totalUSDT < 1000) {
+        logger.warn(`⚠️  Skipping real user SELL order: total USD balance (${totalUSDT.toFixed(2)}) < $1000 and not market value order.`);
+        return;
+      }
       if (amount > availableEPWX) {
         logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
