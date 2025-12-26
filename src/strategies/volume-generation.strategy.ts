@@ -209,6 +209,7 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+
       // STEP 1: Check current open orders
       let openOrders;
       try {
@@ -222,11 +223,11 @@ export class VolumeGenerationStrategy {
         logger.error('❌ Failed to get open orders - openOrders is undefined');
         return;
       }
-      const buyOrders = openOrders.filter(o => o.side === 'BUY');
-      const sellOrders = openOrders.filter(o => o.side === 'SELL');
-      // Set fixed target orders per side
+      let buyOrders = openOrders.filter(o => o.side === 'BUY');
+      let sellOrders = openOrders.filter(o => o.side === 'SELL');
       const targetOrdersPerSide = 20;
       logger.info(`📊 Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+
       // Cancel excess buy orders
       if (buyOrders.length > targetOrdersPerSide) {
         const excessBuyOrders = buyOrders.slice(targetOrdersPerSide);
@@ -236,6 +237,10 @@ export class VolumeGenerationStrategy {
           this.activeOrders.delete(order.orderId);
           this.orderPrices.delete(order.orderId);
         }
+        // Refresh open orders after cancellation
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        buyOrders = openOrders.filter(o => o.side === 'BUY');
+        sellOrders = openOrders.filter(o => o.side === 'SELL');
       }
       // Cancel excess sell orders
       if (sellOrders.length > targetOrdersPerSide) {
@@ -246,13 +251,19 @@ export class VolumeGenerationStrategy {
           this.activeOrders.delete(order.orderId);
           this.orderPrices.delete(order.orderId);
         }
+        // Refresh open orders after cancellation
+        openOrders = await this.exchange.getOpenOrders(this.symbol);
+        buyOrders = openOrders.filter(o => o.side === 'BUY');
+        sellOrders = openOrders.filter(o => o.side === 'SELL');
       }
+
+      // Log buy/sell order counts after enforcement
+      logger.info(`📊 [ENFORCED] Buy Orders: ${buyOrders.length}, Sell Orders: ${sellOrders.length}`);
 
       // STEP 2: If we need more orders, place them
       if (buyOrders.length < targetOrdersPerSide || sellOrders.length < targetOrdersPerSide) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
-
         logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
         await this.fillOrderBook(lastPrice, needBuys, needSells);
       }
