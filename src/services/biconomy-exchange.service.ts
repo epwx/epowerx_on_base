@@ -91,7 +91,7 @@ export class BiconomyExchangeService {
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
     try {
-      const response = await this.client.get('/v1/depth', {
+      const response = await this.client.get('/api/v1/depth', {
         params: { symbol: symbol.replace('/', '_').toUpperCase() },
       });
 
@@ -115,7 +115,7 @@ export class BiconomyExchangeService {
   async getTicker(symbol: string): Promise<Ticker> {
     try {
       logger.debug(`[getTicker] Fetching ticker for ${symbol}`);
-      const response = await this.client.get('/v1/tickers');
+      const response = await this.client.get('/api/v1/tickers');
 
       logger.debug(`[getTicker] Got response, status: ${response.status}`);
       const data = response.data;
@@ -206,7 +206,7 @@ export class BiconomyExchangeService {
     price?: number
   ): Promise<Order> {
     try {
-      const path = type === 'LIMIT' ? '/v1/private/trade/limit' : '/v1/private/trade/market';
+      const path = type === 'LIMIT' ? '/api/v1/private/trade/limit' : '/api/v1/private/trade/market';
       // Format amount - different exchanges have different precision requirements
       // For EPWX (large quantities), use integers. For small amounts, use appropriate decimals.
       const amountStr = amount >= 1 ? Math.floor(amount).toString() : amount.toFixed(8);
@@ -286,7 +286,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/trade/cancel', urlParams.toString());
+      const response = await this.client.post('/api/v1/private/trade/cancel', urlParams.toString());
       
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to cancel order');
@@ -315,7 +315,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/trade/cancel_all', urlParams.toString());
+      const response = await this.client.post('/api/v1/private/trade/cancel_all', urlParams.toString());
       
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to cancel all orders');
@@ -439,7 +439,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/order/deals', urlParams.toString());
+      const response = await this.client.post('/api/v1/private/order/deals', urlParams.toString());
 
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get recent trades');
