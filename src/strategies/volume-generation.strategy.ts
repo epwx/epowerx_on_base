@@ -487,12 +487,12 @@ export class VolumeGenerationStrategy {
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (trades && trades.length > 0) {
         for (const trade of trades) {
-          logger.info(`🎯 Order fill detected: ${side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
-          // Update stats
+          // Log both buy and sell fills for diagnostics
+          logger.info(`🎯 Trade fill detected: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+          // Update stats based on trade.side
           this.volumeStats.totalVolume += trade.amount * trade.price;
-          if (side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
-          if (side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
-          // Optionally update profitStats, etc.
+          if (trade.side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
+          if (trade.side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
         }
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
