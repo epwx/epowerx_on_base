@@ -399,11 +399,18 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      // Use the lastPrice as the match price for both orders
-      const matchPrice = lastPrice;
+      // Fetch the current market price (midpoint of best bid/ask)
+      let matchPrice = lastPrice;
+      try {
+        const ticker = await this.exchange.getTicker(this.symbol);
+        if (ticker && ticker.bid > 0 && ticker.ask > 0) {
+          matchPrice = (ticker.bid + ticker.ask) / 2;
+        }
+      } catch (error) {
+        logger.warn('Could not fetch ticker for exact match, using lastPrice.');
+      }
 
       // Determine the maximum possible size for both buy and sell (in EPWX)
-      // Limit to available USDT and EPWX, and keep it reasonable (e.g., $5 max)
       const maxUSD = Math.min(availableUSDT, 5);
       let amount = maxUSD / matchPrice;
       if (amount > availableEPWX) {
@@ -417,13 +424,13 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      logger.info(`🔄 Direct match wash trade: Buy & Sell ${amount.toFixed(4)} EPWX @ $${matchPrice.toExponential(4)}`);
+      logger.info(`🔄 Exact match wash trade: Buy & Sell ${amount.toFixed(4)} EPWX @ $${matchPrice.toExponential(4)}`);
       // Place buy and sell orders at the exact same price and size
       await this.placeBuyOrder(matchPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 100));
       await this.placeSellOrder(matchPrice, amount);
       const volumeGenerated = 2 * (amount * matchPrice);
-      logger.info(`✅ Direct match wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
+      logger.info(`✅ Exact match wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
     } catch (error) {
       logger.error('Error in wash trade:', error);
     }
