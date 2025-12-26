@@ -1,3 +1,25 @@
+/**
+ * Biconomy Exchange API Service
+ * Zero-fee market maker account integration
+ */
+export class BiconomyExchangeService {
+  private client: AxiosInstance;
+  private apiKey: string;
+  private apiSecret: string;
+
+  constructor() {
+    this.apiKey = config.biconomyExchange.apiKey;
+    this.apiSecret = config.biconomyExchange.apiSecret;
+
+    this.client = axios.create({
+      baseURL: config.biconomyExchange.baseUrl,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+  }
+
   /**
    * Cancel up to 10 orders in a batch using /api/v1/private/trade/cancel_batch
    * @param ordersJson Array of { market, order_id }
