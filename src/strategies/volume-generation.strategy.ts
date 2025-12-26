@@ -224,27 +224,10 @@ export class VolumeGenerationStrategy {
       }
 
       // Compare DEX and Biconomy price
+      // Always use DEX price as reference for wash trade
       let priceReference = lastPrice;
-      let useDex = false;
       let priceSource = 'DEX';
-      if (biconomyPrice > 0 && lastPrice > 0) {
-        const diff = Math.abs(biconomyPrice - lastPrice) / lastPrice;
-        logger.info(`Price diff (Biconomy vs DEX): ${(diff * 100).toFixed(2)}%`);
-        if (diff > 0.01) { // If >1% difference, use Biconomy price to bootstrap
-          // Place buys just below bid, sells just above ask
-          priceReference = biconomyPrice;
-          useDex = false;
-          priceSource = 'Biconomy';
-          logger.info('Using Biconomy price for order placement (bootstrapping to DEX)');
-        } else {
-          priceReference = lastPrice;
-          useDex = true;
-          priceSource = 'DEX';
-          logger.info('Using DEX price for order placement (converged)');
-        }
-      } else {
-        logger.warn('Could not compare Biconomy and DEX price, using DEX price by default');
-      }
+      logger.info('Using DEX price as reference for all wash trades.');
 
       // ...existing code...
       let openOrders;
