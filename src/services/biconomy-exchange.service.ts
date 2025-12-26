@@ -389,7 +389,7 @@ export class BiconomyExchangeService {
     logger.info(`[getOpenOrders] Params: ${JSON.stringify(params)}`);
     try {
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/order/pending', urlParams.toString(), {
+      const response = await this.client.post('/api/v1/private/order/pending', urlParams.toString(), {
         headers: {
           'X-API-KEY': this.apiKey,
           'X-SITE-ID': '127',
