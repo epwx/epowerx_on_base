@@ -1,6 +1,6 @@
 import { BiconomyExchangeService } from '../services/biconomy-exchange.service';
 import { config } from '../config';
-const symbol = config.symbol || 'EPWX/USDT';
+const symbol = config.trading.pair || 'EPWX/USDT';
 
 async function main() {
   const exchange = new BiconomyExchangeService();
