@@ -374,7 +374,7 @@ export class BiconomyExchangeService {
     }
   }
 
-  async getOpenOrders(symbol?: string, offset: number = 0, limit: number = 10): Promise<Order[]> {
+  async getOpenOrders(symbol?: string, offset: number = 0, limit: number = 100): Promise<Order[]> {
     // Biconomy expects 'market' param, not 'symbol'
     const market = symbol ? symbol.replace('/', '_').toUpperCase() : undefined;
     if (!market) throw new Error('Market (symbol) is required for getOpenOrders');
