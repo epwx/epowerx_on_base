@@ -16,7 +16,7 @@ async function main() {
     let totalCancelled = 0;
     for (let i = 0; i < openOrders.length; i += 10) {
       const batch = openOrders.slice(i, i + 10);
-      const ordersJson = batch.map(order => ({ market: symbol.replace('/', '_').toUpperCase(), order_id: order.orderId }));
+      const ordersJson = batch.map((order: { orderId: string }) => ({ market: symbol.replace('/', '_').toUpperCase(), order_id: order.orderId }));
       const cancelled = await exchange.cancelOrdersBatch(ordersJson);
       totalCancelled += cancelled;
       console.log(`Batch cancelled: ${cancelled} orders`);
