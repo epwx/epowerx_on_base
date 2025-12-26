@@ -159,7 +159,7 @@ export class BiconomyExchangeService {
       logger.debug('Getting balances with params:', params);
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/user', urlParams.toString());
+      const response = await this.client.post('/api/v1/private/user', urlParams.toString());
 
       logger.debug('Balance response:', response.data);
 
