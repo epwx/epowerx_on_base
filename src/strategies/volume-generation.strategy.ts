@@ -1,3 +1,8 @@
+/**
+ * Volume Generation Strategy
+ * Generates trading volume on Biconomy Exchange using zero-fee MM account
+ */
+export class VolumeGenerationStrategy {
   // Track active wash trade pairs for fill detection
   private washTradePairsActive: Array<{ buyOrderId: string, sellOrderId: string, price: number, amount: number }> = [];
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
