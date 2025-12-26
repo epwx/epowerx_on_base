@@ -210,7 +210,37 @@ export class VolumeGenerationStrategy {
       }
 
 
-      // STEP 1: Check current open orders
+      // --- Hybrid price reference logic ---
+      // Fetch Biconomy market price (ticker)
+      let biconomyPrice = 0;
+      try {
+        const ticker = await this.exchange.getTicker(this.symbol);
+        biconomyPrice = (ticker.ask + ticker.bid) / 2;
+        logger.info(`Biconomy market price: ${biconomyPrice}`);
+      } catch (error) {
+        logger.error('❌ Failed to fetch Biconomy market price:', error);
+        // fallback to lastPrice if needed
+      }
+
+      // Compare DEX and Biconomy price
+      let priceReference = lastPrice;
+      let useDex = false;
+      if (biconomyPrice > 0 && lastPrice > 0) {
+        const diff = Math.abs(biconomyPrice - lastPrice) / lastPrice;
+        logger.info(`Price diff (Biconomy vs DEX): ${(diff * 100).toFixed(2)}%`);
+        if (diff > 0.01) { // If >1% difference, use Biconomy price to bootstrap
+          priceReference = biconomyPrice;
+          logger.info('Using Biconomy price for order placement (bootstrapping to DEX)');
+        } else {
+          priceReference = lastPrice;
+          useDex = true;
+          logger.info('Using DEX price for order placement (converged)');
+        }
+      } else {
+        logger.warn('Could not compare Biconomy and DEX price, using DEX price by default');
+      }
+
+      // ...existing code...
       let openOrders;
       try {
         openOrders = await this.exchange.getOpenOrders(this.symbol);
@@ -265,12 +295,12 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
         logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
-        await this.fillOrderBook(lastPrice, needBuys, needSells);
+        await this.fillOrderBook(priceReference, needBuys, needSells);
       }
       // STEP 3: If we have enough orders, do wash trade
       else {
         logger.info(`✅ Target orders reached. Executing wash trade...`);
-        await this.executeWashTrade(lastPrice);
+        await this.executeWashTrade(priceReference);
       }
 
       this.volumeStats.lastOrderTime = Date.now();
@@ -304,27 +334,34 @@ export class VolumeGenerationStrategy {
     const targetSpread = 0.003; // 0.3% spread around last price
     
     // Place buy orders with staggered prices
-    for (let i = 0; i < needBuys; i++) {
-      const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
-      const buyPrice = lastPrice * priceOffset;
-      const amount = safeOrderSizeUSD / buyPrice;
-      
-      logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
-      await this.placeBuyOrder(buyPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+    if (needBuys > 0) {
+      for (let i = 0; i < needBuys; i++) {
+        const priceOffset = 1 - targetSpread - (i * 0.0001); // 0.3% below, then 0.31%, 0.32%...
+        const buyPrice = lastPrice * priceOffset;
+        const amount = safeOrderSizeUSD / buyPrice;
+        logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
+        await this.placeBuyOrder(buyPrice, amount);
+        await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+      }
+    } else {
+      logger.info('No buy orders needed this cycle.');
     }
-    
+
     // Place sell orders with staggered prices
-    for (let i = 0; i < needSells; i++) {
-      const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
-      const sellPrice = lastPrice * priceOffset;
-      const amount = safeOrderSizeUSD / sellPrice;
-      
-      logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
-      await this.placeSellOrder(sellPrice, amount);
-      await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+    if (needSells > 0) {
+      for (let i = 0; i < needSells; i++) {
+        const priceOffset = 1 + targetSpread + (i * 0.0001); // 0.3% above, then 0.31%, 0.32%...
+        const sellPrice = lastPrice * priceOffset;
+        const amount = safeOrderSizeUSD / sellPrice;
+        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)})`);
+        await this.placeSellOrder(sellPrice, amount);
+        logger.info(`✅ Sell order placed: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)}`);
+        await new Promise(resolve => setTimeout(resolve, 200)); // Increased delay to reduce rate limit risk
+      }
+    } else {
+      logger.info('No sell orders needed this cycle.');
     }
-    
+
     logger.info(`✅ fillOrderBook complete: placed ${needBuys} buys and ${needSells} sells`);
   }
 
