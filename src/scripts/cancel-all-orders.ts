@@ -12,9 +12,9 @@ async function main() {
       if (!openOrders.length) {
         break;
       }
-      // Cancel in batches of 10
-      for (let i = 0; i < openOrders.length; i += 10) {
-        const batch = openOrders.slice(i, i + 10);
+      // Cancel in batches of 100
+      for (let i = 0; i < openOrders.length; i += 100) {
+        const batch = openOrders.slice(i, i + 100);
         const ordersJson = batch.map((order: { orderId: string }) => ({ market: symbol.replace('/', '_').toUpperCase(), order_id: order.orderId }));
         const cancelled = await exchange.cancelOrdersBatch(ordersJson);
         totalCancelled += cancelled;

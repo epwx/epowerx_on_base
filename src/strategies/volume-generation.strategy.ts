@@ -320,7 +320,8 @@ export class VolumeGenerationStrategy {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           const amount = safeOrderSizeUSD / sellPrice;
           logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
-          await this.placeSellOrder(sellPrice, amount);
+          // Mark book-depth sell orders as wash trades to bypass USD balance check
+          await this.placeSellOrder(sellPrice, amount, true);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
