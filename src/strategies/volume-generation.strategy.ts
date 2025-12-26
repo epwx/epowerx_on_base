@@ -274,27 +274,28 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
         const numPairs = Math.min(needBuys, needSells);
+        // Place matching buy/sell orders for wash trading
         for (let i = 0; i < numPairs; i++) {
-          // Place matching buy and sell orders at the same price for wash trading
-          const matchPrice = priceReference; // Use reference price for both
+          const matchPrice = priceReference;
           const amount = safeOrderSizeUSD / matchPrice;
           logger.info(`🛒 [${i+1}/${numPairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Wash Trade]`);
           await this.placeBuyOrder(matchPrice, amount);
           await this.placeSellOrder(matchPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 100));
         }
-        // If there are extra buys or sells needed, place them as before (outside wash trading)
-        for (let i = numPairs; i < needBuys; i++) {
-          const buyPrice = priceReference * (1 - 0.01 - i * 0.0002);
+        // Maintain at least 30 buy orders (staggered below reference)
+        for (let i = buyOrders.length + numPairs; i < targetOrdersPerSide; i++) {
+          const buyPrice = priceReference * (1 - 0.01 - (i-numPairs) * 0.0002);
           const amount = safeOrderSizeUSD / buyPrice;
-          logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          logger.info(`🛒 [${i+1}/${targetOrdersPerSide}] Placing extra buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
           await this.placeBuyOrder(buyPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-        for (let i = numPairs; i < needSells; i++) {
-          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002);
+        // Maintain at least 30 sell orders (staggered above reference)
+        for (let i = sellOrders.length + numPairs; i < targetOrdersPerSide; i++) {
+          const sellPrice = priceReference * (1 + 0.01 + (i-numPairs) * 0.0002);
           const amount = safeOrderSizeUSD / sellPrice;
-          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          logger.info(`💰 [${i+1}/${targetOrdersPerSide}] Placing extra sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
           await this.placeSellOrder(sellPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
