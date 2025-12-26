@@ -373,57 +373,51 @@ export class BiconomyExchangeService {
     }
   }
 
-  async getOpenOrders(symbol?: string): Promise<Order[]> {
-    const maxRetries = 3;
-    let attempt = 0;
-    while (attempt < maxRetries) {
-      try {
-        logger.info(`[getOpenOrders] Axios baseURL: ${this.client.defaults.baseURL}`);
-        logger.debug(`[getOpenOrders] Fetching open orders for ${symbol}`);
-        // Only allowed params
-        const params: Record<string, any> = {
-          timestamp: Date.now(),
-        };
-        if (symbol) {
-          params.symbol = symbol.replace('/', '_').toUpperCase();
-        }
-        // Only use allowed keys for signature
-        const signaturePayload: Record<string, any> = {};
-        if (params.symbol) signaturePayload.symbol = params.symbol;
-        signaturePayload.timestamp = params.timestamp;
-        params.signature = this.signRequest(signaturePayload);
-        // Log params and signature separately, do not merge logger context
-        logger.info(`[getOpenOrders] Params: ${JSON.stringify({ symbol: params.symbol, timestamp: params.timestamp })}`);
-        logger.info(`[getOpenOrders] Signature: ${params.signature}`);
-        logger.info(`[getOpenOrders] Full request: ${this.client.defaults.baseURL}/api/v1/orders/open with params: ${JSON.stringify({ symbol: params.symbol, timestamp: params.timestamp, signature: params.signature })}`);
-        const response = await this.client.get(
-          '/api/v1/orders/open',
-          {
-            params: {
-              ...(params.symbol ? { symbol: params.symbol } : {}),
-              timestamp: params.timestamp,
-              signature: params.signature,
-            },
-            headers: {
-              'X-API-KEY': this.apiKey,
-            },
-          }
-        );
-        // Assuming response.data.result is the array of open orders
-        return response.data.result || [];
-      } catch (error) {
-        const err = error as any;
-        if (err.response && err.response.status === 503) {
-          attempt++;
-          logger.warn(`[getOpenOrders] 503 Service Unavailable, retrying (${attempt}/${maxRetries})...`);
-          await new Promise(res => setTimeout(res, 1000 * attempt));
-          continue;
-        }
-        logger.error(`[getOpenOrders] Error fetching open orders for ${symbol}:`, error);
-        throw error;
+  async getOpenOrders(symbol?: string, offset: number = 0, limit: number = 10): Promise<Order[]> {
+    // Biconomy expects 'market' param, not 'symbol'
+    const market = symbol ? symbol.replace('/', '_').toUpperCase() : undefined;
+    if (!market) throw new Error('Market (symbol) is required for getOpenOrders');
+    const params: Record<string, any> = {
+      api_key: this.apiKey,
+      market,
+      offset,
+      limit,
+    };
+    // Signature: all params sorted alphabetically, joined as key=value, then &secret_key=... and MD5/uppercase
+    const sign = this.signRequest(params);
+    params.sign = sign;
+    logger.info(`[getOpenOrders] Params: ${JSON.stringify(params)}`);
+    try {
+      const urlParams = new URLSearchParams(params);
+      const response = await this.client.post('/v1/private/order/pending', urlParams.toString(), {
+        headers: {
+          'X-API-KEY': this.apiKey,
+          'X-SITE-ID': '127',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      });
+      logger.debug(`[getOpenOrders] Response: ${JSON.stringify(response.data)}`);
+      if (response.data.code !== 0) {
+        throw new Error(response.data.message || 'Failed to get open orders');
       }
+      // Map API response to Order[]
+      const records = response.data.result?.records || [];
+      return records.map((order: any) => ({
+        orderId: order.id.toString(),
+        symbol: order.market,
+        side: order.side === 1 ? 'SELL' : 'BUY',
+        type: order.type === 1 ? 'LIMIT' : 'MARKET',
+        price: parseFloat(order.price),
+        amount: parseFloat(order.amount),
+        filled: parseFloat(order.deal_stock),
+        status: 'NEW',
+        timestamp: (order.ctime || 0) * 1000,
+        fee: parseFloat(order.deal_fee || '0'),
+      }));
+    } catch (error) {
+      logger.error(`[getOpenOrders] Error:`, error);
+      throw error;
     }
-    throw new Error('Failed to fetch open orders after retries');
   }
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
