@@ -301,7 +301,7 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         const needSells = targetOrdersPerSide - sellOrders.length;
         logger.info(`🔨 Need to place: ${needBuys} buy orders and ${needSells} sell orders`);
-        await this.fillOrderBook(priceReference, needBuys, needSells);
+        await this.fillOrderBook(priceReference, needBuys, needSells, priceSource, biconomyBid, biconomyAsk);
       }
       // STEP 3: If we have enough orders, do wash trade
       else {
@@ -315,7 +315,14 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private async fillOrderBook(lastPrice: number, needBuys: number, needSells: number): Promise<void> {
+  private async fillOrderBook(
+    lastPrice: number,
+    needBuys: number,
+    needSells: number,
+    priceSource: string,
+    biconomyBid: number,
+    biconomyAsk: number
+  ): Promise<void> {
     logger.info(`📚 fillOrderBook called: placing ${needBuys} buys and ${needSells} sells`);
     
     // Check available balance
