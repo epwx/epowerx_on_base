@@ -36,7 +36,7 @@ async function testGetOpenOrders() {
 
   try {
     const response = await axios.post(
-      `${BASE_URL}/v1/private/order/pending`,
+      `${BASE_URL}/api/v1/private/order/pending`,
       urlParams.toString(),
       { headers }
     );
