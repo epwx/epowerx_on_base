@@ -342,7 +342,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.client.post('/v1/private/order/pending/detail', urlParams.toString());
+      const response = await this.client.post('/api/v1/private/order/pending/detail', urlParams.toString());
 
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get order');
