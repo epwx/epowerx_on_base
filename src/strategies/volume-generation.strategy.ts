@@ -520,27 +520,28 @@ export class VolumeGenerationStrategy {
     } catch (error) {
       logger.error('Error placing sell order:', error);
     }
-    // Poll for fills after placing an order
-    private async pollOrderFills(orderId: string, side: 'BUY' | 'SELL') {
-      try {
-        // Wait a short time for matching to occur
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
-        if (trades && trades.length > 0) {
-          for (const trade of trades) {
-            logger.info(`🎯 Order fill detected: ${side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
-            // Update stats
-            this.volumeStats.totalVolume += trade.amount * trade.price;
-            if (side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
-            if (side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
-            // Optionally update profitStats, etc.
-          }
-        } else {
-          logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
+  }
+
+  // Poll for fills after placing an order
+  private async pollOrderFills(orderId: string, side: 'BUY' | 'SELL') {
+    try {
+      // Wait a short time for matching to occur
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
+      if (trades && trades.length > 0) {
+        for (const trade of trades) {
+          logger.info(`🎯 Order fill detected: ${side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+          // Update stats
+          this.volumeStats.totalVolume += trade.amount * trade.price;
+          if (side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
+          if (side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
+          // Optionally update profitStats, etc.
         }
-      } catch (error) {
-        logger.error(`Error polling fills for order ${orderId}:`, error);
+      } else {
+        logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
       }
+    } catch (error) {
+      logger.error(`Error polling fills for order ${orderId}:`, error);
     }
   }
 
