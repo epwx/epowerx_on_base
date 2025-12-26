@@ -272,12 +272,30 @@ export class VolumeGenerationStrategy {
 
       if (buyOrders.length < targetOrdersPerSide) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
-        for (let i = 0; i < needBuys; i++) {
-          // Place buy orders below reference price so they do not match instantly
-          const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
+        const needSells = targetOrdersPerSide - sellOrders.length;
+        const numPairs = Math.min(needBuys, needSells);
+        for (let i = 0; i < numPairs; i++) {
+          // Place matching buy and sell orders at the same price for wash trading
+          const matchPrice = priceReference; // Use reference price for both
+          const amount = safeOrderSizeUSD / matchPrice;
+          logger.info(`🛒 [${i+1}/${numPairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Wash Trade]`);
+          await this.placeBuyOrder(matchPrice, amount);
+          await this.placeSellOrder(matchPrice, amount);
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        // If there are extra buys or sells needed, place them as before (outside wash trading)
+        for (let i = numPairs; i < needBuys; i++) {
+          const buyPrice = priceReference * (1 - 0.01 - i * 0.0002);
           const amount = safeOrderSizeUSD / buyPrice;
           logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
           await this.placeBuyOrder(buyPrice, amount);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        for (let i = numPairs; i < needSells; i++) {
+          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002);
+          const amount = safeOrderSizeUSD / sellPrice;
+          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          await this.placeSellOrder(sellPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
