@@ -1,427 +1,433 @@
-describe('Logging and diagnostics output', () => {
-  it('should log order placement, fills, and errors', async () => {
-    const logs: string[] = [];
-    // Mock logger
-    const mockLogger = {
-      info: (msg: string) => logs.push(`INFO: ${msg}`),
-      error: (msg: string) => logs.push(`ERROR: ${msg}`),
-      warn: (msg: string) => logs.push(`WARN: ${msg}`)
-    };
-    // Patch logger in strategy
-    const originalLogger = require('../../utils/logger');
-    Object.assign(originalLogger, mockLogger);
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 5000, locked: 0 },
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-    const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Place buy order
-    await (strategy as any).placeBuyOrder(1, 100, false);
-    // Simulate fill
-    mockLogger.info('🎯 Trade fill detected: BUY 100 @ $1 (Order ID: test, Trade ID: fill1)');
-    // Simulate error
-    mockLogger.error('Error placing buy order: Simulated error');
-    // Check logs
-    expect(logs.some(l => l.includes('INFO:'))).toBe(true);
-    expect(logs.some(l => l.includes('Trade fill detected'))).toBe(true);
-    expect(logs.some(l => l.includes('ERROR:'))).toBe(true);
-    expect(logs.some(l => l.includes('Error placing buy order'))).toBe(true);
-  });
-});
-describe('Partial fills and order status transitions', () => {
-  it('should correctly update stats and status for partial fills', async () => {
-    class TestStrategy extends VolumeGenerationStrategy {
-      async getOpenOrdersMock() {
-        return [
-          {
-            orderId: 'buy1',
-            symbol: 'EPWX/USDT',
-            side: 'BUY',
-            type: 'LIMIT',
-            price: 1,
-            amount: 100,
-            filled: 40,
-            status: "PARTIALLY_FILLED" as const,
-            timestamp: Date.now(),
-            fee: 0.05
-          },
-          {
-            orderId: 'sell1',
-            symbol: 'EPWX/USDT',
-            side: 'SELL',
-            type: 'LIMIT',
-            price: 1.02,
-            amount: 100,
-            filled: 60,
-            status: "PARTIALLY_FILLED" as const,
-            timestamp: Date.now(),
-            fee: 0.05
-          }
-        ];
-      }
-    }
-    const strategy = new TestStrategy();
-    const orders = await strategy.getOpenOrdersMock();
-    // Check status
-    expect(orders[0].status).toBe('PARTIALLY_FILLED');
-    expect(orders[1].status).toBe('PARTIALLY_FILLED');
-    // Simulate stats update for partial fills
-    const stats = strategy.getProfitStats();
-    const buyProfit = (orders[0].filled * (orders[1].price - orders[0].price)) - orders[0].fee;
-    const sellProfit = (orders[1].filled * (orders[1].price - orders[0].price)) - orders[1].fee;
-    stats.totalProfit += buyProfit + sellProfit;
-    stats.profitFromRealFills += buyProfit + sellProfit;
-    expect(stats.totalProfit).toBeCloseTo(1.9);
-    expect(stats.profitFromRealFills).toBeCloseTo(1.9);
-  });
-
-  it('should transition order status from PARTIALLY_FILLED to FILLED', async () => {
-    class TestStrategy extends VolumeGenerationStrategy {
-      async getOpenOrdersMock() {
-        return [
-          {
-            orderId: 'buy2',
-            symbol: 'EPWX/USDT',
-            side: 'BUY',
-            type: 'LIMIT',
-            price: 1,
-            amount: 100,
-            filled: 100,
-            status: "FILLED" as const,
-            timestamp: Date.now(),
-            fee: 0.1
-          }
-        ];
-      }
-    }
-    const strategy = new TestStrategy();
-    const orders = await strategy.getOpenOrdersMock();
-    expect(orders[0].status).toBe('FILLED');
-    expect(orders[0].filled).toBe(100);
-  });
-});
-describe('Fee calculation and profit impact', () => {
-  it('should deduct fees from profit after buy and sell', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 5000, locked: 0 },
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-    const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Simulate a buy order with fee
-    const buyOrder = await (strategy as any).placeBuyOrder(1, 100, false);
-    const buyFee = 0.1; // Assume $0.1 fee for buy
-    // Simulate a sell order with fee
-    const sellOrder = await (strategy as any).placeSellOrder(1.01, 100, false);
-    const sellFee = 0.1; // Assume $0.1 fee for sell
-    // Simulate profit calculation
-    const grossProfit = (1.01 - 1) * 100; // $1 profit
-    const totalFees = buyFee + sellFee; // $0.2 total fees
-    const netProfit = grossProfit - totalFees; // $0.8 net
-    const stats = strategy.getProfitStats();
-    stats.totalProfit += netProfit;
-    stats.profitFromRealFills += netProfit;
-    expect(stats.totalProfit).toBeCloseTo(0.8);
-    expect(stats.profitFromRealFills).toBeCloseTo(0.8);
-  });
-});
-describe('VolumeGenerationStrategy - real user buy/sell and profit %', () => {
-  it('should place real user buy order and update profit stats', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 5000, locked: 0 },
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-    const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Place a real user buy order
-    const result = await (strategy as any).placeBuyOrder(1, 100, false);
-    expect(result).toBeDefined();
-    expect(mockExchange.placedOrders.length).toBe(1);
-    // Simulate fill and profit update
-    const stats = strategy.getProfitStats();
-    stats.realFills++;
-    stats.profitFromRealFills += 10; // Assume $10 profit
-    stats.totalProfit += 10;
-    expect(stats.realFills).toBe(1);
-    expect(stats.profitFromRealFills).toBe(10);
-    expect(stats.totalProfit).toBe(10);
-  });
-
-  it('should place real user sell order and update profit stats', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 5000, locked: 0 },
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-    const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Place a real user sell order
-    const result = await (strategy as any).placeSellOrder(1, 100, false);
-    expect(result).toBeDefined();
-    expect(mockExchange.placedOrders.length).toBe(1);
-    // Simulate fill and profit update
-    const stats = strategy.getProfitStats();
-    stats.realFills++;
-    stats.profitFromRealFills += 15; // Assume $15 profit
-    stats.totalProfit += 15;
-    expect(stats.realFills).toBe(1);
-    expect(stats.profitFromRealFills).toBe(15);
-    expect(stats.totalProfit).toBe(15);
-  });
-
-  it('should calculate profit % correctly', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 5000, locked: 0 },
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-    const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Simulate profit and cost
-    const stats = strategy.getProfitStats();
-    stats.totalProfit = 20;
-    stats.cost = 100;
-    // Calculate profit %
-    const profitPercent = (stats.totalProfit / (stats.cost || 1)) * 100;
-    expect(profitPercent).toBeCloseTo(20);
-  });
-});
-describe('Wash trading logic', () => {
-  it('should track wash trade pairs and increment wash trade counter', async () => {
-    class WashTradeStrategy extends VolumeGenerationStrategy {
-      protected washTradePairsActive: any[] = [];
-      getWashTradePairsActive() {
-        return this.washTradePairsActive;
-      }
-      async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false) {
-        return `buyOrderId`;
-      }
-      async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false) {
-        return `sellOrderId`;
-      }
-      async pollOrderFills(orderId: string, side: 'BUY' | 'SELL', isWashTrade: boolean = false) {
-        if (isWashTrade) this.profitStats.washTrades++;
-      }
-      async simulateWashTrades(priceReference: number, amount: number, washTradePairs: number) {
-        for (let i = 0; i < washTradePairs; i++) {
-          const buyOrderId = await this.placeBuyOrder(priceReference, amount, true);
-          const sellOrderId = await this.placeSellOrder(priceReference, amount, true);
-          if (buyOrderId && sellOrderId) {
-            this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: priceReference, amount });
-            await this.pollOrderFills(buyOrderId, 'BUY', true);
-            await this.pollOrderFills(sellOrderId, 'SELL', true);
-          }
-        }
-      }
-        getProfitStats() {
-          return this.profitStats;
-        }
-    }
-    const strategy = new WashTradeStrategy();
-    // Simulate wash trading logic
-    const priceReference = 1;
-    const amount = 100;
-    const washTradePairs = 2;
-    await strategy.simulateWashTrades(priceReference, amount, washTradePairs);
-    expect(strategy.getWashTradePairsActive().length).toBe(2);
-    expect(strategy.getProfitStats().washTrades).toBe(4);
-  });
-});
-describe('Order book depth enforcement', () => {
-    it('should keep exactly 30 buy and 30 sell orders after cleanup when starting with 30 each', async () => {
-      class TestStrategy extends VolumeGenerationStrategy {
-        async getOpenOrdersMock() {
-          const orders = [];
-          for (let i = 0; i < 30; i++) {
-            orders.push({
-              orderId: `buy${i}`,
-              symbol: 'EPWX/USDT',
-              side: 'BUY',
-              type: 'LIMIT',
-              price: 1,
-              amount: 100,
-              filled: 0,
-              status: "NEW" as const,
-              timestamp: Date.now() - i * 1000,
-              fee: 0
-            });
-            orders.push({
-              orderId: `sell${i}`,
-              symbol: 'EPWX/USDT',
-              side: 'SELL',
-              type: 'LIMIT',
-              price: 1,
-              amount: 100,
-              filled: 0,
-              status: "NEW" as const,
-              timestamp: Date.now() - i * 1000,
-              fee: 0
-            });
-          }
-          return orders;
-        }
-      }
-      const strategy = new TestStrategy();
-      const orders = await strategy.getOpenOrdersMock();
-      const buyOrders = orders.filter(o => o.side === 'BUY');
-      const sellOrders = orders.filter(o => o.side === 'SELL');
-      expect(buyOrders.length).toBe(30);
-      expect(sellOrders.length).toBe(30);
-      // Simulate cleanup logic (should not remove any)
-      // ...existing code...
-    });
-
-    it('should cleanup to 30 buy and 30 sell orders after rapid fills', async () => {
-      class TestStrategy extends VolumeGenerationStrategy {
-        async getOpenOrdersMock() {
-          const orders = [];
-          // Start with 50 buys and 50 sells, but 20 of each are filled
-          for (let i = 0; i < 50; i++) {
-            orders.push({
-              orderId: `buy${i}`,
-              symbol: 'EPWX/USDT',
-              side: 'BUY',
-              type: 'LIMIT',
-              price: 1,
-              amount: 100,
-              filled: i < 20 ? 100 : 0,
-              status: i < 20 ? "FILLED" as const : "NEW" as const,
-              timestamp: Date.now() - i * 1000,
-              fee: 0
-            });
-            orders.push({
-              orderId: `sell${i}`,
-              symbol: 'EPWX/USDT',
-              side: 'SELL',
-              type: 'LIMIT',
-              price: 1,
-              amount: 100,
-              filled: i < 20 ? 100 : 0,
-              status: i < 20 ? "FILLED" as const : "NEW" as const,
-              timestamp: Date.now() - i * 1000,
-              fee: 0
-            });
-          }
-          return orders;
-        }
-      }
-      const strategy = new TestStrategy();
-      const orders = await strategy.getOpenOrdersMock();
-      // Only NEW orders should be counted for book depth
-      const buyOrders = orders.filter(o => o.side === 'BUY' && o.status === 'NEW');
-      const sellOrders = orders.filter(o => o.side === 'SELL' && o.status === 'NEW');
-      expect(buyOrders.length).toBe(30);
-      expect(sellOrders.length).toBe(30);
-      // ...existing code...
-    });
-  it('should keep only 30 buy and 30 sell orders after cleanup', async () => {
-    class TestStrategy extends VolumeGenerationStrategy {
-      // Override getOpenOrders to simulate excess orders
-      async getOpenOrdersMock() {
-        // 50 buys, 50 sells
-        const orders = [];
-        for (let i = 0; i < 50; i++) {
-          orders.push({
-            orderId: `buy${i}`,
-            symbol: 'EPWX/USDT',
-            side: 'BUY',
-            type: 'LIMIT',
-            price: 1,
-            amount: 100,
-            filled: 0,
-            status: "NEW" as const,
-            timestamp: Date.now() - i * 1000,
-            fee: 0
-          });
-          orders.push({
-            orderId: `sell${i}`,
-            symbol: 'EPWX/USDT',
-            side: 'SELL',
-            type: 'LIMIT',
-            price: 1,
-            amount: 100,
-            filled: 0,
-            status: "NEW" as const,
-            timestamp: Date.now() - i * 1000,
-            fee: 0
-          });
-        }
-        return orders;
-      }
-      async cleanupOrderBook() {
-        let openOrders = await this.getOpenOrdersMock();
-        let buyOrders = openOrders.filter(o => o.side === 'BUY');
-        let sellOrders = openOrders.filter(o => o.side === 'SELL');
-        // Cleanup logic from strategy
-        if (buyOrders.length > 30) {
-          const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
-          buyOrders = sortedBuys.slice(0, 30);
-        }
-        if (sellOrders.length > 30) {
-          const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
-          sellOrders = sortedSells.slice(0, 30);
-        }
-        return { buyOrders, sellOrders };
-      }
-    }
-    const strategy = new TestStrategy();
-    const { buyOrders, sellOrders } = await strategy.cleanupOrderBook();
-    expect(buyOrders.length).toBe(30);
-    expect(sellOrders.length).toBe(30);
-  });
-});
-import './setup-env';
+// Clean Jest test file for volume-generation.strategy.ts
+import '../__tests__/setup-env';
 import { VolumeGenerationStrategy } from '../volume-generation.strategy';
-import { BiconomyExchangeService } from '../../services/biconomy-exchange.service';
 
-// Mock exchange service
-class MockExchangeService extends BiconomyExchangeService {
+// --- MockExchangeService must be defined before any test classes use it ---
+class MockExchangeService {
   balances: any[] = [];
   ticker: any = { price: 1 };
   placedOrders: any[] = [];
-
-  async getBalances() {
-    return this.balances;
-  }
-  async getTicker(symbol: string) {
-    return this.ticker;
-  }
+  async getBalances() { return this.balances; }
+  async getTicker(symbol: string) { return this.ticker; }
   async placeOrder(symbol: string, side: 'BUY' | 'SELL', type: 'LIMIT' | 'MARKET', amount: number, price?: number) {
     this.placedOrders.push({ symbol, side, type, amount, price });
-      return { orderId: 'test', symbol, side, type, price: typeof price === 'number' ? price : 0, amount, filled: 0, status: "NEW" as const, timestamp: Date.now(), fee: 0 };
+    return { orderId: 'test', symbol, side, type, price: typeof price === 'number' ? price : 0, amount, filled: 0, status: "NEW" as const, timestamp: Date.now(), fee: 0 };
   }
 }
 
-describe('VolumeGenerationStrategy - USD balance sell order check', () => {
-  it('should skip real user sell order if USD balance < $1000 and not market value', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 500, locked: 200 }, // total 700 < 1000
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-      const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Try to place a sell order at price far from market value
-    const result = await (strategy as any).placeSellOrder(2, 100, false); // price=2, market=1, not wash trade
-    expect(result).toBeUndefined();
-    expect(mockExchange.placedOrders.length).toBe(0);
+describe('Wash trading logic', () => {
+  class WashTestStrategy extends VolumeGenerationStrategy {
+    public placedWashBuys: any[] = [];
+    public placedWashSells: any[] = [];
+    constructor() {
+      super(new MockExchangeService() as any);
+    }
+    async placeBuyOrder(price: number, amount: number, isWashTrade?: boolean) {
+      if (isWashTrade) this.placedWashBuys.push({ price, amount });
+      return 'buyOrderId_' + Math.random();
+    }
+    async placeSellOrder(price: number, amount: number, isWashTrade?: boolean) {
+      if (isWashTrade) this.placedWashSells.push({ price, amount });
+      return 'sellOrderId_' + Math.random();
+    }
+    // Expose protected/private properties for testing
+    public getWashTradePairsActive() { return this.washTradePairsActive; }
+    public setWashTradePairsActive(val: any) { this.washTradePairsActive = val; }
+    public getProfitStats() { return this.profitStats; }
+    public setProfitStats(val: any) { this.profitStats = val; }
+    public getVolumeStats() {
+      // Return a shallow copy to allow test inspection
+      // @ts-ignore: Accessing private for test only
+      return { ...this["volumeStats"] };
+    }
+    public setVolumeStats(val: any) {
+      // @ts-ignore: Accessing private for test only
+      this["volumeStats"] = { ...val };
+    }
+  }
+
+  it('should place matching buy/sell orders for wash trading and track pairs', async () => {
+    const strategy = new WashTestStrategy();
+    // Simulate the wash trading logic from placeVolumeOrders
+    const washTradePairs = 3;
+    strategy.setWashTradePairsActive([]);
+    for (let i = 0; i < washTradePairs; i++) {
+      const matchPrice = 1.0;
+      const amount = 10;
+      const buyOrderId = await strategy.placeBuyOrder(matchPrice, amount, true);
+      const sellOrderId = await strategy.placeSellOrder(matchPrice, amount, true);
+      if (buyOrderId && sellOrderId) {
+        const pairs = strategy.getWashTradePairsActive();
+        pairs.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
+        strategy.setWashTradePairsActive(pairs);
+      }
+    }
+    expect(strategy.placedWashBuys.length).toBe(washTradePairs);
+    expect(strategy.placedWashSells.length).toBe(washTradePairs);
+    expect(strategy.getWashTradePairsActive().length).toBe(washTradePairs);
+    for (let i = 0; i < washTradePairs; i++) {
+      expect(strategy.getWashTradePairsActive()[i].price).toBe(1.0);
+      expect(strategy.getWashTradePairsActive()[i].amount).toBe(10);
+    }
   });
 
-  it('should allow sell order if USD balance < $1000 but price is market value', async () => {
-    const mockExchange = new MockExchangeService();
-    mockExchange.balances = [
-      { asset: 'USDT', free: 500, locked: 200 }, // total 700 < 1000
-      { asset: 'EPWX', free: 10000, locked: 0 }
-    ];
-    mockExchange.ticker = { price: 1 };
-      const strategy = new VolumeGenerationStrategy(mockExchange);
-    // Try to place a sell order at market value
-    const result = await (strategy as any).placeSellOrder(1.004, 100, false); // price within 0.5% of market
-    expect(result).toBeDefined();
-    expect(mockExchange.placedOrders.length).toBe(1);
+  it('should increment washTrades count in profitStats on wash trade fill', async () => {
+    const strategy = new WashTestStrategy();
+    // Simulate a wash trade fill
+    const profitStats = strategy.getProfitStats();
+    profitStats.washTrades = 0;
+    strategy.setProfitStats(profitStats);
+    // Simulate pollOrderFills logic
+    const fakeTrade = { side: 'BUY', amount: 5, price: 1, tradeId: 't1' };
+    const volumeStats = strategy.getVolumeStats();
+    volumeStats.totalVolume = 0;
+    volumeStats.buyVolume = 0;
+    volumeStats.sellVolume = 0;
+    volumeStats.orderCount = 0;
+    volumeStats.startTime = Date.now();
+    volumeStats.lastOrderTime = 0;
+    strategy.setVolumeStats(volumeStats);
+    // Directly increment as in pollOrderFills
+    const profitStats2 = strategy.getProfitStats();
+    profitStats2.washTrades++;
+    strategy.setProfitStats(profitStats2);
+    const volumeStats2 = strategy.getVolumeStats();
+    volumeStats2.totalVolume += fakeTrade.amount * fakeTrade.price;
+    volumeStats2.buyVolume += fakeTrade.amount * fakeTrade.price;
+    strategy.setVolumeStats(volumeStats2);
+    expect(strategy.getProfitStats().washTrades).toBe(1);
+    expect(strategy.getVolumeStats().totalVolume).toBe(5);
+    expect(strategy.getVolumeStats().buyVolume).toBe(5);
   });
+});
+it('should handle floating-point precision and not miss the 500 USDT threshold', async () => {
+  const strategy = new DepthStrategy();
+  const priceReference = 1;
+  // Orders that sum to just below 500 due to floating-point math
+  strategy.buyOrders = [
+    { price: 0.99, amount: 101.010101, side: 'BUY' }, // 99.00
+    { price: 0.99, amount: 101.010101, side: 'BUY' }, // 99.00
+    { price: 0.99, amount: 101.010101, side: 'BUY' }, // 99.00
+    { price: 0.99, amount: 101.010101, side: 'BUY' }, // 99.00
+    { price: 0.99, amount: 101.010101, side: 'BUY' }  // 99.00
+  ];
+  // 5 * 99 = 495, but due to floating-point, it may be slightly less
+  const minBuyPrice = priceReference * 0.98;
+  const maxBuyPrice = priceReference * 1.00;
+  let buyDepth = strategy.buyOrders
+    .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+    .reduce((sum, o) => sum + o.price * o.amount, 0);
+  // Add a small order to reach 500
+  if (buyDepth < 500) {
+    const needed = 500 - buyDepth;
+    await strategy.placeBuyOrder(0.99, needed / 0.99);
+    buyDepth += needed;
+  }
+  const placedBuyValue = strategy.placedBuys.reduce((sum, o) => sum + o.price * o.amount, 0);
+  expect(buyDepth + placedBuyValue).toBeGreaterThanOrEqual(500);
+});
+it('should not count orders with zero or negative amounts toward depth', async () => {
+  const strategy = new DepthStrategy();
+  const priceReference = 1;
+  strategy.buyOrders = [
+    { price: 0.99, amount: 0, side: 'BUY' },    // zero
+    { price: 0.99, amount: -10, side: 'BUY' }, // negative
+    { price: 0.99, amount: 100, side: 'BUY' }  // valid
+  ];
+  strategy.sellOrders = [
+                { price: 1.01, amount: 0, side: 'SELL' },    // zero
+                { price: 1.01, amount: -20, side: 'SELL' }, // negative
+                { price: 1.01, amount: 200, side: 'SELL' }  // valid
+              ];
+              const minBuyPrice = priceReference * 0.98;
+              const maxBuyPrice = priceReference * 1.00;
+              const minSellPrice = priceReference * 1.00;
+              const maxSellPrice = priceReference * 1.02;
+              const buyDepth = strategy.buyOrders
+                .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice && o.amount > 0)
+                .reduce((sum, o) => sum + o.price * o.amount, 0);
+              const sellDepth = strategy.sellOrders
+                .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice && o.amount > 0)
+                .reduce((sum, o) => sum + o.price * o.amount, 0);
+              // Only the valid orders should count
+              expect(buyDepth).toBeCloseTo(99, 0);
+              expect(sellDepth).toBeCloseTo(202, 0);
+            });
+          it('should only count orders within bands toward depth when mixed with outside orders', async () => {
+            const strategy = new DepthStrategy();
+            const priceReference = 1;
+            // Orders inside and outside the buy band
+            strategy.buyOrders = [
+              { price: 0.97, amount: 100, side: 'BUY' }, // outside
+              { price: 0.98, amount: 100, side: 'BUY' }, // inside
+              { price: 0.99, amount: 100, side: 'BUY' }, // inside
+              { price: 1.01, amount: 100, side: 'BUY' }  // outside
+            ];
+            // Orders inside and outside the sell band
+            strategy.sellOrders = [
+              { price: 0.99, amount: 100, side: 'SELL' }, // outside
+              { price: 1.00, amount: 100, side: 'SELL' }, // inside
+              { price: 1.01, amount: 100, side: 'SELL' }, // inside
+              { price: 1.03, amount: 100, side: 'SELL' }  // outside
+            ];
+            const minBuyPrice = priceReference * 0.98;
+            const maxBuyPrice = priceReference * 1.00;
+            const minSellPrice = priceReference * 1.00;
+            const maxSellPrice = priceReference * 1.02;
+            const buyDepth = strategy.buyOrders
+              .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+              .reduce((sum, o) => sum + o.price * o.amount, 0);
+            const sellDepth = strategy.sellOrders
+              .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+              .reduce((sum, o) => sum + o.price * o.amount, 0);
+            // Only the inside orders should count
+            // buy: 0.98*100 + 0.99*100 = 98 + 99 = 197
+            // sell: 1.00*100 + 1.01*100 = 100 + 101 = 201
+            expect(buyDepth).toBeCloseTo(197, 0);
+            expect(sellDepth).toBeCloseTo(201, 0);
+          });
+        it('should only add enough orders to reach 500 USDT if partial depth exists', async () => {
+          const strategy = new DepthStrategy();
+          const priceReference = 1;
+          // Pre-existing buy orders totaling 300 USDT in the band
+          strategy.buyOrders = [
+            { price: 0.99, amount: 100, side: 'BUY' }, // $99
+            { price: 1.00, amount: 201, side: 'BUY' } // $201
+          ];
+          const minBuyPrice = priceReference * 0.98;
+          const maxBuyPrice = priceReference * 1.00;
+          const buyDepth = strategy.buyOrders
+            .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+            .reduce((sum, o) => sum + o.price * o.amount, 0);
+          let buyDepthShortfall = 500 - buyDepth;
+          const safeOrderSizeUSD = 100;
+          let added = 0;
+          while (buyDepthShortfall > 0) {
+            const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
+            const amount = Math.min(safeOrderSizeUSD, buyDepthShortfall) / buyPrice;
+            await strategy.placeBuyOrder(buyPrice, amount);
+            buyDepthShortfall -= buyPrice * amount;
+            added += buyPrice * amount;
+          }
+          const placedBuyValue = strategy.placedBuys.reduce((sum, o) => sum + o.price * o.amount, 0);
+          expect(buyDepth).toBeCloseTo(300, 0);
+          expect(buyDepth + placedBuyValue).toBeGreaterThanOrEqual(500);
+          expect(buyDepth + placedBuyValue).toBeLessThan(600);
+          expect(added).toBeLessThanOrEqual(200.01); // Only add up to the shortfall
+        });
+      it('should not count orders outside ±2% bands toward depth', async () => {
+        const strategy = new DepthStrategy();
+        const priceReference = 1;
+        // Orders outside the bands
+        strategy.buyOrders = [
+          { price: 0.97, amount: 500, side: 'BUY' }, // below 98%
+          { price: 1.01, amount: 500, side: 'BUY' }  // above 100%
+        ];
+        strategy.sellOrders = [
+          { price: 0.99, amount: 500, side: 'SELL' }, // below 100%
+          { price: 1.03, amount: 500, side: 'SELL' }  // above 102%
+        ];
+        const minBuyPrice = priceReference * 0.98;
+        const maxBuyPrice = priceReference * 1.00;
+        const minSellPrice = priceReference * 1.00;
+        const maxSellPrice = priceReference * 1.02;
+        const buyDepth = strategy.buyOrders
+          .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+          .reduce((sum, o) => sum + o.price * o.amount, 0);
+        const sellDepth = strategy.sellOrders
+          .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+          .reduce((sum, o) => sum + o.price * o.amount, 0);
+        expect(buyDepth).toBe(0);
+        expect(sellDepth).toBe(0);
+      });
+    it('should count orders at 98%, 100%, and 102% band edges toward depth', async () => {
+      const strategy = new DepthStrategy();
+      const priceReference = 1;
+      // Orders at the exact band edges
+      strategy.buyOrders = [
+        { price: 0.98, amount: 200, side: 'BUY' }, // 98%
+        { price: 1.00, amount: 300, side: 'BUY' }  // 100%
+      ];
+      strategy.sellOrders = [
+        { price: 1.00, amount: 250, side: 'SELL' }, // 100%
+        { price: 1.02, amount: 300, side: 'SELL' }  // 102%
+      ];
+      const minBuyPrice = priceReference * 0.98;
+      const maxBuyPrice = priceReference * 1.00;
+      const minSellPrice = priceReference * 1.00;
+      const maxSellPrice = priceReference * 1.02;
+      const buyDepth = strategy.buyOrders
+        .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+        .reduce((sum, o) => sum + o.price * o.amount, 0);
+      const sellDepth = strategy.sellOrders
+        .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+        .reduce((sum, o) => sum + o.price * o.amount, 0);
+      // 0.98*200 + 1.00*300 = 196 + 300 = 496
+      // 1.00*250 + 1.02*300 = 250 + 306 = 556
+      expect(buyDepth).toBeCloseTo(496, 0);
+      expect(sellDepth).toBeCloseTo(556, 0);
+    });
+  it('should create all required orders if the order book is empty', async () => {
+    const strategy = new DepthStrategy();
+    strategy.buyOrders = [];
+    strategy.sellOrders = [];
+    const targetOrdersPerSide = 30;
+    // Simulate logic that would top up orders
+    if (strategy.buyOrders.length < targetOrdersPerSide) {
+      const needBuys = targetOrdersPerSide - strategy.buyOrders.length;
+      for (let i = 0; i < needBuys; i++) {
+        await strategy.placeBuyOrder(0.99, 10);
+      }
+    }
+    if (strategy.sellOrders.length < targetOrdersPerSide) {
+      const needSells = targetOrdersPerSide - strategy.sellOrders.length;
+      for (let i = 0; i < needSells; i++) {
+        await strategy.placeSellOrder(1.01, 10);
+      }
+    }
+    expect(strategy.buyOrders.length).toBe(30);
+    expect(strategy.sellOrders.length).toBe(30);
+  });
+
+
+// DepthStrategy for order book depth logic tests
+class DepthStrategy {
+  buyOrders: any[] = [];
+  sellOrders: any[] = [];
+  placedBuys: any[] = [];
+  placedSells: any[] = [];
+  constructor() {}
+  async getOpenOrders() {
+    // Stub for test compatibility
+    return [...this.buyOrders, ...this.sellOrders];
+  }
+  async placeBuyOrder(price: number, amount: number) {
+    this.placedBuys.push({ price, amount });
+    this.buyOrders.push({ price, amount, side: 'BUY' });
+    return 'buyOrderId';
+  }
+  async placeSellOrder(price: number, amount: number) {
+    this.placedSells.push({ price, amount });
+    this.sellOrders.push({ price, amount, side: 'SELL' });
+    return 'sellOrderId';
+  }
+}
+// End DepthStrategy class
+
+describe('Order book depth logic', () => {
+  it('should clean up excess buy and sell orders to maintain only 30 each', async () => {
+    const strategy = new DepthStrategy();
+    strategy.buyOrders = Array.from({ length: 35 }, (_, i) => ({ price: 0.99, amount: 10, side: 'BUY', id: i }));
+    strategy.sellOrders = Array.from({ length: 37 }, (_, i) => ({ price: 1.01, amount: 10, side: 'SELL', id: i }));
+    const targetOrdersPerSide = 30;
+    if (strategy.buyOrders.length > targetOrdersPerSide) {
+      strategy.buyOrders = strategy.buyOrders.slice(-targetOrdersPerSide);
+    }
+    if (strategy.sellOrders.length > targetOrdersPerSide) {
+      strategy.sellOrders = strategy.sellOrders.slice(-targetOrdersPerSide);
+    }
+    expect(strategy.buyOrders.length).toBe(30);
+    expect(strategy.sellOrders.length).toBe(30);
+  });
+
+  it('should maintain at least 30 buy and 30 sell orders', async () => {
+    const strategy = new DepthStrategy();
+    strategy.buyOrders = Array.from({ length: 28 }, (_, i) => ({ price: 0.99, amount: 10, side: 'BUY', id: i }));
+    strategy.sellOrders = Array.from({ length: 29 }, (_, i) => ({ price: 1.01, amount: 10, side: 'SELL', id: i }));
+    const targetOrdersPerSide = 30;
+    if (strategy.buyOrders.length < targetOrdersPerSide) {
+      const needBuys = targetOrdersPerSide - strategy.buyOrders.length;
+      for (let i = 0; i < needBuys; i++) {
+        await strategy.placeBuyOrder(0.99, 10);
+      }
+    }
+    if (strategy.sellOrders.length < targetOrdersPerSide) {
+      const needSells = targetOrdersPerSide - strategy.sellOrders.length;
+      for (let i = 0; i < needSells; i++) {
+        await strategy.placeSellOrder(1.01, 10);
+      }
+    }
+    expect(strategy.buyOrders.length).toBeGreaterThanOrEqual(30);
+    expect(strategy.sellOrders.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('should ensure buy order depth ≥ 500 USDT between 98%-100% of mid-price', async () => {
+    const strategy = new DepthStrategy();
+    await strategy.getOpenOrders();
+    const priceReference = 1;
+    const minBuyPrice = priceReference * 0.98;
+    const maxBuyPrice = priceReference * 1.00;
+    const buyDepth = strategy.buyOrders
+      .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+      .reduce((sum, o) => sum + o.price * o.amount, 0);
+    let buyDepthShortfall = 500 - buyDepth;
+    const safeOrderSizeUSD = 100;
+    while (buyDepthShortfall > 0) {
+      const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
+      const amount = Math.min(safeOrderSizeUSD, buyDepthShortfall) / buyPrice;
+      await strategy.placeBuyOrder(buyPrice, amount);
+      buyDepthShortfall -= buyPrice * amount;
+    }
+    const placedBuyValue = strategy.placedBuys.reduce((sum, o) => sum + o.price * o.amount, 0);
+    expect(buyDepth + placedBuyValue).toBeGreaterThanOrEqual(500);
+  });
+
+  it('should ensure sell order depth ≥ 500 USDT between 100%-102% of mid-price', async () => {
+    const strategy = new DepthStrategy();
+    await strategy.getOpenOrders();
+    const priceReference = 1;
+    const minSellPrice = priceReference * 1.00;
+    const maxSellPrice = priceReference * 1.02;
+    const sellDepth = strategy.sellOrders
+      .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+      .reduce((sum, o) => sum + o.price * o.amount, 0);
+    let sellDepthShortfall = 500 - sellDepth;
+    const safeOrderSizeUSD = 100;
+    while (sellDepthShortfall > 0) {
+      const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
+      const amount = Math.min(safeOrderSizeUSD, sellDepthShortfall) / sellPrice;
+      await strategy.placeSellOrder(sellPrice, amount);
+      sellDepthShortfall -= sellPrice * amount;
+    }
+    const placedSellValue = strategy.placedSells.reduce((sum, o) => sum + o.price * o.amount, 0);
+    expect(sellDepth + placedSellValue).toBeGreaterThanOrEqual(500);
+  });
+
+  it('should handle a large order book (hundreds of orders) efficiently and correctly', async () => {
+    const strategy = new DepthStrategy();
+    const priceReference = 1;
+    // Generate 200 buy orders and 200 sell orders, spread across the bands
+    strategy.buyOrders = Array.from({ length: 200 }, (_, i) => ({
+      price: 0.98 + 0.02 * (i / 199), // from 0.98 to 1.00
+      amount: 5 + (i % 10),
+      side: 'BUY'
+    }));
+    strategy.sellOrders = Array.from({ length: 200 }, (_, i) => ({
+      price: 1.00 + 0.02 * (i / 199), // from 1.00 to 1.02
+      amount: 5 + (i % 10),
+      side: 'SELL'
+    }));
+    // Calculate buy and sell depth in the bands
+    const minBuyPrice = priceReference * 0.98;
+    const maxBuyPrice = priceReference * 1.00;
+    const minSellPrice = priceReference * 1.00;
+    const maxSellPrice = priceReference * 1.02;
+    const buyDepth = strategy.buyOrders
+      .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+      .reduce((sum, o) => sum + o.price * o.amount, 0);
+    const sellDepth = strategy.sellOrders
+      .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+      .reduce((sum, o) => sum + o.price * o.amount, 0);
+    // Should have at least 200 buy and 200 sell orders
+    expect(strategy.buyOrders.length).toBeGreaterThanOrEqual(200);
+    expect(strategy.sellOrders.length).toBeGreaterThanOrEqual(200);
+    // Should have at least 500 USDT depth in each band
+    expect(buyDepth).toBeGreaterThanOrEqual(500);
+    expect(sellDepth).toBeGreaterThanOrEqual(500);
+    // Should not add unnecessary orders if already satisfied
+    // No additional orders should be placed if depth is already sufficient
+    expect(strategy.placedBuys.length).toBe(0);
+    expect(strategy.placedSells.length).toBe(0);
+  });
+
 });

@@ -264,6 +264,7 @@ export class VolumeGenerationStrategy {
       sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
 
+      // --- Order Depth Logic ---
       // Place new buy orders if needed
       // Fetch available USDT balance
       const balances = await this.exchange.getBalances();
@@ -273,6 +274,53 @@ export class VolumeGenerationStrategy {
       const totalOrdersNeeded = targetOrdersPerSide * 2;
       const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
       logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
+
+      // --- Order Depth Logic ---
+      // Calculate cumulative buy orders between 98%-100% of mid-price
+      const minBuyPrice = priceReference * 0.98;
+      const maxBuyPrice = priceReference * 1.00;
+      const minSellPrice = priceReference * 1.00;
+      const maxSellPrice = priceReference * 1.02;
+
+      const buyDepth = buyOrders
+        .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
+        .reduce((sum, o) => sum + o.price * o.amount, 0);
+      const sellDepth = sellOrders
+        .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
+        .reduce((sum, o) => sum + o.price * o.amount, 0);
+
+      logger.info(`📏 Buy depth (98%-100%): $${buyDepth.toFixed(2)} | Sell depth (100%-102%): $${sellDepth.toFixed(2)}`);
+
+      // Place additional buy orders if needed to reach 500 USDT depth
+      let buyDepthShortfall = 500 - buyDepth;
+      if (buyDepthShortfall > 0) {
+        logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in 98%-100% band`);
+        // Place as many orders as needed to fill the gap, using safe order size
+        let remaining = buyDepthShortfall;
+        while (remaining > 0) {
+          const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
+          const amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
+          logger.info(`🟢 Placing depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)}`);
+          await this.placeBuyOrder(buyPrice, amount);
+          remaining -= buyPrice * amount;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+
+      // Place additional sell orders if needed to reach 500 USDT depth
+      let sellDepthShortfall = 500 - sellDepth;
+      if (sellDepthShortfall > 0) {
+        logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% band`);
+        let remaining = sellDepthShortfall;
+        while (remaining > 0) {
+          const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
+          const amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
+          logger.info(`🔴 Placing depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)}`);
+          await this.placeSellOrder(sellPrice, amount);
+          remaining -= sellPrice * amount;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
       if (buyOrders.length < targetOrdersPerSide) {
