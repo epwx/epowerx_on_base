@@ -1,4 +1,5 @@
 // Clean Jest test file for volume-generation.strategy.ts
+console.log('Loaded volume-generation.strategy.test.ts');
 import '../__tests__/setup-env';
 import { VolumeGenerationStrategy } from '../volume-generation.strategy';
 
@@ -98,6 +99,74 @@ describe('Wash trading logic', () => {
     expect(strategy.getProfitStats().washTrades).toBe(1);
     expect(strategy.getVolumeStats().totalVolume).toBe(5);
     expect(strategy.getVolumeStats().buyVolume).toBe(5);
+  });
+});
+describe('MM account balance < $1000 order execution', () => {
+  class TestMMStrategy extends VolumeGenerationStrategy {
+    constructor(mockExchange: any) {
+      super(mockExchange);
+    }
+    // Expose protected method for testing
+    public async testPlaceSellOrder(price: number, amount: number, isWashTrade: boolean = false) {
+      return this.placeSellOrder(price, amount, isWashTrade);
+    }
+  }
+
+  it('should NOT execute real user SELL order if MM balance < $1000 and not market order', async () => {
+    // Mock exchange with low USDT balance
+    const mockExchange = {
+      getBalances: async () => [
+        { asset: 'EPWX', free: 1000 },
+        { asset: 'USDT', free: 500, locked: 0 }
+      ],
+      getTicker: async () => ({ price: 10 }),
+      placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
+    };
+    const strategy = new TestMMStrategy(mockExchange);
+    // Price is far from market (not a market order)
+    const result = await strategy.testPlaceSellOrder(12, 1, false);
+    expect(result).toBeUndefined();
+    expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+  });
+
+  it('should execute real user SELL market order even if MM balance < $1000', async () => {
+    // Mock exchange with low USDT balance
+    const mockExchange = {
+      getBalances: async () => [
+        { asset: 'EPWX', free: 1000 },
+        { asset: 'USDT', free: 500, locked: 0 }
+      ],
+      getTicker: async () => ({ price: 10 }),
+      placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
+    };
+    const strategy = new TestMMStrategy(mockExchange);
+    // Price is within 0.5% of market (market order)
+    const result = await strategy.testPlaceSellOrder(10.04, 1, false);
+    expect(result).toBe('test');
+    expect(mockExchange.placeOrder).toHaveBeenCalled();
+  });
+
+  it('should execute real user BUY order even if MM balance < $1000', async () => {
+    // Mock exchange with low USDT balance
+    const mockExchange = {
+      getBalances: async () => [
+        { asset: 'EPWX', free: 1000 },
+        { asset: 'USDT', free: 500, locked: 0 }
+      ],
+      getTicker: async () => ({ price: 10 }),
+      placeOrder: jest.fn().mockResolvedValue({ orderId: 'buytest', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
+    };
+    // Extend strategy to expose placeBuyOrder
+    class TestMMStrategyWithBuy extends VolumeGenerationStrategy {
+      constructor(mockExchange: any) { super(mockExchange); }
+      public async testPlaceBuyOrder(price: number, amount: number, isWashTrade: boolean = false) {
+        return this.placeBuyOrder(price, amount, isWashTrade);
+      }
+    }
+    const strategy = new TestMMStrategyWithBuy(mockExchange);
+    const result = await strategy.testPlaceBuyOrder(10, 1, false);
+    expect(result).toBe('buytest');
+    expect(mockExchange.placeOrder).toHaveBeenCalled();
   });
 });
 it('should handle floating-point precision and not miss the 500 USDT threshold', async () => {
