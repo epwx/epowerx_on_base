@@ -131,14 +131,15 @@ describe('MM account balance < $1000 order execution', () => {
 
   it('should execute real user SELL market order even if MM balance < $1000', async () => {
     // Mock exchange with low USDT balance
-    const mockExchange = {
-      getBalances: async () => [
-        { asset: 'EPWX', free: 1000 },
-        { asset: 'USDT', free: 500, locked: 0 }
-      ],
-      getTicker: async () => ({ price: 10 }),
-      placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
-    };
+      const mockExchange = {
+        getBalances: async () => [
+          { asset: 'EPWX', free: 1000 },
+          { asset: 'USDT', free: 500, locked: 0 }
+        ],
+        getTicker: async () => ({ price: 10 }),
+        placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+        getRecentTrades: jest.fn().mockResolvedValue([])
+      };
     const strategy = new TestMMStrategy(mockExchange);
     // Price is within 0.5% of market (market order)
     const result = await strategy.testPlaceSellOrder(10.04, 1, false);
@@ -148,14 +149,15 @@ describe('MM account balance < $1000 order execution', () => {
 
   it('should execute real user BUY order even if MM balance < $1000', async () => {
     // Mock exchange with low USDT balance
-    const mockExchange = {
-      getBalances: async () => [
-        { asset: 'EPWX', free: 1000 },
-        { asset: 'USDT', free: 500, locked: 0 }
-      ],
-      getTicker: async () => ({ price: 10 }),
-      placeOrder: jest.fn().mockResolvedValue({ orderId: 'buytest', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
-    };
+      const mockExchange = {
+        getBalances: async () => [
+          { asset: 'EPWX', free: 1000 },
+          { asset: 'USDT', free: 500, locked: 0 }
+        ],
+        getTicker: async () => ({ price: 10 }),
+        placeOrder: jest.fn().mockResolvedValue({ orderId: 'buytest', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+        getRecentTrades: jest.fn().mockResolvedValue([])
+      };
     // Extend strategy to expose placeBuyOrder
     class TestMMStrategyWithBuy extends VolumeGenerationStrategy {
       constructor(mockExchange: any) { super(mockExchange); }
