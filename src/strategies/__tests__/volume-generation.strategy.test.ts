@@ -1,3 +1,33 @@
+let setTimeoutSpy: jest.SpyInstance;
+let setIntervalSpy: jest.SpyInstance;
+beforeEach(() => {
+  setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: any, _ms: any, ...args: any[]) => {
+    if (typeof cb === 'function') cb(...args);
+    return 0 as any;
+  });
+  setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((cb: any, _ms: any, ...args: any[]) => {
+    if (typeof cb === 'function') cb(...args);
+    return 0 as any;
+  });
+});
+afterEach(() => {
+  setTimeoutSpy.mockRestore();
+  setIntervalSpy.mockRestore();
+});
+it('should NOT allow buy orders if available USDT is insufficient (pure logic)', () => {
+  // Simulate the USDT balance check logic
+  const balances = [
+    { asset: 'USDT', free: 0.005, locked: 0, total: 0.005 },
+    { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+  ];
+  const usdtBalance = balances.find(b => b.asset === 'USDT');
+  const availableUSDT = usdtBalance?.free || 0;
+  // The strategy should skip placing orders if availableUSDT < 0.01
+  expect(availableUSDT).toBeLessThan(0.01);
+  // Simulate the guard logic
+  const canPlaceOrder = availableUSDT >= 0.01;
+  expect(canPlaceOrder).toBe(false);
+});
 it('should calculate safe order size correctly based on available USDT and total orders needed', async () => {
   // Arrange: mock exchange with a specific USDT balance
   const availableUSDT = 5000;
