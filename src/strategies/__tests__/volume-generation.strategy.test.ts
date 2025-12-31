@@ -1,3 +1,65 @@
+it('should cancel excess buy and sell orders when above the target', async () => {
+  // Arrange: mock exchange with 35 buy and 37 sell open orders
+  const targetOrdersPerSide = 30;
+  const buyOrders = Array.from({ length: 35 }, (_: any, i: number) => ({
+    orderId: 'buy' + i,
+    symbol: 'EPWXUSDT',
+    side: 'BUY',
+    type: 'LIMIT',
+    amount: 10,
+    price: 0.99,
+    timestamp: 1000 + i
+  }));
+  const sellOrders = Array.from({ length: 37 }, (_: any, i: number) => ({
+    orderId: 'sell' + i,
+    symbol: 'EPWXUSDT',
+    side: 'SELL',
+    type: 'LIMIT',
+    amount: 10,
+    price: 1.01,
+    timestamp: 2000 + i
+  }));
+  const openOrders = [...buyOrders, ...sellOrders];
+  const cancelledOrders: string[] = [];
+  const mockExchange = {
+    getBalances: jest.fn().mockResolvedValue([
+      { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+      { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+    ]),
+    getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+    getOpenOrders: jest.fn().mockImplementation(() => Promise.resolve(openOrders.filter((o: any) => !cancelledOrders.includes(o.orderId)))),
+    cancelOrder: jest.fn().mockImplementation((_symbol: any, orderId: string) => {
+      cancelledOrders.push(orderId);
+      return Promise.resolve();
+    }),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn().mockResolvedValue([])
+  };
+  jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.0);
+  const config = require('../../config').config;
+  config.volumeStrategy.orderFrequency = 1000000;
+  config.trading.pair = 'EPWXUSDT';
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  (strategy as any).startOrderPlacementLoop = jest.fn();
+  (strategy as any).startMonitoringLoop = jest.fn();
+  // Act: run placeVolumeOrders (should trigger cancellation of excess orders)
+  await (strategy as any).placeVolumeOrders();
+  // Assert: only 30 buy and 30 sell orders remain
+  const remainingOrders = await mockExchange.getOpenOrders();
+  const remainingBuys = remainingOrders.filter((o: any) => o.side === 'BUY');
+  const remainingSells = remainingOrders.filter((o: any) => o.side === 'SELL');
+  expect(remainingBuys.length).toBe(targetOrdersPerSide);
+  expect(remainingSells.length).toBe(targetOrdersPerSide);
+  // Assert: correct number of cancels were called
+  expect(mockExchange.cancelOrder).toHaveBeenCalledTimes(12); // 5 buys + 7 sells
+  // Assert: the oldest orders were cancelled (should keep the newest 30)
+  const buyIds = remainingBuys.map((o: any) => o.orderId);
+  const sellIds = remainingSells.map((o: any) => o.orderId);
+  expect(buyIds).toEqual(buyOrders.slice(-30).map((o: any) => o.orderId));
+  expect(sellIds).toEqual(sellOrders.slice(-30).map((o: any) => o.orderId));
+});
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
