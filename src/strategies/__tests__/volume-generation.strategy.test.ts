@@ -1,3 +1,91 @@
+jest.setTimeout(20000);
+
+describe('Order Placement Logic', () => {
+  let strategy: import('../volume-generation.strategy').VolumeGenerationStrategy | undefined;
+  let setTimeoutSpy: jest.SpyInstance;
+  let setIntervalSpy: jest.SpyInstance;
+  let promiseTimeoutSpy: jest.SpyInstance;
+  beforeEach(() => {
+    // Mock setTimeout and setInterval to immediately invoke the callback
+    setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: any, _ms: any, ...args: any[]) => {
+      if (typeof cb === 'function') cb(...args);
+      // Return a dummy timer id
+      return 0 as any;
+    });
+    setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((cb: any, _ms: any, ...args: any[]) => {
+      if (typeof cb === 'function') cb(...args);
+      // Return a dummy timer id
+      return 0 as any;
+    });
+    // Mock new Promise(resolve => setTimeout(resolve, ...)) to resolve instantly
+    promiseTimeoutSpy = jest.spyOn(global, 'Promise').mockImplementation((executor: any) => {
+      // If the executor is of the form (resolve) => setTimeout(resolve, ...), call resolve immediately
+      let called = false;
+      const resolve = (...args: any[]) => { called = true; };
+      executor(resolve);
+      if (!called) {
+        // fallback to real Promise if not a timeout
+        return new (Promise as any)(executor);
+      }
+      return { then: (cb: any) => { cb(); return { catch: () => {} }; } };
+    });
+  });
+  afterEach(() => {
+    setTimeoutSpy.mockRestore();
+    setIntervalSpy.mockRestore();
+    promiseTimeoutSpy.mockRestore();
+    if (strategy && (strategy as any).orderTimer) {
+      clearInterval((strategy as any).orderTimer);
+      (strategy as any).orderTimer = undefined;
+    }
+    if (strategy && (strategy as any).updateTimer) {
+      clearInterval((strategy as any).updateTimer);
+      (strategy as any).updateTimer = undefined;
+    }
+  });
+  it('should place buy orders at 98%-100% and sell orders at 100%-102% of reference price', async () => {
+    const placedOrders: any[] = [];
+    const mockExchange = {
+      getBalances: async () => [{ asset: 'USDT', free: 10000 }],
+      getTicker: async () => ({ bid: 0.99, ask: 1.01 }),
+      getOpenOrders: async () => [],
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn().mockImplementation((symbol, side, type, amount, price) => {
+        placedOrders.push({ symbol, side, type, amount, price });
+        return { orderId: Math.random().toString(), symbol, side, type, price, amount, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 };
+      }),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+
+    // Patch DEX price fetch
+    jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.0);
+
+    // Patch config for test
+    const config = require('../../config').config;
+    config.volumeStrategy.orderFrequency = 1000000;
+    config.trading.pair = 'EPWXUSDT';
+
+    const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+    strategy = new VolumeGenerationStrategy(mockExchange);
+
+    // Prevent background timers/loops from running
+    (strategy as any).startOrderPlacementLoop = jest.fn();
+    (strategy as any).startMonitoringLoop = jest.fn();
+
+    await (strategy as any).placeVolumeOrders();
+
+    const buys = placedOrders.filter(o => o.side === 'BUY');
+    const sells = placedOrders.filter(o => o.side === 'SELL');
+    buys.forEach(buy => {
+      expect(buy.price).toBeGreaterThanOrEqual(0.98);
+      expect(buy.price).toBeLessThanOrEqual(1.0);
+    });
+    sells.forEach(sell => {
+      expect(sell.price).toBeGreaterThanOrEqual(1.0);
+      expect(sell.price).toBeLessThanOrEqual(1.02);
+    });
+  });
+});
 // Clean Jest test file for volume-generation.strategy.ts
 console.log('Loaded volume-generation.strategy.test.ts');
 import '../__tests__/setup-env';
