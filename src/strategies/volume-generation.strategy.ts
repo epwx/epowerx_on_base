@@ -196,8 +196,8 @@ export class VolumeGenerationStrategy {
         );
         logger.info(`🥞 DEX (PancakeSwap) price fetched: 1 EPWX ≈ ${dexPriceUSD} USD`);
         // Apply markup for CEX mirroring
-        // Use 5% less than DEX price for reference
-        const discountPercent = 5;
+        // Use 6% less than DEX price for reference
+        const discountPercent = 6;
         const discountMultiplier = 1 - discountPercent / 100;
         const discountedPrice = dexPriceUSD * discountMultiplier;
         logger.info(`🔸 DEX price after ${discountPercent}% discount: 1 EPWX ≈ ${discountedPrice} USD`);
