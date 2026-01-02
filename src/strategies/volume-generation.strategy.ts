@@ -272,7 +272,7 @@ export class VolumeGenerationStrategy {
       const availableUSDT = usdtBalance?.free || 0;
       // Calculate safe order size: divide available balance by number of orders
       const totalOrdersNeeded = targetOrdersPerSide * 2;
-      const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
+      const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 20); // Max $20/order to be safe
       logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
 
       // --- Order Depth Logic ---
