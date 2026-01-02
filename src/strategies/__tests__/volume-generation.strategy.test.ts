@@ -140,6 +140,37 @@ it('should cancel excess buy and sell orders when above the target', async () =>
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
+      it('should SKIP real user SELL order if MM balance < $1000 and not market value order', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+          placeOrder: jest.fn(),
+        };
+        const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+        const strategy = new VolumeGenerationStrategy(mockExchange);
+        // Price is NOT market value (more than 0.5% away)
+        await strategy.placeSellOrder(1.02, 10, false);
+        expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+      });
+
+      it('should EXECUTE real user SELL order if MM balance < $1000 but IS market value order', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'testSell', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.0, amount: 10, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+        };
+        const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+        const strategy = new VolumeGenerationStrategy(mockExchange);
+        // Price IS market value (within 0.5%)
+        await strategy.placeSellOrder(1.004, 10, false);
+        expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'SELL', 'LIMIT', 10, 1.004);
+      });
     it('should place at least 30 buy and 30 sell orders in the target price bands', async () => {
       // Always return a fresh, sufficient balance for every call
       const mockExchange = {
