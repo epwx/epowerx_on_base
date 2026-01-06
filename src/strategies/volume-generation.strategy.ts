@@ -291,31 +291,32 @@ export class VolumeGenerationStrategy {
 
       logger.info(`📏 Buy depth (98%-100%): $${buyDepth.toFixed(2)} | Sell depth (100%-102%): $${sellDepth.toFixed(2)}`);
 
-      // Place additional buy orders if needed to reach 500 USDT depth
-      let buyDepthShortfall = 500 - buyDepth;
+
+      // Place additional buy orders if needed to reach 200 USDT depth (business requirement)
+      let buyDepthShortfall = 200 - buyDepth;
       if (buyDepthShortfall > 0) {
-        logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in 98%-100% band`);
+        logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in 98%-100% of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
         while (remaining > 0) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           const amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
-          logger.info(`🟢 Placing depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)}`);
+          logger.info(`🟢 Placing depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
           await this.placeBuyOrder(buyPrice, amount);
           remaining -= buyPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
 
-      // Place additional sell orders if needed to reach 500 USDT depth
-      let sellDepthShortfall = 500 - sellDepth;
+      // Place additional sell orders if needed to reach 200 USDT depth (business requirement)
+      let sellDepthShortfall = 200 - sellDepth;
       if (sellDepthShortfall > 0) {
-        logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% band`);
+        logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% of Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         while (remaining > 0) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
-          logger.info(`🔴 Placing depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)}`);
+          logger.info(`🔴 Placing depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
           await this.placeSellOrder(sellPrice, amount);
           remaining -= sellPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
