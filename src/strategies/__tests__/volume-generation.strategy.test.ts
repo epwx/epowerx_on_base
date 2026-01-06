@@ -351,12 +351,12 @@ describe('MM account balance < $1000 order execution', () => {
     }
   }
 
-  it('should NOT execute real user SELL order if MM balance < $500 and not market order', async () => {
+  it('should NOT execute real user SELL order if MM balance < $1000 and not market order', async () => {
     // Mock exchange with low USDT balance
     const mockExchange = {
       getBalances: async () => [
         { asset: 'EPWX', free: 1000 },
-        { asset: 'USDT', free: 400, locked: 0 }
+        { asset: 'USDT', free: 500, locked: 0 }
       ],
       getTicker: async () => ({ price: 10 }),
       placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
