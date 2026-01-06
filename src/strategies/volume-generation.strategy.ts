@@ -355,22 +355,24 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume), but only if under cap
-      const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
-      this.washTradePairsActive = [];
-      for (let i = 0; i < washTradePairs && buyOrders.length < targetOrdersPerSide && sellOrders.length < targetOrdersPerSide; i++) {
-        const matchPrice = priceReference;
-        const amount = safeOrderSizeUSD / matchPrice;
-        logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
-        const buyOrderId = await this.placeBuyOrder(matchPrice, amount, true);
-        const sellOrderId = await this.placeSellOrder(matchPrice, amount, true);
-        if (buyOrderId && sellOrderId) {
-          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
-          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toExponential(4)} (${amount.toFixed(2)} EPWX)`);
-          buyOrders.push({price: matchPrice, amount, side: 'BUY'} as any);
-          sellOrders.push({price: matchPrice, amount, side: 'SELL'} as any);
+      // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume), but only if under cap and if enabled
+      if (config.volumeStrategy.selfTradeEnabled) {
+        const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
+        this.washTradePairsActive = [];
+        for (let i = 0; i < washTradePairs && buyOrders.length < targetOrdersPerSide && sellOrders.length < targetOrdersPerSide; i++) {
+          const matchPrice = priceReference;
+          const amount = safeOrderSizeUSD / matchPrice;
+          logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
+          const buyOrderId = await this.placeBuyOrder(matchPrice, amount, true);
+          const sellOrderId = await this.placeSellOrder(matchPrice, amount, true);
+          if (buyOrderId && sellOrderId) {
+            this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
+            logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toExponential(4)} (${amount.toFixed(2)} EPWX)`);
+            buyOrders.push({price: matchPrice, amount, side: 'BUY'} as any);
+            sellOrders.push({price: matchPrice, amount, side: 'SELL'} as any);
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
-        await new Promise(resolve => setTimeout(resolve, 100));
       }
       // Place new sell orders if needed (legacy logic, now handled above)
       // (No-op: all sell order placement is now strictly capped above)
