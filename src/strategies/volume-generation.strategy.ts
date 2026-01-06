@@ -266,35 +266,7 @@ export class VolumeGenerationStrategy {
       }
       // If at cap, do not place new orders
       if (buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide) {
-        logger.info('✅ Order cap reached for both sides. Cancelling oldest wash trade pairs to maintain volume.');
-        if (config.volumeStrategy.selfTradeEnabled) {
-          // Cancel oldest wash trade pairs (assume tracked in washTradePairsActive)
-          const washPairsToCancel = Math.min(5, this.washTradePairsActive.length);
-          for (let i = 0; i < washPairsToCancel; i++) {
-            const pair = this.washTradePairsActive[i];
-            if (pair) {
-              logger.info(`[Wash Cleanup] Cancelling wash BUY ${pair.buyOrderId}, SELL ${pair.sellOrderId}`);
-              await this.exchange.cancelOrder(this.symbol, pair.buyOrderId);
-              await this.exchange.cancelOrder(this.symbol, pair.sellOrderId);
-            }
-          }
-          // Remove cancelled pairs from active list
-          this.washTradePairsActive = this.washTradePairsActive.slice(washPairsToCancel);
-          // Place new wash trade pairs
-          const washTradePairs = 5;
-          for (let i = 0; i < washTradePairs; i++) {
-            const matchPrice = priceReference;
-            const amount = safeOrderSizeUSD / matchPrice;
-            logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
-            const buyOrderId = await this.placeBuyOrder(matchPrice, amount, true);
-            const sellOrderId = await this.placeSellOrder(matchPrice, amount, true);
-            if (buyOrderId && sellOrderId) {
-              this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
-              logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toExponential(4)} (${amount.toFixed(2)} EPWX)`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-          }
-        }
+        logger.info('✅ Order cap reached for both sides. No new orders will be placed this cycle.');
         return;
       }
       // If at cap for one side, only place for the other
