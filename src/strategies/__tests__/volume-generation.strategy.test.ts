@@ -140,10 +140,10 @@ it('should cancel excess buy and sell orders when above the target', async () =>
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
-      it('should SKIP real user SELL order if MM balance < $500 and not market value order', async () => {
+      it('should SKIP real user SELL order if MM balance < $1000 and not market value order', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
-            { asset: 'USDT', free: 400, locked: 0, total: 400 },
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
             { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
           ]),
           getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
@@ -156,7 +156,7 @@ describe('Order Placement Logic', () => {
         expect(mockExchange.placeOrder).not.toHaveBeenCalled();
       });
 
-      it('should EXECUTE real user SELL order if MM balance < $500 but IS market value order', async () => {
+      it('should EXECUTE real user SELL order if MM balance < $1000 but IS market value order', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
             { asset: 'USDT', free: 500, locked: 0, total: 500 },
