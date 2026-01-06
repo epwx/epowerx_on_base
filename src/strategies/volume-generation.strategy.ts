@@ -234,21 +234,22 @@ export class VolumeGenerationStrategy {
       let priceSource = 'DEX';
       logger.info('Using DEX price as reference for all wash trades.');
 
-      // Place and maintain at least 30 buy and 30 sell orders in the order book
+      // Strictly enforce a maximum of 30 buy and 30 sell orders before placing any new orders
       const targetOrdersPerSide = 30;
-      // Always cleanup excess orders at the start of the cycle
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
       let sellOrders = openOrders.filter(o => o.side === 'SELL');
-      logger.info(`📊 [PRE-CLEANUP] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      logger.info(`📊 [PRE-CHECK] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      // If we are above the cap, cancel excess orders and do not place any new orders this cycle
+      let cancelled = false;
       if (buyOrders.length > targetOrdersPerSide) {
-        // Sort by timestamp descending, keep newest 30
         const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
         const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
         for (const order of excessBuyOrders) {
           logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
         }
+        cancelled = true;
       }
       if (sellOrders.length > targetOrdersPerSide) {
         const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
@@ -257,12 +258,18 @@ export class VolumeGenerationStrategy {
           logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
         }
+        cancelled = true;
       }
-      // Re-fetch open orders after cleanup
-      openOrders = await this.exchange.getOpenOrders(this.symbol);
-      buyOrders = openOrders.filter(o => o.side === 'BUY');
-      sellOrders = openOrders.filter(o => o.side === 'SELL');
-      logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      if (cancelled) {
+        logger.info('🚫 Skipping new order placement this cycle to allow cleanup.');
+        return;
+      }
+      // If at cap, do not place new orders
+      if (buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide) {
+        logger.info('✅ Order cap reached for both sides. No new orders will be placed this cycle.');
+        return;
+      }
+      // If at cap for one side, only place for the other
 
       // --- Order Depth Logic ---
       // Place new buy orders if needed
@@ -291,64 +298,67 @@ export class VolumeGenerationStrategy {
 
       logger.info(`📏 Buy depth (98%-100%): $${buyDepth.toFixed(2)} | Sell depth (100%-102%): $${sellDepth.toFixed(2)}`);
 
-      // Place additional buy orders if needed to reach 500 USDT depth
+      // Place additional buy orders if needed to reach 500 USDT depth, but only if under cap
       let buyDepthShortfall = 500 - buyDepth;
-      if (buyDepthShortfall > 0) {
+      if (buyDepthShortfall > 0 && buyOrders.length < targetOrdersPerSide) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in 98%-100% band`);
-        // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
-        while (remaining > 0) {
+        while (remaining > 0 && buyOrders.length < targetOrdersPerSide) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           const amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
           logger.info(`🟢 Placing depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)}`);
           await this.placeBuyOrder(buyPrice, amount);
           remaining -= buyPrice * amount;
+          buyOrders.push({price: buyPrice, amount, side: 'BUY'} as any); // Simulate for cap
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
 
-      // Place additional sell orders if needed to reach 500 USDT depth
+      // Place additional sell orders if needed to reach 500 USDT depth, but only if under cap
       let sellDepthShortfall = 500 - sellDepth;
-      if (sellDepthShortfall > 0) {
+      if (sellDepthShortfall > 0 && sellOrders.length < targetOrdersPerSide) {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% band`);
         let remaining = sellDepthShortfall;
-        while (remaining > 0) {
+        while (remaining > 0 && sellOrders.length < targetOrdersPerSide) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
           logger.info(`🔴 Placing depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)}`);
           await this.placeSellOrder(sellPrice, amount);
           remaining -= sellPrice * amount;
+          sellOrders.push({price: sellPrice, amount, side: 'SELL'} as any); // Simulate for cap
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
+      // Only place book-depth orders if under cap
       if (buyOrders.length < targetOrdersPerSide) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
-        for (let i = 0; i < needBuys; i++) {
+        for (let i = 0; i < needBuys && buyOrders.length < targetOrdersPerSide; i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
           const amount = safeOrderSizeUSD / buyPrice;
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
           await this.placeBuyOrder(buyPrice, amount);
+          buyOrders.push({price: buyPrice, amount, side: 'BUY'} as any);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
       if (sellOrders.length < targetOrdersPerSide) {
         const needSells = targetOrdersPerSide - sellOrders.length;
-        for (let i = 0; i < needSells; i++) {
+        for (let i = 0; i < needSells && sellOrders.length < targetOrdersPerSide; i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           const amount = safeOrderSizeUSD / sellPrice;
           logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
           await this.placeSellOrder(sellPrice, amount);
+          sellOrders.push({price: sellPrice, amount, side: 'SELL'} as any);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
 
-      // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
+      // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume), but only if under cap
       const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
-      // Track wash trade pairs for reliable fill detection
       this.washTradePairsActive = [];
-      for (let i = 0; i < washTradePairs; i++) {
+      for (let i = 0; i < washTradePairs && buyOrders.length < targetOrdersPerSide && sellOrders.length < targetOrdersPerSide; i++) {
         const matchPrice = priceReference;
         const amount = safeOrderSizeUSD / matchPrice;
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
@@ -357,44 +367,15 @@ export class VolumeGenerationStrategy {
         if (buyOrderId && sellOrderId) {
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toExponential(4)} (${amount.toFixed(2)} EPWX)`);
+          buyOrders.push({price: matchPrice, amount, side: 'BUY'} as any);
+          sellOrders.push({price: matchPrice, amount, side: 'SELL'} as any);
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      // Place new sell orders if needed
-      if (sellOrders.length < targetOrdersPerSide) {
-        const needSells = targetOrdersPerSide - sellOrders.length;
-        for (let i = 0; i < needSells; i++) {
-          // Place sell orders above reference price so they do not match instantly
-          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const amount = safeOrderSizeUSD / sellPrice;
-          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
-          // Mark book-depth sell orders as wash trades to bypass USD balance check
-          await this.placeSellOrder(sellPrice, amount, true);
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-      }
+      // Place new sell orders if needed (legacy logic, now handled above)
+      // (No-op: all sell order placement is now strictly capped above)
 
-      // Final check: cancel excess orders after all placements (keep only newest 30 per side)
-      openOrders = await this.exchange.getOpenOrders(this.symbol);
-      buyOrders = openOrders.filter(o => o.side === 'BUY');
-      sellOrders = openOrders.filter(o => o.side === 'SELL');
-      if (buyOrders.length > targetOrdersPerSide) {
-        // Sort by timestamp descending, keep newest 30
-        const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
-        for (const order of excessBuyOrders) {
-          logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
-          await this.exchange.cancelOrder(this.symbol, order.orderId);
-        }
-      }
-      if (sellOrders.length > targetOrdersPerSide) {
-        const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessSellOrders = sortedSells.slice(targetOrdersPerSide);
-        for (const order of excessSellOrders) {
-          logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
-          await this.exchange.cancelOrder(this.symbol, order.orderId);
-        }
-      }
+      // Final check: no longer needed, as we strictly enforce the cap before and during placement
 
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
