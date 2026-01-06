@@ -267,6 +267,13 @@ export class VolumeGenerationStrategy {
       // If at cap, do not place new orders
       if (buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide) {
         logger.info('✅ Order cap reached for both sides. Cancelling oldest wash trade pairs to maintain volume.');
+        // Fetch available USDT balance
+        const balances = await this.exchange.getBalances();
+        const usdtBalance = balances.find(b => b.asset === 'USDT');
+        const availableUSDT = usdtBalance?.free || 0;
+        // Calculate safe order size: divide available balance by number of orders
+        const totalOrdersNeeded = targetOrdersPerSide * 2;
+        const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 20); // Max $20/order to be safe
         if (config.volumeStrategy.selfTradeEnabled) {
           // Cancel oldest wash trade pairs (assume tracked in washTradePairsActive)
           const washPairsToCancel = Math.min(5, this.washTradePairsActive.length);
