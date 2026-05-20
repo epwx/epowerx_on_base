@@ -306,6 +306,10 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping buy order: floored amount is zero.`);
             break;
           }
+          if (amount * buyPrice < 5) {
+            logger.warn(`⚠️  Skipping buy order: notional value (${amount * buyPrice} USDT) is less than 5 USDT.`);
+            break;
+          }
           logger.info(`🟢 Placing depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
           await this.placeBuyOrder(buyPrice, amount);
           remaining -= buyPrice * amount;
@@ -340,6 +344,10 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping book-depth buy order: floored amount is zero.`);
             continue;
           }
+          if (amount * buyPrice < 5) {
+            logger.warn(`⚠️  Skipping book-depth buy order: notional value (${amount * buyPrice} USDT) is less than 5 USDT.`);
+            continue;
+          }
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
           await this.placeBuyOrder(buyPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -367,6 +375,10 @@ export class VolumeGenerationStrategy {
         amount = Math.floor(amount); // Ensure integer amount for EPWX
         if (amount <= 0) {
           logger.warn(`⚠️  Skipping wash trade buy/sell: floored amount is zero.`);
+          continue;
+        }
+        if (amount * matchPrice < 5) {
+          logger.warn(`⚠️  Skipping wash trade buy/sell: notional value (${amount * matchPrice} USDT) is less than 5 USDT.`);
           continue;
         }
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
@@ -536,6 +548,10 @@ export class VolumeGenerationStrategy {
       amount = Math.floor(amount); // Ensure integer amount for EPWX
       if (amount <= 0) {
         logger.warn(`⚠️  Skipping exact match wash trade buy: floored amount is zero.`);
+        return;
+      }
+      if (amount * matchPrice < 5) {
+        logger.warn(`⚠️  Skipping exact match wash trade buy: notional value (${amount * matchPrice} USDT) is less than 5 USDT.`);
         return;
       }
       await this.placeBuyOrder(matchPrice, amount);
