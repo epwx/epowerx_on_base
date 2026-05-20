@@ -15,11 +15,13 @@ cd ~/epowerx_on_base
 
 APP_ENTRY="$PWD/dist/index.js"
 BUILD_MARKER="build-e38bfba-marker"
+RUNTIME_GIT_SHA=""
 
 # Pull latest code
 echo "📥 Pulling latest code from GitHub..."
 git pull --ff-only origin main
-echo "🔖 Current commit: $(git rev-parse HEAD)"
+RUNTIME_GIT_SHA="$(git rev-parse --short HEAD)"
+echo "🔖 Current commit: $RUNTIME_GIT_SHA"
 
 # Install any new dependencies
 echo "📦 Installing dependencies..."
@@ -43,7 +45,7 @@ echo "✅ Build marker present in compiled output"
 # Restart bot
 echo "♻️  Recreating PM2 process..."
 pm2 delete epwx-bot >/dev/null 2>&1 || true
-pm2 start "$APP_ENTRY" --name epwx-bot --time --update-env
+RUNTIME_GIT_SHA="$RUNTIME_GIT_SHA" pm2 start "$APP_ENTRY" --name epwx-bot --time --update-env
 pm2 save
 echo "📍 PM2 runtime info:"
 pm2 describe epwx-bot | grep -E "script path|exec cwd"

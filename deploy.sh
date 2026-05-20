@@ -156,8 +156,9 @@ echo ""
 echo "Step 10: Configure PM2"
 echo "----------------------------------------"
 print_info "Starting bot with PM2..."
+RUNTIME_GIT_SHA="$(git rev-parse --short HEAD)"
 pm2 delete epwx-bot >/dev/null 2>&1 || true
-pm2 start "$PWD/dist/index.js" --name epwx-bot --time --update-env
+RUNTIME_GIT_SHA="$RUNTIME_GIT_SHA" pm2 start "$PWD/dist/index.js" --name epwx-bot --time --update-env
 pm2 save
 print_success "Bot started with PM2"
 echo ""

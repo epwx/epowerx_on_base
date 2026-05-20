@@ -3,6 +3,7 @@ import { logger } from './utils/logger';
 import { config } from './config';
 
 const BUILD_MARKER = 'build-e38bfba-marker';
+const RUNTIME_GIT_SHA = process.env.RUNTIME_GIT_SHA || 'unknown';
 
 async function main() {
   logger.info('');
@@ -12,6 +13,7 @@ async function main() {
   logger.info('╚══════════════════════════════════════════════════════╝');
   logger.info('');
   logger.info(`[BUILD MARKER] ${BUILD_MARKER}`);
+  logger.info(`[RUNTIME GIT SHA] ${RUNTIME_GIT_SHA}`);
 
   const strategy = new VolumeGenerationStrategy();
   let isShuttingDown = false;
