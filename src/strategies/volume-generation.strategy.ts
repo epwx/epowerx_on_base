@@ -109,6 +109,10 @@ export class VolumeGenerationStrategy {
     return true;
   }
 
+  private getMinimumOrderUsdTarget(): number {
+    return VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD + 0.25;
+  }
+
   async start(): Promise<void> {
     if (this.isRunning) {
       logger.warn('Volume generation strategy is already running');
@@ -405,7 +409,10 @@ export class VolumeGenerationStrategy {
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasPlacementBudget()) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
-          const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
+          const targetOrderUsd = Math.max(
+            this.getMinimumOrderUsdTarget(),
+            Math.min(safeOrderSizeUSD, remaining)
+          );
           let amount = targetOrderUsd / sellPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -465,7 +472,8 @@ export class VolumeGenerationStrategy {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          let rawAmount = safeOrderSizeUSD / sellPrice;
+          const sellOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+          let rawAmount = sellOrderUsdTarget / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth sell: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${sellPrice}`);
           if (!this.isValidOrderAmount(amount, sellPrice) || ((amount / this.stepSize) % 1 !== 0)) {
@@ -496,7 +504,8 @@ export class VolumeGenerationStrategy {
       }
       for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
         const matchPrice = priceReference;
-        let rawAmount = safeOrderSizeUSD / matchPrice;
+        const washOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+        let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
         logger.info(`[ORDER DEBUG] Wash trade: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${matchPrice}`);
         if (!this.isValidOrderAmount(amount, matchPrice) || ((amount / this.stepSize) % 1 !== 0)) {
