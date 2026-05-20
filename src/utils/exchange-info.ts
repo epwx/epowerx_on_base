@@ -8,6 +8,8 @@ export interface PairInfo {
   quoteAssetPrecision: number;
   minQty?: number;
   stepSize?: number;
+  tickSize?: string;
+  minQuantity?: string;
   minNotional?: number;
 }
 
@@ -21,6 +23,18 @@ export async function getEPWXPairInfo(): Promise<PairInfo> {
   if (!Array.isArray(arr)) throw new Error('exchangeInfo: Unexpected response');
   const info = arr.find((x: any) => x.symbol === 'EPWX_USDT');
   if (!info) throw new Error('exchangeInfo: EPWX_USDT not found');
-  cachedInfo = info;
-  return info;
+
+  cachedInfo = {
+    symbol: info.symbol,
+    baseAsset: info.baseAsset,
+    quoteAsset: info.quoteAsset,
+    baseAssetPrecision: Number(info.baseAssetPrecision ?? 0),
+    quoteAssetPrecision: Number(info.quoteAssetPrecision ?? 0),
+    minQty: Number(info.minQuantity ?? 0),
+    minQuantity: String(info.minQuantity ?? ''),
+    stepSize: Number(info.tickSize ?? 0),
+    tickSize: String(info.tickSize ?? ''),
+  };
+
+  return cachedInfo;
 }

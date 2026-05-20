@@ -3,6 +3,7 @@ import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
 import { logger } from '../utils/logger';
 import { config } from '../config';
+import { getEPWXPairInfo, PairInfo } from '../utils/exchange-info';
 
 export interface OrderBook {
   bids: Array<[number, number]>;
@@ -58,6 +59,7 @@ export class BiconomyExchangeService {
   private client: AxiosInstance;
   private apiKey: string;
   private apiSecret: string;
+  private epwxPairInfo?: PairInfo;
 
   constructor() {
     this.apiKey = config.biconomyExchange.apiKey;
@@ -88,6 +90,45 @@ export class BiconomyExchangeService {
       .update(signaturePayload)
       .digest('hex')
       .toUpperCase();
+  }
+
+  private async getPairFormatting(symbol: string): Promise<PairInfo | undefined> {
+    if (symbol.replace('/', '_').toUpperCase() !== 'EPWX_USDT') {
+      return undefined;
+    }
+
+    if (!this.epwxPairInfo) {
+      this.epwxPairInfo = await getEPWXPairInfo();
+    }
+
+    return this.epwxPairInfo;
+  }
+
+  private truncateToDecimals(value: number, decimals: number): string {
+    const safeDecimals = Math.max(0, decimals);
+
+    if (!Number.isFinite(value)) {
+      return safeDecimals === 0 ? '0' : `0.${''.padEnd(safeDecimals, '0')}`;
+    }
+
+    const fixed = Math.abs(value).toFixed(safeDecimals + 6);
+    const [wholePart, fractionPart = ''] = fixed.split('.');
+    const truncatedFraction = fractionPart.slice(0, safeDecimals).padEnd(safeDecimals, '0');
+    const sign = value < 0 ? '-' : '';
+
+    if (safeDecimals === 0) {
+      return `${sign}${wholePart}`;
+    }
+
+    return `${sign}${wholePart}.${truncatedFraction}`;
+  }
+
+  private floorToTickSize(value: number, tickSize: string, fallbackDecimals: number): string {
+    const decimals = tickSize.includes('.')
+      ? tickSize.split('.')[1].length
+      : fallbackDecimals;
+
+    return this.truncateToDecimals(value, decimals);
   }
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
@@ -213,20 +254,18 @@ export class BiconomyExchangeService {
       // Strict formatting for EPWX/USDT
       let amountStr: string;
       let priceStr: string | undefined = undefined;
-      const isEPWX = symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT';
-      if (isEPWX) {
-        // Step size is 1, so amount must be integer
-        if (!Number.isInteger(amount)) {
-          throw new Error(`EPWX/USDT: Amount (${amount}) must be integer (step size 1)`);
+      const pairInfo = await this.getPairFormatting(symbol);
+      if (pairInfo) {
+        const minQty = pairInfo.minQty ?? 5;
+        const amountDecimals = pairInfo.baseAssetPrecision ?? 1;
+        amountStr = this.truncateToDecimals(amount, amountDecimals);
+
+        if (parseFloat(amountStr) < minQty) {
+          throw new Error(`EPWX/USDT: Amount (${amountStr}) is below minQty (${minQty})`);
         }
-        if (amount < 5) {
-          throw new Error(`EPWX/USDT: Amount (${amount}) is below minQty (5)`);
-        }
-        amountStr = amount.toFixed(0);
+
         if (type === 'LIMIT' && price !== undefined) {
-          // Price must be multiple of 0.0000000000001, up to 13 decimals
-          const quantizedPrice = Math.floor(price / 0.0000000000001) * 0.0000000000001;
-          priceStr = quantizedPrice.toFixed(13);
+          priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13);
         }
       } else {
         // Default: 8 decimals for amount, 6 for price

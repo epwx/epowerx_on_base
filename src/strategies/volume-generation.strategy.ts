@@ -106,7 +106,7 @@ export class VolumeGenerationStrategy {
       const pairInfo = await getEPWXPairInfo();
       if (pairInfo.stepSize) this.stepSize = Number(pairInfo.stepSize);
       if (pairInfo.minQty) this.minQty = Number(pairInfo.minQty);
-      logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}`);
+      logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}, baseAssetPrecision=${pairInfo.baseAssetPrecision}, quoteAssetPrecision=${pairInfo.quoteAssetPrecision}, tickSize=${pairInfo.tickSize}`);
     } catch (e) {
       logger.warn('Could not fetch EPWX/USDT pair info, using defaults.');
     }
@@ -322,15 +322,9 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             break;
           }
-          // For EPWX/USDT, enforce price to 13 decimals and amount as integer
-          let buyOrderAmount = amount;
-          let buyOrderPrice = buyPrice;
-          if (this.symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT') {
-            buyOrderAmount = Math.floor(amount); // step size 1
-            buyOrderPrice = Math.floor(buyPrice / 0.0000000000001) * 0.0000000000001;
-          }
-          logger.info(`🟢 Placing depth buy order: ${buyOrderAmount} EPWX @ ${buyOrderPrice.toFixed(13)} (98%-100% of Mid-Price)`);
-          await this.placeBuyOrder(Number(buyOrderPrice.toFixed(13)), buyOrderAmount);
+          const buyOrderAmount = Math.floor(amount);
+          logger.info(`🟢 Placing depth buy order: ${buyOrderAmount} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
+          await this.placeBuyOrder(buyPrice, buyOrderAmount);
           remaining -= buyPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -351,14 +345,9 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
-          let sellOrderAmount = amount;
-          let sellOrderPrice = sellPrice;
-          if (this.symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT') {
-            sellOrderAmount = Math.floor(amount);
-            sellOrderPrice = Math.floor(sellPrice / 0.0000000000001) * 0.0000000000001;
-          }
-          logger.info(`🔴 Placing depth sell order: ${sellOrderAmount} EPWX @ ${sellOrderPrice.toFixed(13)} (100%-102% of Mid-Price)`);
-          await this.placeSellOrder(Number(sellOrderPrice.toFixed(13)), sellOrderAmount);
+          const sellOrderAmount = Math.floor(amount);
+          logger.info(`🔴 Placing depth sell order: ${sellOrderAmount} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
+          await this.placeSellOrder(sellPrice, sellOrderAmount);
           remaining -= sellPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -376,14 +365,9 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping book-depth buy order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
-          let bookBuyAmount = amount;
-          let bookBuyPrice = buyPrice;
-          if (this.symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT') {
-            bookBuyAmount = Math.floor(amount);
-            bookBuyPrice = Math.floor(buyPrice / 0.0000000000001) * 0.0000000000001;
-          }
-          logger.info(`[${i+1}/${needBuys}] Placing book-depth buy order: ${bookBuyAmount} EPWX @ ${bookBuyPrice.toFixed(13)} [Book Depth]`);
-          await this.placeBuyOrder(Number(bookBuyPrice.toFixed(13)), bookBuyAmount);
+          const bookBuyAmount = Math.floor(amount);
+          logger.info(`[${i+1}/${needBuys}] Placing book-depth buy order: ${bookBuyAmount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
+          await this.placeBuyOrder(buyPrice, bookBuyAmount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -398,14 +382,9 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping book-depth sell order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
-          let bookSellAmount = amount;
-          let bookSellPrice = sellPrice;
-          if (this.symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT') {
-            bookSellAmount = Math.floor(amount);
-            bookSellPrice = Math.floor(sellPrice / 0.0000000000001) * 0.0000000000001;
-          }
-          logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${bookSellPrice.toFixed(13)} [Book Depth]`);
-          await this.placeSellOrder(Number(bookSellPrice.toFixed(13)), bookSellAmount);
+          const bookSellAmount = Math.floor(amount);
+          logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
+          await this.placeSellOrder(sellPrice, bookSellAmount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -423,15 +402,10 @@ export class VolumeGenerationStrategy {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
           continue;
         }
-        let washAmount = amount;
-        let washPrice = matchPrice;
-        if (this.symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT') {
-          washAmount = Math.floor(amount);
-          washPrice = Math.floor(matchPrice / 0.0000000000001) * 0.0000000000001;
-        }
-        logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${washPrice.toFixed(13)} [Wash Trade]`);
-        const buyOrderId = await this.placeBuyOrder(Number(washPrice.toFixed(13)), washAmount, true);
-        const sellOrderId = await this.placeSellOrder(Number(washPrice.toFixed(13)), washAmount, true);
+        const washAmount = Math.floor(amount);
+        logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
+        const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
+        const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
         if (buyOrderId && sellOrderId) {
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${amount.toFixed(2)} EPWX)`);
