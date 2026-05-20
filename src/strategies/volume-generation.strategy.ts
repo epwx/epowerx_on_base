@@ -300,8 +300,9 @@ export class VolumeGenerationStrategy {
         let remaining = buyDepthShortfall;
         while (remaining > 0) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
-          const amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
-          logger.info(`🟢 Placing depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
+          let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
+          amount = Math.floor(amount); // Ensure integer amount for EPWX
+          logger.info(`🟢 Placing depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
           await this.placeBuyOrder(buyPrice, amount);
           remaining -= buyPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -315,8 +316,9 @@ export class VolumeGenerationStrategy {
         let remaining = sellDepthShortfall;
         while (remaining > 0) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
-          const amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
-          logger.info(`🔴 Placing depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
+          let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
+          amount = Math.floor(amount); // Ensure integer amount for EPWX
+          logger.info(`🔴 Placing depth sell order: ${amount} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
           await this.placeSellOrder(sellPrice, amount);
           remaining -= sellPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -328,8 +330,9 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys; i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          const amount = safeOrderSizeUSD / buyPrice;
-          logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount.toFixed(2)} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
+          let amount = safeOrderSizeUSD / buyPrice;
+          amount = Math.floor(amount); // Ensure integer amount for EPWX
+          logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
           await this.placeBuyOrder(buyPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -338,8 +341,9 @@ export class VolumeGenerationStrategy {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells; i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const amount = safeOrderSizeUSD / sellPrice;
-          logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
+          let amount = safeOrderSizeUSD / sellPrice;
+          amount = Math.floor(amount); // Ensure integer amount for EPWX
+          logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
           await this.placeSellOrder(sellPrice, amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -351,8 +355,9 @@ export class VolumeGenerationStrategy {
       this.washTradePairsActive = [];
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
-        const amount = safeOrderSizeUSD / matchPrice;
-        logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount.toFixed(2)} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
+        let amount = safeOrderSizeUSD / matchPrice;
+        amount = Math.floor(amount); // Ensure integer amount for EPWX
+        logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, amount, true);
         const sellOrderId = await this.placeSellOrder(matchPrice, amount, true);
         if (buyOrderId && sellOrderId) {
