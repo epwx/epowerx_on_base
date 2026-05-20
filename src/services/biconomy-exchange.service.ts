@@ -123,12 +123,16 @@ export class BiconomyExchangeService {
     return `${sign}${wholePart}.${truncatedFraction}`;
   }
 
-  private floorToTickSize(value: number, tickSize: string, fallbackDecimals: number): string {
+  private floorToTickSize(value: number, tickSize: string, fallbackDecimals: number, tickFactor: number = 1): string {
     const decimals = tickSize.includes('.')
       ? tickSize.split('.')[1].length
       : fallbackDecimals;
 
-    return this.truncateToDecimals(value, decimals);
+    const scale = 10 ** Math.min(decimals, 14);
+    const scaledValue = Math.floor(value * scale);
+    const normalizedValue = Math.floor(scaledValue / tickFactor) * tickFactor;
+
+    return (normalizedValue / scale).toFixed(decimals);
   }
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
@@ -258,6 +262,7 @@ export class BiconomyExchangeService {
       if (pairInfo) {
         const minQty = pairInfo.minQty ?? 5;
         const amountDecimals = pairInfo.baseAssetPrecision ?? 1;
+        const market = symbol.replace('/', '_').toUpperCase();
         amountStr = this.truncateToDecimals(amount, amountDecimals);
 
         if (parseFloat(amountStr) < minQty) {
@@ -265,7 +270,8 @@ export class BiconomyExchangeService {
         }
 
         if (type === 'LIMIT' && price !== undefined) {
-          priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13);
+          const tickFactor = market === 'EPWX_USDT' ? 10 : 1;
+          priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13, tickFactor);
         }
       } else {
         // Default: 8 decimals for amount, 6 for price
