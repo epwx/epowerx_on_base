@@ -317,8 +317,8 @@ export class VolumeGenerationStrategy {
           // Round down to nearest step size
           amount = Math.floor(amount / this.stepSize) * this.stepSize;
           amount = Math.max(this.minQty, Math.min(100000, amount));
-          // If rounding caused amount to be 0 or not a valid float, skip
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01) {
+          // Prevent zero or invalid amounts
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01 || amount === 0) {
             logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             break;
           }
@@ -338,9 +338,10 @@ export class VolumeGenerationStrategy {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
           amount = safeOrderSizeUSD / sellPrice;
-          amount = Math.floor(amount); // For EPWX, step size is 1
-          amount = Math.max(10, Math.min(100000, amount));
-          if (!Number.isFinite(amount) || amount < 10 || amount > 100000) {
+          // Round down to nearest step size
+          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = Math.max(this.minQty, Math.min(100000, amount));
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
@@ -392,9 +393,9 @@ export class VolumeGenerationStrategy {
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
         let amount = safeOrderSizeUSD / matchPrice;
-        amount = Math.floor(amount); // For EPWX, step size is 1
-        amount = Math.max(10, Math.min(100000, amount));
-        if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * matchPrice < 5.01) {
+        amount = Math.floor(amount / this.stepSize) * this.stepSize;
+        amount = Math.max(this.minQty, Math.min(100000, amount));
+        if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * matchPrice < 5.01 || amount === 0) {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid amount (${amount}) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
           continue;
         }
@@ -414,7 +415,12 @@ export class VolumeGenerationStrategy {
           // Place sell orders above reference price so they do not match instantly
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let amount = safeOrderSizeUSD / sellPrice;
-          amount = Math.floor(amount); // For EPWX, step size is 1
+          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = Math.max(this.minQty, Math.min(100000, amount));
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
+            logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
+            break;
+          }
           logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
           // Mark book-depth sell orders as wash trades to bypass USD balance check
           await this.placeSellOrder(sellPrice, amount, true);
