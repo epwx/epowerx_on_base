@@ -301,13 +301,15 @@ export class VolumeGenerationStrategy {
         while (remaining > 0) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
-          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
-          if (amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
-            logger.warn(`⚠️  Skipping buy order: amount (${amount}) not in [10, 100000] or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          amount = safeOrderSizeUSD / buyPrice;
+          amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
+          // If rounding caused amount to be 0 or not a valid float, skip
+          if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             break;
           }
           logger.info(`🟢 Placing depth buy order: ${amount} EPWX @ ${buyPrice.toFixed(6)} (98%-100% of Mid-Price)`);
-          await this.placeBuyOrder(parseFloat(buyPrice.toFixed(6)), amount);
+          await this.placeBuyOrder(Number(buyPrice.toFixed(6)), amount);
           remaining -= buyPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -321,13 +323,14 @@ export class VolumeGenerationStrategy {
         while (remaining > 0) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
-          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
-          if (amount < 10 || amount > 100000) {
-            logger.warn(`⚠️  Skipping sell order: amount (${amount}) not in [10, 100000]`);
+          amount = safeOrderSizeUSD / sellPrice;
+          amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
+          if (!Number.isFinite(amount) || amount < 10 || amount > 100000) {
+            logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
           logger.info(`🔴 Placing depth sell order: ${amount} EPWX @ ${sellPrice.toFixed(6)} (100%-102% of Mid-Price)`);
-          await this.placeSellOrder(parseFloat(sellPrice.toFixed(6)), amount);
+          await this.placeSellOrder(Number(sellPrice.toFixed(6)), amount);
           remaining -= sellPrice * amount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -339,13 +342,14 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needBuys; i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
           let amount = safeOrderSizeUSD / buyPrice;
-          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
-          if (amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
-            logger.warn(`⚠️  Skipping book-depth buy order: amount (${amount}) not in [10, 100000] or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          amount = safeOrderSizeUSD / buyPrice;
+          amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
+          if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping book-depth buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             continue;
           }
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toFixed(6)} [Book Depth]`);
-          await this.placeBuyOrder(parseFloat(buyPrice.toFixed(6)), amount);
+          await this.placeBuyOrder(Number(buyPrice.toFixed(6)), amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -354,13 +358,14 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells; i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let amount = safeOrderSizeUSD / sellPrice;
-          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
-          if (amount < 10 || amount > 100000) {
-            logger.warn(`⚠️  Skipping book-depth sell order: amount (${amount}) not in [10, 100000]`);
+          amount = safeOrderSizeUSD / sellPrice;
+          amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
+          if (!Number.isFinite(amount) || amount < 10 || amount > 100000) {
+            logger.warn(`⚠️  Skipping book-depth sell order: invalid amount (${amount})`);
             continue;
           }
           logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount} EPWX @ ${sellPrice.toFixed(6)} [Book Depth]`);
-          await this.placeSellOrder(parseFloat(sellPrice.toFixed(6)), amount);
+          await this.placeSellOrder(Number(sellPrice.toFixed(6)), amount);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -371,15 +376,15 @@ export class VolumeGenerationStrategy {
       this.washTradePairsActive = [];
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
-        let amount = safeOrderSizeUSD / matchPrice;
-        amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
-        if (amount < 10 || amount > 100000 || amount * matchPrice < 5.01) {
-          logger.warn(`⚠️  Skipping wash trade buy/sell: amount (${amount}) not in [10, 100000] or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
+        amount = safeOrderSizeUSD / matchPrice;
+        amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
+        if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * matchPrice < 5.01) {
+          logger.warn(`⚠️  Skipping wash trade buy/sell: invalid amount (${amount}) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
           continue;
         }
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toFixed(6)} [Wash Trade]`);
-        const buyOrderId = await this.placeBuyOrder(parseFloat(matchPrice.toFixed(6)), amount, true);
-        const sellOrderId = await this.placeSellOrder(parseFloat(matchPrice.toFixed(6)), amount, true);
+        const buyOrderId = await this.placeBuyOrder(Number(matchPrice.toFixed(6)), amount, true);
+        const sellOrderId = await this.placeSellOrder(Number(matchPrice.toFixed(6)), amount, true);
         if (buyOrderId && sellOrderId) {
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${amount.toFixed(2)} EPWX)`);
