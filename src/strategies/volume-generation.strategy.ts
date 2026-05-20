@@ -376,7 +376,7 @@ export class VolumeGenerationStrategy {
       this.washTradePairsActive = [];
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
-        amount = safeOrderSizeUSD / matchPrice;
+        let amount = safeOrderSizeUSD / matchPrice;
         amount = Math.max(10, Math.min(100000, Number(amount.toFixed(8))));
         if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * matchPrice < 5.01) {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid amount (${amount}) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
