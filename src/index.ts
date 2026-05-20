@@ -2,6 +2,8 @@ import { VolumeGenerationStrategy } from './strategies/volume-generation.strateg
 import { logger } from './utils/logger';
 import { config } from './config';
 
+const BUILD_MARKER = 'build-e38bfba-marker';
+
 async function main() {
   logger.info('');
   logger.info('╔══════════════════════════════════════════════════════╗');
@@ -9,6 +11,7 @@ async function main() {
   logger.info('║   Zero-Fee Market Maker Account                      ║');
   logger.info('╚══════════════════════════════════════════════════════╝');
   logger.info('');
+  logger.info(`[BUILD MARKER] ${BUILD_MARKER}`);
 
   const strategy = new VolumeGenerationStrategy();
   let isShuttingDown = false;

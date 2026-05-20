@@ -60,6 +60,7 @@ export class BiconomyExchangeService {
   private apiKey: string;
   private apiSecret: string;
   private epwxPairInfo?: PairInfo;
+  private static readonly BUILD_MARKER = 'build-e38bfba-marker';
 
   constructor() {
     this.apiKey = config.biconomyExchange.apiKey;
@@ -317,9 +318,9 @@ export class BiconomyExchangeService {
 
       if (type === 'LIMIT' && priceStr !== undefined) {
         params.price = priceStr;
-        logger.info(`Placing ${side} order: amount=${amountStr}, price=${priceStr} (raw price=${price})`);
+        logger.info(`[${BiconomyExchangeService.BUILD_MARKER}] Placing ${side} order: amount=${amountStr}, price=${priceStr} (raw price=${price})`);
       } else if (type === 'MARKET') {
-        logger.info(`Placing ${side} MARKET order: amount=${amountStr}`);
+        logger.info(`[${BiconomyExchangeService.BUILD_MARKER}] Placing ${side} MARKET order: amount=${amountStr}`);
       }
 
       const signature = this.signRequest(params);

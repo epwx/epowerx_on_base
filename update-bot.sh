@@ -16,6 +16,7 @@ cd ~/epowerx_on_base
 # Pull latest code
 echo "📥 Pulling latest code from GitHub..."
 git pull origin main
+echo "🔖 Current commit: $(git rev-parse HEAD)"
 
 # Install any new dependencies
 echo "📦 Installing dependencies..."
@@ -28,6 +29,8 @@ npm run build
 # Restart bot
 echo "♻️  Restarting bot..."
 pm2 restart epwx-bot
+echo "📍 PM2 script path:"
+pm2 describe epwx-bot | grep "script path"
 
 # Show status
 echo ""
