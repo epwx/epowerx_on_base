@@ -32,7 +32,7 @@ export async function getEPWXPairInfo(): Promise<PairInfo> {
     quoteAssetPrecision: Number(info.quoteAssetPrecision ?? 0),
     minQty: Number(info.minQuantity ?? 0),
     minQuantity: String(info.minQuantity ?? ''),
-    stepSize: Number(info.tickSize ?? 0),
+    stepSize: 1,
     tickSize: String(info.tickSize ?? ''),
   };
 

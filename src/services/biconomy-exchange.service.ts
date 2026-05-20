@@ -262,16 +262,32 @@ export class BiconomyExchangeService {
   ): Promise<Order> {
     try {
       const path = type === 'LIMIT' ? '/api/v1/private/trade/limit' : '/api/v1/private/trade/market';
+      const market = symbol.replace('/', '_').toUpperCase();
 
 
       // Strict formatting for EPWX/USDT
       let amountStr: string;
       let priceStr: string | undefined = undefined;
       const pairInfo = await this.getPairFormatting(symbol);
-      if (pairInfo) {
+      if (market === 'EPWX_USDT') {
+        const normalizedAmount = Math.floor(amount);
+        const minQty = pairInfo?.minQty ?? 5;
+
+        if (!Number.isFinite(normalizedAmount) || normalizedAmount < minQty) {
+          throw new Error(`EPWX/USDT: Amount (${normalizedAmount}) is below minQty (${minQty})`);
+        }
+
+        amountStr = normalizedAmount.toString();
+
+        if (type === 'LIMIT' && price !== undefined) {
+          const decimals = (pairInfo?.tickSize || '').includes('.')
+            ? (pairInfo?.tickSize || '').split('.')[1].length
+            : pairInfo?.quoteAssetPrecision ?? 13;
+          priceStr = this.quantizeEpwxPrice(price, decimals);
+        }
+      } else if (pairInfo) {
         const minQty = pairInfo.minQty ?? 5;
         const amountDecimals = pairInfo.baseAssetPrecision ?? 1;
-        const market = symbol.replace('/', '_').toUpperCase();
         amountStr = this.truncateToDecimals(amount, amountDecimals);
 
         if (parseFloat(amountStr) < minQty) {
@@ -279,14 +295,7 @@ export class BiconomyExchangeService {
         }
 
         if (type === 'LIMIT' && price !== undefined) {
-          if (market === 'EPWX_USDT') {
-            const decimals = (pairInfo.tickSize || '').includes('.')
-              ? (pairInfo.tickSize || '').split('.')[1].length
-              : pairInfo.quoteAssetPrecision ?? 13;
-            priceStr = this.quantizeEpwxPrice(price, decimals);
-          } else {
-            priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13);
-          }
+          priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13);
         }
       } else {
         // Default: 8 decimals for amount, 6 for price
@@ -301,7 +310,7 @@ export class BiconomyExchangeService {
 
       const params: any = {
         api_key: this.apiKey,
-        market: symbol.replace('/', '_').toUpperCase(),
+        market,
         side: side === 'SELL' ? '1' : '2', // 1=ask/sell, 2=bid/buy
         amount: amountStr,
       };
