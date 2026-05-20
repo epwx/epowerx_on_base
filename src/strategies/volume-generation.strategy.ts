@@ -743,6 +743,10 @@ export class VolumeGenerationStrategy {
         logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
         return;
       }
+      if (!this.isRunning) {
+        logger.warn(`⚠️  Aborting buy order after balance check because the bot is stopping: amount=${normalizedAmount}, price=${price}`);
+        return;
+      }
       logger.debug(`Attempting to place buy order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
@@ -753,6 +757,11 @@ export class VolumeGenerationStrategy {
       );
       if (!order) {
         logger.error('Buy order placement returned undefined');
+        return;
+      }
+      if (!this.isRunning) {
+        logger.warn(`⚠️  Cancelling buy order ${order.orderId} because it was placed during shutdown.`);
+        await this.exchange.cancelOrder(this.symbol, order.orderId);
         return;
       }
       this.activeOrders.set(order.orderId, order);
@@ -796,6 +805,10 @@ export class VolumeGenerationStrategy {
         logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
       }
+      if (!this.isRunning) {
+        logger.warn(`⚠️  Aborting sell order after balance check because the bot is stopping: amount=${normalizedAmount}, price=${price}`);
+        return;
+      }
       logger.debug(`Attempting to place sell order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
@@ -806,6 +819,11 @@ export class VolumeGenerationStrategy {
       );
       if (!order) {
         logger.error('Sell order placement returned undefined');
+        return;
+      }
+      if (!this.isRunning) {
+        logger.warn(`⚠️  Cancelling sell order ${order.orderId} because it was placed during shutdown.`);
+        await this.exchange.cancelOrder(this.symbol, order.orderId);
         return;
       }
       this.activeOrders.set(order.orderId, order);
