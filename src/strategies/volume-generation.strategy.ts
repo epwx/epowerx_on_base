@@ -372,8 +372,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells; i++) {
           // Place sell orders above reference price so they do not match instantly
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const amount = safeOrderSizeUSD / sellPrice;
-          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+          let amount = safeOrderSizeUSD / sellPrice;
+          amount = Math.floor(amount); // Ensure integer amount for EPWX
+          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
           // Mark book-depth sell orders as wash trades to bypass USD balance check
           await this.placeSellOrder(sellPrice, amount, true);
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -468,6 +469,7 @@ export class VolumeGenerationStrategy {
         }
         const amount = safeOrderSizeUSD / sellPrice;
         logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        amount = Math.floor(amount); // Ensure integer amount for EPWX
         await this.placeSellOrder(sellPrice, amount);
         logger.info(`✅ Sell order placed: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Source: ${priceSource}]`);
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -521,6 +523,7 @@ export class VolumeGenerationStrategy {
       // Place buy and sell orders at the exact same price and size
       await this.placeBuyOrder(matchPrice, amount);
       await new Promise(resolve => setTimeout(resolve, 100));
+      amount = Math.floor(amount); // Ensure integer amount for EPWX
       await this.placeSellOrder(matchPrice, amount);
       const volumeGenerated = 2 * (amount * matchPrice);
       logger.info(`✅ Exact match wash trade complete! Volume: $${volumeGenerated.toFixed(2)}, Cost: ~$0 (0% fees)`);
