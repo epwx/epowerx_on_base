@@ -54,6 +54,7 @@ export class VolumeGenerationStrategy {
   private settledWashOrderIds: Set<string> = new Set();
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
+  private initialEpwxBalance: number | null = null;
   private currentPosition: number = 0;
   private orderStatusIndex: number = 0;
   private isPlacingOrders: boolean = false;
@@ -162,6 +163,7 @@ export class VolumeGenerationStrategy {
 
       // Get initial balances
       await this.logBalances();
+      await this.syncCurrentPositionWithBalances();
 
       // Start order placement loop
       this.startOrderPlacementLoop();
@@ -235,6 +237,7 @@ export class VolumeGenerationStrategy {
 
       try {
         await this.updateOrderStatus();
+        await this.syncCurrentPositionWithBalances();
         await this.checkAndRebalancePosition();
         this.logPerformance();
       } catch (error) {
@@ -993,6 +996,25 @@ export class VolumeGenerationStrategy {
     }
 
     this.positionAdjustedOrderIds.add(orderId);
+  }
+
+  private async syncCurrentPositionWithBalances(): Promise<void> {
+    const balances = await this.exchange.getBalances();
+    const epwxBalance = balances.find(balance => balance.asset === 'EPWX');
+    const totalEpwx = epwxBalance?.total ?? ((epwxBalance?.free || 0) + (epwxBalance?.locked || 0));
+
+    if (!Number.isFinite(totalEpwx)) {
+      return;
+    }
+
+    if (this.initialEpwxBalance === null) {
+      this.initialEpwxBalance = totalEpwx;
+      this.currentPosition = 0;
+      logger.info(`📌 Position baseline initialized from EPWX balance: ${this.initialEpwxBalance.toFixed(0)}`);
+      return;
+    }
+
+    this.currentPosition = totalEpwx - this.initialEpwxBalance;
   }
 
   private settlePairedWashOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number, filledVolumeUSD: number): void {
