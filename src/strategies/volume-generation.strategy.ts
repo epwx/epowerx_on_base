@@ -337,6 +337,22 @@ export class VolumeGenerationStrategy {
       sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
 
+      const missingBuyOrders = Math.max(targetOrdersPerSide - buyOrders.length, 0);
+      const missingSellOrders = Math.max(targetOrdersPerSide - sellOrders.length, 0);
+      const missingTotalOrders = missingBuyOrders + missingSellOrders;
+      let buyPlacementCap = missingBuyOrders > 0 ? maxPlacementsPerCycle : 0;
+      let sellPlacementCap = missingSellOrders > 0 ? maxPlacementsPerCycle : 0;
+
+      if (missingBuyOrders > 0 && missingSellOrders > 0 && missingTotalOrders > 0) {
+        buyPlacementCap = Math.max(1, Math.floor((maxPlacementsPerCycle * missingBuyOrders) / missingTotalOrders));
+        sellPlacementCap = Math.max(1, maxPlacementsPerCycle - buyPlacementCap);
+      }
+
+      let buyPlacementsThisCycle = 0;
+      let sellPlacementsThisCycle = 0;
+      const hasBuyPlacementBudget = () => hasPlacementBudget() && buyPlacementsThisCycle < buyPlacementCap;
+      const hasSellPlacementBudget = () => hasPlacementBudget() && sellPlacementsThisCycle < sellPlacementCap;
+
       // --- Order Depth Logic ---
       // Place new buy orders if needed
       // Fetch available USDT balance
@@ -373,9 +389,12 @@ export class VolumeGenerationStrategy {
         let remaining = buyDepthShortfall;
         let supportBuysPlaced = 0;
         const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
-        while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasPlacementBudget()) {
+        while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasBuyPlacementBudget()) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
-          const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
+          const targetOrderUsd = Math.max(
+            this.getMinimumOrderUsdTarget(),
+            Math.min(safeOrderSizeUSD, remaining)
+          );
           let amount = targetOrderUsd / buyPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -394,6 +413,7 @@ export class VolumeGenerationStrategy {
             break;
           }
           placementsThisCycle++;
+          buyPlacementsThisCycle++;
           supportBuysPlaced++;
           remaining -= buyPrice * buyOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -407,7 +427,7 @@ export class VolumeGenerationStrategy {
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
-        while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasPlacementBudget()) {
+        while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const targetOrderUsd = Math.max(
             this.getMinimumOrderUsdTarget(),
@@ -431,6 +451,7 @@ export class VolumeGenerationStrategy {
             break;
           }
           placementsThisCycle++;
+          sellPlacementsThisCycle++;
           supportSellsPlaced++;
           remaining -= sellPrice * sellOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -443,11 +464,12 @@ export class VolumeGenerationStrategy {
       const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide && hasPlacementBudget()) {
+      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget()) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
-        for (let i = 0; i < needBuys && hasPlacementBudget(); i++) {
+        for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          let rawAmount = safeOrderSizeUSD / buyPrice;
+          const buyOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+          let rawAmount = buyOrderUsdTarget / buyPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth buy: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${buyPrice}`);
           if (!this.isValidOrderAmount(amount, buyPrice) || ((amount / this.stepSize) % 1 !== 0)) {
@@ -465,12 +487,13 @@ export class VolumeGenerationStrategy {
             break;
           }
           placementsThisCycle++;
+          buyPlacementsThisCycle++;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasPlacementBudget()) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget()) {
         const needSells = targetOrdersPerSide - sellOrders.length;
-        for (let i = 0; i < needSells && hasPlacementBudget(); i++) {
+        for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           const sellOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
           let rawAmount = sellOrderUsdTarget / sellPrice;
@@ -491,6 +514,7 @@ export class VolumeGenerationStrategy {
             break;
           }
           placementsThisCycle++;
+          sellPlacementsThisCycle++;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
