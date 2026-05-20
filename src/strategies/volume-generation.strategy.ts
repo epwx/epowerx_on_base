@@ -31,6 +31,7 @@ interface ProfitStats {
  * Generates trading volume on Biconomy Exchange using zero-fee MM account
  */
 export class VolumeGenerationStrategy {
+  private static readonly MIN_ORDER_NOTIONAL_USD = 5.01;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -93,6 +94,18 @@ export class VolumeGenerationStrategy {
     }
 
     return normalizedAmount;
+  }
+
+  private isValidOrderAmount(amount: number, price?: number): boolean {
+    if (!Number.isFinite(amount) || amount < this.minQty || amount === 0) {
+      return false;
+    }
+
+    if (price !== undefined && amount * price < VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD) {
+      return false;
+    }
+
+    return true;
   }
 
   async start(): Promise<void> {
@@ -345,23 +358,25 @@ export class VolumeGenerationStrategy {
         let remaining = buyDepthShortfall;
         while (remaining > 0) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
-          let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
-          amount = safeOrderSizeUSD / buyPrice;
+          const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
+          let amount = targetOrderUsd / buyPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
-          amount = Math.max(this.minQty, Math.min(100000, amount));
-          // Prevent zero or invalid amounts
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01 || amount === 0) {
-            logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          amount = Math.max(this.minQty, amount);
+          if (!this.isValidOrderAmount(amount, buyPrice)) {
+            logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < ${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD} USDT.`);
             break;
           }
           const buyOrderAmount = this.normalizeOrderAmount(amount);
-          if (buyOrderAmount === null) {
+          if (buyOrderAmount === null || !this.isValidOrderAmount(buyOrderAmount, buyPrice)) {
             logger.warn(`⚠️  Skipping depth buy order after normalization: amount=${amount}, minQty=${this.minQty}`);
             break;
           }
           logger.info(`🟢 Placing depth buy order: ${buyOrderAmount} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
-          await this.placeBuyOrder(buyPrice, buyOrderAmount);
-          remaining -= buyPrice * amount;
+          const buyOrderId = await this.placeBuyOrder(buyPrice, buyOrderAmount);
+          if (!buyOrderId) {
+            break;
+          }
+          remaining -= buyPrice * buyOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -373,22 +388,25 @@ export class VolumeGenerationStrategy {
         let remaining = sellDepthShortfall;
         while (remaining > 0) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
-          let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
-          amount = safeOrderSizeUSD / sellPrice;
+          const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
+          let amount = targetOrderUsd / sellPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
-          amount = Math.max(this.minQty, Math.min(100000, amount));
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
+          amount = Math.max(this.minQty, amount);
+          if (!this.isValidOrderAmount(amount, sellPrice)) {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
           const sellOrderAmount = this.normalizeOrderAmount(amount);
-          if (sellOrderAmount === null) {
+          if (sellOrderAmount === null || !this.isValidOrderAmount(sellOrderAmount, sellPrice)) {
             logger.warn(`⚠️  Skipping depth sell order after normalization: amount=${amount}, minQty=${this.minQty}`);
             break;
           }
           logger.info(`🔴 Placing depth sell order: ${sellOrderAmount} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
-          await this.placeSellOrder(sellPrice, sellOrderAmount);
-          remaining -= sellPrice * amount;
+          const sellOrderId = await this.placeSellOrder(sellPrice, sellOrderAmount, true);
+          if (!sellOrderId) {
+            break;
+          }
+          remaining -= sellPrice * sellOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -401,7 +419,7 @@ export class VolumeGenerationStrategy {
           let rawAmount = safeOrderSizeUSD / buyPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth buy: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${buyPrice}`);
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+          if (!this.isValidOrderAmount(amount, buyPrice) || ((amount / this.stepSize) % 1 !== 0)) {
             logger.warn(`⚠️  Skipping book-depth buy order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
@@ -422,7 +440,7 @@ export class VolumeGenerationStrategy {
           let rawAmount = safeOrderSizeUSD / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth sell: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${sellPrice}`);
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+          if (!this.isValidOrderAmount(amount, sellPrice) || ((amount / this.stepSize) % 1 !== 0)) {
             logger.warn(`⚠️  Skipping book-depth sell order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
@@ -446,7 +464,7 @@ export class VolumeGenerationStrategy {
         let rawAmount = safeOrderSizeUSD / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
         logger.info(`[ORDER DEBUG] Wash trade: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${matchPrice}`);
-        if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * matchPrice < 5.01 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+        if (!this.isValidOrderAmount(amount, matchPrice) || ((amount / this.stepSize) % 1 !== 0)) {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
           continue;
         }
@@ -472,8 +490,8 @@ export class VolumeGenerationStrategy {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let amount = safeOrderSizeUSD / sellPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
-          amount = Math.max(this.minQty, Math.min(100000, amount));
-          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
+          amount = Math.max(this.minQty, amount);
+          if (!this.isValidOrderAmount(amount, sellPrice)) {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
@@ -641,8 +659,8 @@ export class VolumeGenerationStrategy {
       logger.info(`🔄 Exact match wash trade: Buy & Sell ${amount.toFixed(4)} EPWX @ $${matchPrice.toExponential(4)}`);
       // Place buy and sell orders at the exact same price and size
       const normalizedAmount = this.normalizeOrderAmount(amount);
-      if (normalizedAmount === null || normalizedAmount * matchPrice < 5.01) {
-        logger.warn(`⚠️  Skipping exact match wash trade buy: amount (${amount}) * price (${matchPrice}) < minimum required for 5.01 USDT.`);
+      if (normalizedAmount === null || !this.isValidOrderAmount(normalizedAmount, matchPrice)) {
+        logger.warn(`⚠️  Skipping exact match wash trade buy: amount (${amount}) * price (${matchPrice}) < minimum required for ${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD} USDT.`);
         return;
       }
       await this.placeBuyOrder(matchPrice, normalizedAmount);
