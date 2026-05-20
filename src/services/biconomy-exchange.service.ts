@@ -208,10 +208,13 @@ export class BiconomyExchangeService {
   ): Promise<Order> {
     try {
       const path = type === 'LIMIT' ? '/api/v1/private/trade/limit' : '/api/v1/private/trade/market';
-      // Format amount - different exchanges have different precision requirements
-      // For EPWX (large quantities), use integers. For small amounts, use appropriate decimals.
-      const amountStr = amount >= 1 ? Math.floor(amount).toString() : amount.toFixed(8);
-      
+
+      // Enforce min order size and precision for EPWX
+      if (amount < 10) {
+        throw new Error(`Order amount (${amount}) is below min size (10 EPWX)`);
+      }
+      const amountStr = amount.toFixed(8);
+
       const params: any = {
         api_key: this.apiKey,
         market: symbol.replace('/', '_').toUpperCase(),
@@ -219,24 +222,11 @@ export class BiconomyExchangeService {
         amount: amountStr,
       };
 
-      if (type === 'LIMIT' && price) {
-        // For ultra-low prices, need more decimal places
-        // Detect how many decimals needed to represent the price accurately
-        let priceStr: string;
-        if (price < 0.00000001) {
-          // For very small prices, convert to fixed with enough decimals
-          // Find number of leading zeros after decimal point
-          const priceScientific = price.toExponential();
-          const exponent = parseInt(priceScientific.split('e')[1]);
-          const decimals = Math.abs(exponent) + 3; // Add extra digits for precision
-          priceStr = price.toFixed(decimals);
-        } else {
-          priceStr = price.toFixed(8);
-        }
+      if (type === 'LIMIT' && price !== undefined) {
+        const priceStr = price.toFixed(6); // 6 decimals for price
         params.price = priceStr;
         logger.info(`Placing ${side} order: amount=${amountStr}, price=${priceStr} (raw price=${price})`);
       } else if (type === 'MARKET') {
-        // Do NOT include price for MARKET orders
         logger.info(`Placing ${side} MARKET order: amount=${amountStr}`);
       }
 
