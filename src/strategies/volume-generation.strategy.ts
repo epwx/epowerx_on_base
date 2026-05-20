@@ -52,6 +52,8 @@ export class VolumeGenerationStrategy {
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
   private orderStatusIndex: number = 0;
+  private isPlacingOrders: boolean = false;
+  private lastPerformanceLogAt: number = 0;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -88,6 +90,8 @@ export class VolumeGenerationStrategy {
       logger.warn('Volume generation strategy is already running');
       return;
     }
+
+    this.isPlacingOrders = false;
 
     logger.info('🚀 Starting Biconomy Exchange Volume Generation Bot...');
     logger.info(`Target: $${config.volumeStrategy.volumeTargetDaily.toLocaleString()} daily volume`);
@@ -140,6 +144,10 @@ export class VolumeGenerationStrategy {
   }
 
   async stop(): Promise<void> {
+    if (!this.isRunning && !this.isPlacingOrders) {
+      return;
+    }
+
     logger.info('🛑 Stopping volume generation bot...');
     this.isRunning = false;
 
@@ -169,6 +177,10 @@ export class VolumeGenerationStrategy {
     
     this.orderTimer = setInterval(async () => {
       if (!this.isRunning) return;
+      if (this.isPlacingOrders) {
+        logger.warn('Skipping order placement tick because the previous cycle is still running');
+        return;
+      }
 
       try {
         logger.info('▶️  Calling placeVolumeOrders...');
@@ -194,6 +206,12 @@ export class VolumeGenerationStrategy {
   }
 
   private async placeVolumeOrders(): Promise<void> {
+    if (!this.isRunning) {
+      return;
+    }
+
+    this.isPlacingOrders = true;
+
     try {
       logger.info('🔄 Starting order placement cycle');
       logger.debug('DEBUG: Entered placeVolumeOrders');
@@ -457,6 +475,8 @@ export class VolumeGenerationStrategy {
       this.volumeStats.lastOrderTime = Date.now();
     } catch (error) {
       logger.error('💥 Unexpected error in placeVolumeOrders:', error);
+    } finally {
+      this.isPlacingOrders = false;
     }
   }
 
@@ -590,21 +610,27 @@ export class VolumeGenerationStrategy {
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
+      const normalizedAmount = Math.floor(amount);
+      if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
+        logger.warn(`⚠️  Skipping buy order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
+        return;
+      }
+
       // Check available USDT before placing order
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
       const availableUSDT = usdtBalance?.free || 0;
-      const orderValue = amount * price;
+      const orderValue = normalizedAmount * price;
       if (orderValue > availableUSDT) {
         logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
         return;
       }
-      logger.debug(`Attempting to place buy order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      logger.debug(`Attempting to place buy order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
         'BUY',
         'LIMIT',
-        amount,
+        normalizedAmount,
         price
       );
       if (!order) {
@@ -614,7 +640,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
       this.volumeStats.orderCount++;
-      logger.info(`✅ Buy order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+      logger.info(`✅ Buy order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
       await this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
@@ -626,6 +652,12 @@ export class VolumeGenerationStrategy {
 
   protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
+      const normalizedAmount = Math.floor(amount);
+      if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
+        logger.warn(`⚠️  Skipping sell order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
+        return;
+      }
+
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
@@ -642,16 +674,16 @@ export class VolumeGenerationStrategy {
         logger.warn(`⚠️  Skipping real user SELL order: total USD balance (${totalUSDT.toFixed(2)}) < $1000 and not market value order.`);
         return;
       }
-      if (amount > availableEPWX) {
-        logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
+      if (normalizedAmount > availableEPWX) {
+        logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
       }
-      logger.debug(`Attempting to place sell order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
+      logger.debug(`Attempting to place sell order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
         'SELL',
         'LIMIT',
-        amount,
+        normalizedAmount,
         price
       );
       if (!order) {
@@ -661,7 +693,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
       this.volumeStats.orderCount++;
-      logger.info(`✅ Sell order placed: ${Math.floor(amount).toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+      logger.info(`✅ Sell order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
       await this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
@@ -848,6 +880,12 @@ export class VolumeGenerationStrategy {
   }
 
   private logPerformance(): void {
+    const now = Date.now();
+    if (now - this.lastPerformanceLogAt < 60000) {
+      return;
+    }
+    this.lastPerformanceLogAt = now;
+
     const runTimeHours = (Date.now() - this.volumeStats.startTime) / (1000 * 60 * 60);
     const volumeRate = this.volumeStats.totalVolume / runTimeHours;
     const projectedDaily = volumeRate * 24;

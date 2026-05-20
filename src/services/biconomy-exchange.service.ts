@@ -135,6 +135,15 @@ export class BiconomyExchangeService {
     return (normalizedValue / scale).toFixed(decimals);
   }
 
+  private quantizeEpwxPrice(value: number, decimals: number): string {
+    const effectiveStep = 0.00000000000030;
+    const effectiveAnchor = 0.00000000008210;
+    const nearestStepCount = Math.max(0, Math.round((value - effectiveAnchor) / effectiveStep));
+    const quantizedValue = effectiveAnchor + nearestStepCount * effectiveStep;
+
+    return quantizedValue.toFixed(decimals);
+  }
+
   async getOrderBook(symbol: string): Promise<OrderBook> {
     try {
       const response = await this.client.get('/api/v1/depth', {
@@ -270,8 +279,14 @@ export class BiconomyExchangeService {
         }
 
         if (type === 'LIMIT' && price !== undefined) {
-          const tickFactor = market === 'EPWX_USDT' ? 10 : 1;
-          priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13, tickFactor);
+          if (market === 'EPWX_USDT') {
+            const decimals = (pairInfo.tickSize || '').includes('.')
+              ? (pairInfo.tickSize || '').split('.')[1].length
+              : pairInfo.quoteAssetPrecision ?? 13;
+            priceStr = this.quantizeEpwxPrice(price, decimals);
+          } else {
+            priceStr = this.floorToTickSize(price, pairInfo.tickSize || '', pairInfo.quoteAssetPrecision ?? 13);
+          }
         }
       } else {
         // Default: 8 decimals for amount, 6 for price
@@ -360,9 +375,8 @@ export class BiconomyExchangeService {
   }
 
   /**
-   * Cancel all orders for a symbol using Biconomy API v3
-   * POST /api/v3/trade/cancelOrder with { symbol }
-   * Returns number of cancelled orders (if available, else 0)
+   * Cancel all open orders for a symbol using the same per-order v1 flow that
+   * already works in the deployment prebuild script.
    */
   async cancelAllOrders(symbol: string): Promise<number> {
     try {
@@ -370,27 +384,22 @@ export class BiconomyExchangeService {
         throw new Error('Symbol is required for cancel all orders');
       }
 
-      // v3 endpoint expects JSON body, not form-data
-      const body = {
-        symbol: symbol.replace('/', '_').toUpperCase(),
-      };
-
-      // Attach API key/secret as headers or in the request as per your v3 auth (adjust if needed)
-      // If you need to sign, add signature logic here
-      const response = await this.client.post('/api/v3/trade/cancelOrder', body, {
-        headers: {
-          'Content-Type': 'application/json',
-          // Add API key header if required by your config
-        },
-      });
-
-      if (response.data.code !== 0) {
-        throw new Error(response.data.message || 'Failed to cancel all orders');
+      const openOrders = await this.getOpenOrders(symbol);
+      if (openOrders.length === 0) {
+        logger.info(`Cancelled all orders for ${symbol}`);
+        return 0;
       }
 
+      const market = symbol.replace('/', '_').toUpperCase();
+      const cancelled = await this.cancelOrdersBatch(
+        openOrders.map(order => ({
+          market,
+          order_id: order.orderId,
+        }))
+      );
+
       logger.info(`Cancelled all orders for ${symbol}`);
-      // v3 returns data: null for cancel all, so just return 0
-      return 0;
+      return cancelled;
     } catch (error) {
       logger.error('Failed to cancel all orders:', error);
       throw error;

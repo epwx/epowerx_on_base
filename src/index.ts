@@ -11,9 +11,15 @@ async function main() {
   logger.info('');
 
   const strategy = new VolumeGenerationStrategy();
+  let isShuttingDown = false;
 
   // Handle graceful shutdown
   const shutdown = async () => {
+    if (isShuttingDown) {
+      return;
+    }
+
+    isShuttingDown = true;
     logger.info('Received shutdown signal...');
     await strategy.stop();
     process.exit(0);
