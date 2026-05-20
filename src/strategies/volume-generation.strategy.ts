@@ -467,11 +467,11 @@ export class VolumeGenerationStrategy {
         } else {
           sellPrice = lastPrice * (1 + targetSpread + (i * 0.0001));
         }
-        const amount = safeOrderSizeUSD / sellPrice;
-        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        let amount = safeOrderSizeUSD / sellPrice;
         amount = Math.floor(amount); // Ensure integer amount for EPWX
+        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${amount} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
         await this.placeSellOrder(sellPrice, amount);
-        logger.info(`✅ Sell order placed: ${amount.toFixed(2)} EPWX @ ${sellPrice.toExponential(4)} [Source: ${priceSource}]`);
+        logger.info(`✅ Sell order placed: ${amount} EPWX @ ${sellPrice.toExponential(4)} [Source: ${priceSource}]`);
         await new Promise(resolve => setTimeout(resolve, 200));
       }
     } else {
