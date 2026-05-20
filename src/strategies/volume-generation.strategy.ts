@@ -1,4 +1,4 @@
-import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
+import { BiconomyExchangeService, Order, Trade } from '../services/biconomy-exchange.service';
 import { getEPWXPairInfo } from '../utils/exchange-info';
 import { logger } from '../utils/logger';
 import { config } from '../config';
@@ -49,6 +49,7 @@ export class VolumeGenerationStrategy {
   protected profitStats: ProfitStats;
   private activeOrders: Map<string, Order> = new Map();
   private orderPrices: Map<string, { side: string; price: number }> = new Map(); // Track original order prices for profit calculation
+  private processedTradeIds: Set<string> = new Set();
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
@@ -200,7 +201,11 @@ export class VolumeGenerationStrategy {
   }
 
   private startOrderPlacementLoop(): void {
-    logger.info(`📅 Order placement loop starting with frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    const effectiveOrderFrequency = Math.min(config.volumeStrategy.orderFrequency, 30000);
+    if (effectiveOrderFrequency !== config.volumeStrategy.orderFrequency) {
+      logger.warn(`⚠️  Capping order placement frequency from ${config.volumeStrategy.orderFrequency}ms to ${effectiveOrderFrequency}ms so book orders are refreshed before they disappear from pending.`);
+    }
+    logger.info(`📅 Order placement loop starting with frequency: ${effectiveOrderFrequency}ms`);
     
     this.orderTimer = setInterval(async () => {
       if (!this.isRunning) return;
@@ -215,7 +220,7 @@ export class VolumeGenerationStrategy {
       } catch (error) {
         logger.error('❌ Error in order placement loop:', error);
       }
-    }, config.volumeStrategy.orderFrequency);
+    }, effectiveOrderFrequency);
   }
 
   private startMonitoringLoop(): void {
@@ -784,18 +789,7 @@ export class VolumeGenerationStrategy {
       await new Promise(resolve => setTimeout(resolve, 1000));
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (trades && trades.length > 0) {
-        for (const trade of trades) {
-          // Log both buy and sell fills for diagnostics
-          logger.info(`🎯 Trade fill detected: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
-          // Update stats based on trade.side
-          this.volumeStats.totalVolume += trade.amount * trade.price;
-          if (trade.side === 'BUY') this.volumeStats.buyVolume += trade.amount * trade.price;
-          if (trade.side === 'SELL') this.volumeStats.sellVolume += trade.amount * trade.price;
-          if (isWashTrade) {
-            this.profitStats.washTrades++;
-            logger.info(`🔄 WASH TRADE FILL: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
-          }
-        }
+        this.recordTrades(trades, orderId, isWashTrade);
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
       }
@@ -897,6 +891,7 @@ export class VolumeGenerationStrategy {
           continue;
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
+          await this.captureTradesForCompletedOrder(orderId);
           logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
@@ -906,6 +901,55 @@ export class VolumeGenerationStrategy {
       }
       // Add a delay between each order status check to avoid rate limits
       await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+  }
+
+  private recordTrades(trades: Trade[], orderId: string, isWashTrade: boolean): void {
+    for (const trade of trades) {
+      if (this.processedTradeIds.has(trade.tradeId)) {
+        continue;
+      }
+
+      this.processedTradeIds.add(trade.tradeId);
+      logger.info(`🎯 Trade fill detected: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+
+      const volumeUSD = trade.amount * trade.price;
+      this.volumeStats.totalVolume += volumeUSD;
+      if (trade.side === 'BUY') {
+        this.volumeStats.buyVolume += volumeUSD;
+      }
+      if (trade.side === 'SELL') {
+        this.volumeStats.sellVolume += volumeUSD;
+      }
+
+      if (isWashTrade) {
+        this.profitStats.washTrades++;
+        logger.info(`🔄 WASH TRADE FILL: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+      }
+    }
+  }
+
+  private async captureTradesForCompletedOrder(orderId: string): Promise<void> {
+    try {
+      const trades = await this.exchange.getRecentTrades(this.symbol, 20, orderId);
+      if (!trades.length) {
+        return;
+      }
+
+      const trackedOrder = this.activeOrders.get(orderId);
+      const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
+      this.recordTrades(trades, orderId, isWashTrade);
+
+      if (trackedOrder) {
+        const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
+        if (trackedOrder.side === 'BUY') {
+          this.currentPosition += filledAmount;
+        } else {
+          this.currentPosition -= filledAmount;
+        }
+      }
+    } catch (error) {
+      logger.warn(`Could not fetch trades for completed order ${orderId}:`, error);
     }
   }
 
