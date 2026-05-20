@@ -356,7 +356,9 @@ export class VolumeGenerationStrategy {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in 98%-100% of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
-        while (remaining > 0) {
+        let supportBuysPlaced = 0;
+        const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
+        while (remaining > 0 && supportBuysPlaced < maxSupportBuys) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / buyPrice;
@@ -376,6 +378,7 @@ export class VolumeGenerationStrategy {
           if (!buyOrderId) {
             break;
           }
+          supportBuysPlaced++;
           remaining -= buyPrice * buyOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -386,7 +389,9 @@ export class VolumeGenerationStrategy {
       if (sellDepthShortfall > 0) {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% of Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
-        while (remaining > 0) {
+        let supportSellsPlaced = 0;
+        const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
+        while (remaining > 0 && supportSellsPlaced < maxSupportSells) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / sellPrice;
@@ -406,10 +411,15 @@ export class VolumeGenerationStrategy {
           if (!sellOrderId) {
             break;
           }
+          supportSellsPlaced++;
           remaining -= sellPrice * sellOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
+
+      openOrders = await this.exchange.getOpenOrders(this.symbol);
+      buyOrders = openOrders.filter(o => o.side === 'BUY');
+      sellOrders = openOrders.filter(o => o.side === 'SELL');
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
       if (buyOrders.length < targetOrdersPerSide) {
@@ -450,7 +460,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-          await this.placeSellOrder(sellPrice, bookSellAmount);
+          await this.placeSellOrder(sellPrice, bookSellAmount, true);
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -482,31 +492,6 @@ export class VolumeGenerationStrategy {
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      // Place new sell orders if needed
-      if (sellOrders.length < targetOrdersPerSide) {
-        const needSells = targetOrdersPerSide - sellOrders.length;
-        for (let i = 0; i < needSells; i++) {
-          // Place sell orders above reference price so they do not match instantly
-          const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          let amount = safeOrderSizeUSD / sellPrice;
-          amount = quantizeToStepSize(amount, this.stepSize);
-          amount = Math.max(this.minQty, amount);
-          if (!this.isValidOrderAmount(amount, sellPrice)) {
-            logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
-            break;
-          }
-          const sellOrderAmount = this.normalizeOrderAmount(amount);
-          if (sellOrderAmount === null) {
-            logger.warn(`⚠️  Skipping sell order after normalization: amount=${amount}, minQty=${this.minQty}`);
-            break;
-          }
-          logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${sellOrderAmount} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
-          // Mark book-depth sell orders as wash trades to bypass USD balance check
-          await this.placeSellOrder(sellPrice, sellOrderAmount, true);
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-      }
-
       // Final check: cancel excess orders after all placements (keep only newest 30 per side)
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
@@ -708,7 +693,7 @@ export class VolumeGenerationStrategy {
       logger.info(`✅ Buy order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
-      await this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
+      void this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
       return order.orderId;
     } catch (error) {
       logger.error('Error placing buy order:', error);
@@ -761,7 +746,7 @@ export class VolumeGenerationStrategy {
       logger.info(`✅ Sell order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
 
       // Poll for fills after placing order
-      await this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
+      void this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
       return order.orderId;
     } catch (error) {
       logger.error('Error placing sell order:', error);
