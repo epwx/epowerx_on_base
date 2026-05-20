@@ -1,4 +1,5 @@
 import { BiconomyExchangeService, Order } from '../services/biconomy-exchange.service';
+import { getEPWXPairInfo } from '../utils/exchange-info';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
@@ -39,6 +40,8 @@ export class VolumeGenerationStrategy {
   static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
   protected exchange: BiconomyExchangeService;
   private isRunning: boolean = false;
+  private stepSize: number = 1;
+  private minQty: number = 1;
   private symbol: string;
   private volumeStats: VolumeStats;
   protected profitStats: ProfitStats;
@@ -97,6 +100,15 @@ export class VolumeGenerationStrategy {
       logger.warn(`   To place orders every 5 seconds, set ORDER_FREQUENCY=5000 in your .env file`);
     }
 
+    // Fetch step size and minQty for EPWX/USDT
+    try {
+      const pairInfo = await getEPWXPairInfo();
+      if (pairInfo.stepSize) this.stepSize = Number(pairInfo.stepSize);
+      if (pairInfo.minQty) this.minQty = Number(pairInfo.minQty);
+      logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}`);
+    } catch (e) {
+      logger.warn('Could not fetch EPWX/USDT pair info, using defaults.');
+    }
     this.isRunning = true;
 
     try {
@@ -302,10 +314,11 @@ export class VolumeGenerationStrategy {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
           amount = safeOrderSizeUSD / buyPrice;
-          amount = Math.floor(amount); // For EPWX, step size is 1
-          amount = Math.max(10, Math.min(100000, amount));
+          // Round down to nearest step size
+          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = Math.max(this.minQty, Math.min(100000, amount));
           // If rounding caused amount to be 0 or not a valid float, skip
-          if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01) {
             logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             break;
           }
