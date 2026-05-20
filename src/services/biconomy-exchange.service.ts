@@ -209,11 +209,35 @@ export class BiconomyExchangeService {
     try {
       const path = type === 'LIMIT' ? '/api/v1/private/trade/limit' : '/api/v1/private/trade/market';
 
-      // Enforce min order size and precision for EPWX
-      if (amount < 10) {
-        throw new Error(`Order amount (${amount}) is below min size (10 EPWX)`);
+
+      // Strict formatting for EPWX/USDT
+      let amountStr: string;
+      let priceStr: string | undefined = undefined;
+      const isEPWX = symbol.replace('/', '_').toUpperCase() === 'EPWX_USDT';
+      if (isEPWX) {
+        // Step size is 1, so amount must be integer
+        if (!Number.isInteger(amount)) {
+          throw new Error(`EPWX/USDT: Amount (${amount}) must be integer (step size 1)`);
+        }
+        if (amount < 5) {
+          throw new Error(`EPWX/USDT: Amount (${amount}) is below minQty (5)`);
+        }
+        amountStr = amount.toFixed(0);
+        if (type === 'LIMIT' && price !== undefined) {
+          // Price must be multiple of 0.0000000000001, up to 13 decimals
+          const quantizedPrice = Math.floor(price / 0.0000000000001) * 0.0000000000001;
+          priceStr = quantizedPrice.toFixed(13);
+        }
+      } else {
+        // Default: 8 decimals for amount, 6 for price
+        if (amount < 10) {
+          throw new Error(`Order amount (${amount}) is below min size (10)`);
+        }
+        amountStr = amount.toFixed(8);
+        if (type === 'LIMIT' && price !== undefined) {
+          priceStr = price.toFixed(6);
+        }
       }
-      const amountStr = amount.toFixed(8);
 
       const params: any = {
         api_key: this.apiKey,
@@ -222,8 +246,7 @@ export class BiconomyExchangeService {
         amount: amountStr,
       };
 
-      if (type === 'LIMIT' && price !== undefined) {
-        const priceStr = price.toFixed(6); // 6 decimals for price
+      if (type === 'LIMIT' && priceStr !== undefined) {
         params.price = priceStr;
         logger.info(`Placing ${side} order: amount=${amountStr}, price=${priceStr} (raw price=${price})`);
       } else if (type === 'MARKET') {
