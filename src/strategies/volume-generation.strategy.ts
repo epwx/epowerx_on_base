@@ -798,7 +798,7 @@ export class VolumeGenerationStrategy {
       await new Promise(resolve => setTimeout(resolve, 1000));
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (trades && trades.length > 0) {
-        this.recordTrades(trades, orderId, isWashTrade);
+        this.recordTrades(trades, orderId, isWashTrade, side);
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
       }
@@ -913,27 +913,37 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private recordTrades(trades: Trade[], orderId: string, isWashTrade: boolean): void {
+  private recordTrades(trades: Trade[], orderId: string, isWashTrade: boolean, orderSide?: 'BUY' | 'SELL'): void {
+    const trackedOrderSide = orderSide
+      ?? this.activeOrders.get(orderId)?.side
+      ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined);
+
     for (const trade of trades) {
       if (this.processedTradeIds.has(trade.tradeId)) {
         continue;
       }
 
       this.processedTradeIds.add(trade.tradeId);
-      logger.info(`🎯 Trade fill detected: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+      const effectiveSide = trackedOrderSide ?? trade.side;
+
+      if (trackedOrderSide && trade.side !== trackedOrderSide) {
+        logger.debug(`Trade ${trade.tradeId} side ${trade.side} differs from tracked order ${orderId} side ${trackedOrderSide}; using tracked order side for accounting.`);
+      }
+
+      logger.info(`🎯 Trade fill detected: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
 
       const volumeUSD = trade.amount * trade.price;
       this.volumeStats.totalVolume += volumeUSD;
-      if (trade.side === 'BUY') {
+      if (effectiveSide === 'BUY') {
         this.volumeStats.buyVolume += volumeUSD;
       }
-      if (trade.side === 'SELL') {
+      if (effectiveSide === 'SELL') {
         this.volumeStats.sellVolume += volumeUSD;
       }
 
       if (isWashTrade) {
         this.profitStats.washTrades++;
-        logger.info(`🔄 WASH TRADE FILL: ${trade.side} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+        logger.info(`🔄 WASH TRADE FILL: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
       }
     }
   }
@@ -947,7 +957,7 @@ export class VolumeGenerationStrategy {
 
       const trackedOrder = this.activeOrders.get(orderId);
       const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
-      this.recordTrades(trades, orderId, isWashTrade);
+      this.recordTrades(trades, orderId, isWashTrade, trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined));
 
       if (trackedOrder) {
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);

@@ -338,6 +338,37 @@ describe('Wash trading logic', () => {
     expect(strategy.getVolumeStats().totalVolume).toBe(5);
     expect(strategy.getVolumeStats().buyVolume).toBe(5);
   });
+
+  it('should use tracked order side when trade payload side disagrees', async () => {
+    const strategy = new WashTestStrategy();
+    const volumeStats = strategy.getVolumeStats();
+    volumeStats.totalVolume = 0;
+    volumeStats.buyVolume = 0;
+    volumeStats.sellVolume = 0;
+    strategy.setVolumeStats(volumeStats);
+
+    (strategy as any).activeOrders.set('sell-order-1', {
+      orderId: 'sell-order-1',
+      symbol: 'EPWX/USDT',
+      side: 'SELL',
+      type: 'LIMIT',
+      price: 1,
+      amount: 5,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    (strategy as any).recordTrades([
+      { tradeId: 't-mismatch', orderId: 'sell-order-1', side: 'BUY', amount: 5, price: 1, timestamp: Date.now(), fee: 0 }
+    ], 'sell-order-1', true);
+
+    expect(strategy.getVolumeStats().totalVolume).toBe(5);
+    expect(strategy.getVolumeStats().buyVolume).toBe(0);
+    expect(strategy.getVolumeStats().sellVolume).toBe(5);
+    expect(strategy.getProfitStats().washTrades).toBe(1);
+  });
 });
 describe('MM account balance < $1000 order execution', () => {
   class TestMMStrategy extends VolumeGenerationStrategy {
