@@ -1,9 +1,29 @@
 import { VolumeGenerationStrategy } from './strategies/volume-generation.strategy';
 import { logger } from './utils/logger';
 import { config } from './config';
+import { execSync } from 'child_process';
+import path from 'path';
 
-const BUILD_MARKER = 'build-e38bfba-marker';
-const RUNTIME_GIT_SHA = process.env.RUNTIME_GIT_SHA || 'unknown';
+function resolveRuntimeGitSha(): string {
+  if (process.env.RUNTIME_GIT_SHA) {
+    return process.env.RUNTIME_GIT_SHA;
+  }
+
+  try {
+    return execSync('git rev-parse --short HEAD', {
+      cwd: path.resolve(__dirname, '..'),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+const RUNTIME_GIT_SHA = resolveRuntimeGitSha();
+const BUILD_MARKER = RUNTIME_GIT_SHA === 'unknown'
+  ? 'build-unknown-marker'
+  : `build-${RUNTIME_GIT_SHA}-marker`;
 
 async function main() {
   logger.info('');
