@@ -356,11 +356,11 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys; i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          let amount = safeOrderSizeUSD / buyPrice;
-          amount = Math.floor(amount); // For EPWX, step size is 1
-          amount = Math.max(10, Math.min(100000, amount));
-          if (!Number.isFinite(amount) || amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
-            logger.warn(`⚠️  Skipping book-depth buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          let rawAmount = safeOrderSizeUSD / buyPrice;
+          let amount = quantizeToStepSize(rawAmount, this.stepSize);
+          logger.info(`[ORDER DEBUG] Book-depth buy: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${buyPrice}`);
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+            logger.warn(`⚠️  Skipping book-depth buy order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toFixed(6)} [Book Depth]`);
@@ -372,11 +372,11 @@ export class VolumeGenerationStrategy {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells; i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          let amount = safeOrderSizeUSD / sellPrice;
-          amount = Math.floor(amount); // For EPWX, step size is 1
-          amount = Math.max(10, Math.min(100000, amount));
-          if (!Number.isFinite(amount) || amount < 10 || amount > 100000) {
-            logger.warn(`⚠️  Skipping book-depth sell order: invalid amount (${amount})`);
+          let rawAmount = safeOrderSizeUSD / sellPrice;
+          let amount = quantizeToStepSize(rawAmount, this.stepSize);
+          logger.info(`[ORDER DEBUG] Book-depth sell: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${sellPrice}`);
+          if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+            logger.warn(`⚠️  Skipping book-depth sell order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
           logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount} EPWX @ ${sellPrice.toFixed(6)} [Book Depth]`);
@@ -391,11 +391,11 @@ export class VolumeGenerationStrategy {
       this.washTradePairsActive = [];
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
-        let amount = safeOrderSizeUSD / matchPrice;
-        amount = quantizeToStepSize(amount, this.stepSize);
-        amount = Math.max(this.minQty, Math.min(100000, amount));
-        if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * matchPrice < 5.01 || amount === 0) {
-          logger.warn(`⚠️  Skipping wash trade buy/sell: invalid amount (${amount}) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
+        let rawAmount = safeOrderSizeUSD / matchPrice;
+        let amount = quantizeToStepSize(rawAmount, this.stepSize);
+        logger.info(`[ORDER DEBUG] Wash trade: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${matchPrice}`);
+        if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * matchPrice < 5.01 || amount === 0 || ((amount / this.stepSize) % 1 !== 0)) {
+          logger.warn(`⚠️  Skipping wash trade buy/sell: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
           continue;
         }
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toFixed(6)} [Wash Trade]`);
