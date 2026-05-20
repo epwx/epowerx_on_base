@@ -301,9 +301,9 @@ export class VolumeGenerationStrategy {
         while (remaining > 0) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
-          amount = parseFloat(amount.toFixed(8)); // 8 decimals for EPWX
-          if (amount < 10 || amount * buyPrice < 5.01) {
-            logger.warn(`⚠️  Skipping buy order: amount (${amount}) < min (10) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
+          if (amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping buy order: amount (${amount}) not in [10, 100000] or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             break;
           }
           logger.info(`🟢 Placing depth buy order: ${amount} EPWX @ ${buyPrice.toFixed(6)} (98%-100% of Mid-Price)`);
@@ -321,9 +321,9 @@ export class VolumeGenerationStrategy {
         while (remaining > 0) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
-          amount = parseFloat(amount.toFixed(8));
-          if (amount < 10) {
-            logger.warn(`⚠️  Skipping sell order: amount (${amount}) < min (10)`);
+          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
+          if (amount < 10 || amount > 100000) {
+            logger.warn(`⚠️  Skipping sell order: amount (${amount}) not in [10, 100000]`);
             break;
           }
           logger.info(`🔴 Placing depth sell order: ${amount} EPWX @ ${sellPrice.toFixed(6)} (100%-102% of Mid-Price)`);
@@ -339,9 +339,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needBuys; i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
           let amount = safeOrderSizeUSD / buyPrice;
-          amount = parseFloat(amount.toFixed(8));
-          if (amount < 10 || amount * buyPrice < 5.01) {
-            logger.warn(`⚠️  Skipping book-depth buy order: amount (${amount}) < min (10) or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
+          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
+          if (amount < 10 || amount > 100000 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping book-depth buy order: amount (${amount}) not in [10, 100000] or amount * price (${amount * buyPrice}) < 5.01 USDT.`);
             continue;
           }
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toFixed(6)} [Book Depth]`);
@@ -354,9 +354,9 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells; i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let amount = safeOrderSizeUSD / sellPrice;
-          amount = parseFloat(amount.toFixed(8));
-          if (amount < 10) {
-            logger.warn(`⚠️  Skipping book-depth sell order: amount (${amount}) < min (10)`);
+          amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
+          if (amount < 10 || amount > 100000) {
+            logger.warn(`⚠️  Skipping book-depth sell order: amount (${amount}) not in [10, 100000]`);
             continue;
           }
           logger.info(`💰 [${i+1}/${needSells}] Placing book-depth sell order: ${amount} EPWX @ ${sellPrice.toFixed(6)} [Book Depth]`);
@@ -372,9 +372,9 @@ export class VolumeGenerationStrategy {
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
         let amount = safeOrderSizeUSD / matchPrice;
-        amount = parseFloat(amount.toFixed(8));
-        if (amount < 10 || amount * matchPrice < 5.01) {
-          logger.warn(`⚠️  Skipping wash trade buy/sell: amount (${amount}) < min (10) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
+        amount = Math.max(10, Math.min(100000, parseFloat(amount.toFixed(8))));
+        if (amount < 10 || amount > 100000 || amount * matchPrice < 5.01) {
+          logger.warn(`⚠️  Skipping wash trade buy/sell: amount (${amount}) not in [10, 100000] or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
           continue;
         }
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toFixed(6)} [Wash Trade]`);
