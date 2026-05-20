@@ -3,6 +3,7 @@ import { getEPWXPairInfo } from '../utils/exchange-info';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
+import { quantizeToStepSize } from '../utils/quantize';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
 interface VolumeStats {
@@ -314,8 +315,7 @@ export class VolumeGenerationStrategy {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
           amount = safeOrderSizeUSD / buyPrice;
-          // Round down to nearest step size
-          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, Math.min(100000, amount));
           // Prevent zero or invalid amounts
           if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * buyPrice < 5.01 || amount === 0) {
@@ -338,8 +338,7 @@ export class VolumeGenerationStrategy {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / sellPrice;
           amount = safeOrderSizeUSD / sellPrice;
-          // Round down to nearest step size
-          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, Math.min(100000, amount));
           if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
@@ -393,7 +392,7 @@ export class VolumeGenerationStrategy {
       for (let i = 0; i < washTradePairs; i++) {
         const matchPrice = priceReference;
         let amount = safeOrderSizeUSD / matchPrice;
-        amount = Math.floor(amount / this.stepSize) * this.stepSize;
+        amount = quantizeToStepSize(amount, this.stepSize);
         amount = Math.max(this.minQty, Math.min(100000, amount));
         if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount * matchPrice < 5.01 || amount === 0) {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid amount (${amount}) or amount * price (${amount * matchPrice}) < 5.01 USDT.`);
@@ -415,7 +414,7 @@ export class VolumeGenerationStrategy {
           // Place sell orders above reference price so they do not match instantly
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let amount = safeOrderSizeUSD / sellPrice;
-          amount = Math.floor(amount / this.stepSize) * this.stepSize;
+          amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, Math.min(100000, amount));
           if (!Number.isFinite(amount) || amount < this.minQty || amount > 100000 || amount === 0) {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
