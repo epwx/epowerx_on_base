@@ -294,6 +294,12 @@ export class VolumeGenerationStrategy {
 
       // Place and maintain at least 30 buy and 30 sell orders in the order book
       const targetOrdersPerSide = 30;
+      const maxPlacementsPerCycle = Math.max(
+        8,
+        Math.min(targetOrdersPerSide, Math.floor(config.volumeStrategy.orderFrequency / 4000))
+      );
+      let placementsThisCycle = 0;
+      const hasPlacementBudget = () => placementsThisCycle < maxPlacementsPerCycle;
       // Always cleanup excess orders at the start of the cycle
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
@@ -358,7 +364,7 @@ export class VolumeGenerationStrategy {
         let remaining = buyDepthShortfall;
         let supportBuysPlaced = 0;
         const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
-        while (remaining > 0 && supportBuysPlaced < maxSupportBuys) {
+        while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasPlacementBudget()) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / buyPrice;
@@ -378,6 +384,7 @@ export class VolumeGenerationStrategy {
           if (!buyOrderId) {
             break;
           }
+          placementsThisCycle++;
           supportBuysPlaced++;
           remaining -= buyPrice * buyOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -391,7 +398,7 @@ export class VolumeGenerationStrategy {
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
-        while (remaining > 0 && supportSellsPlaced < maxSupportSells) {
+        while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasPlacementBudget()) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const targetOrderUsd = Math.min(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / sellPrice;
@@ -411,6 +418,7 @@ export class VolumeGenerationStrategy {
           if (!sellOrderId) {
             break;
           }
+          placementsThisCycle++;
           supportSellsPlaced++;
           remaining -= sellPrice * sellOrderAmount;
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -420,11 +428,12 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
+      const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide) {
+      if (buyOrders.length < targetOrdersPerSide && hasPlacementBudget()) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
-        for (let i = 0; i < needBuys; i++) {
+        for (let i = 0; i < needBuys && hasPlacementBudget(); i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
           let rawAmount = safeOrderSizeUSD / buyPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
@@ -439,13 +448,17 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needBuys}] Placing book-depth buy order: ${bookBuyAmount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
-          await this.placeBuyOrder(buyPrice, bookBuyAmount);
+          const bookBuyOrderId = await this.placeBuyOrder(buyPrice, bookBuyAmount);
+          if (!bookBuyOrderId) {
+            break;
+          }
+          placementsThisCycle++;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide) {
+      if (sellOrders.length < targetOrdersPerSide && hasPlacementBudget()) {
         const needSells = targetOrdersPerSide - sellOrders.length;
-        for (let i = 0; i < needSells; i++) {
+        for (let i = 0; i < needSells && hasPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           let rawAmount = safeOrderSizeUSD / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
@@ -460,7 +473,11 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-          await this.placeSellOrder(sellPrice, bookSellAmount, true);
+          const bookSellOrderId = await this.placeSellOrder(sellPrice, bookSellAmount, true);
+          if (!bookSellOrderId) {
+            break;
+          }
+          placementsThisCycle++;
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
@@ -469,7 +486,10 @@ export class VolumeGenerationStrategy {
       const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
       // Track wash trade pairs for reliable fill detection
       this.washTradePairsActive = [];
-      for (let i = 0; i < washTradePairs; i++) {
+      if (!bookSeeded) {
+        logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
+      }
+      for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
         const matchPrice = priceReference;
         let rawAmount = safeOrderSizeUSD / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
@@ -487,10 +507,14 @@ export class VolumeGenerationStrategy {
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
         const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
         if (buyOrderId && sellOrderId) {
+          placementsThisCycle += 2;
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${amount.toFixed(2)} EPWX)`);
         }
         await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!hasPlacementBudget()) {
+        logger.info(`⏭️  Placement budget reached for this cycle (${placementsThisCycle}/${maxPlacementsPerCycle}); remaining depth will be added next cycle.`);
       }
       // Final check: cancel excess orders after all placements (keep only newest 30 per side)
       openOrders = await this.exchange.getOpenOrders(this.symbol);
