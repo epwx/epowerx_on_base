@@ -5,7 +5,7 @@
 # Run this script whenever you push new code to update the live bot
 ###############################################################################
 
-set -e
+set -euo pipefail
 
 echo "🔄 Updating EPWX Biconomy MM Bot..."
 echo ""
@@ -13,24 +13,40 @@ echo ""
 # Navigate to app directory
 cd ~/epowerx_on_base
 
+APP_ENTRY="$PWD/dist/index.js"
+BUILD_MARKER="build-e38bfba-marker"
+
 # Pull latest code
 echo "📥 Pulling latest code from GitHub..."
-git pull origin main
+git pull --ff-only origin main
 echo "🔖 Current commit: $(git rev-parse HEAD)"
 
 # Install any new dependencies
 echo "📦 Installing dependencies..."
 npm install
 
+# Remove stale build output before recompiling
+echo "🧹 Cleaning dist/..."
+rm -rf dist
+
 # Build project
 echo "🔨 Building TypeScript..."
 npm run build
 
+echo "🧪 Verifying compiled build marker..."
+if ! grep -R "$BUILD_MARKER" dist >/dev/null 2>&1; then
+	echo "❌ Expected build marker '$BUILD_MARKER' not found in dist/. Aborting restart."
+	exit 1
+fi
+echo "✅ Build marker present in compiled output"
+
 # Restart bot
-echo "♻️  Restarting bot..."
-pm2 restart epwx-bot
-echo "📍 PM2 script path:"
-pm2 describe epwx-bot | grep "script path"
+echo "♻️  Recreating PM2 process..."
+pm2 delete epwx-bot >/dev/null 2>&1 || true
+pm2 start "$APP_ENTRY" --name epwx-bot --time --update-env
+pm2 save
+echo "📍 PM2 runtime info:"
+pm2 describe epwx-bot | grep -E "script path|exec cwd"
 
 # Show status
 echo ""

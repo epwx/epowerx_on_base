@@ -125,6 +125,8 @@ echo ""
 echo "Step 8: Build Project"
 echo "----------------------------------------"
 print_info "Building TypeScript project..."
+print_info "Cleaning dist/ before build..."
+rm -rf dist
 npm run build
 print_success "Project built successfully"
 echo ""
@@ -154,7 +156,8 @@ echo ""
 echo "Step 10: Configure PM2"
 echo "----------------------------------------"
 print_info "Starting bot with PM2..."
-pm2 start dist/index.js --name epwx-bot --time
+pm2 delete epwx-bot >/dev/null 2>&1 || true
+pm2 start "$PWD/dist/index.js" --name epwx-bot --time --update-env
 pm2 save
 print_success "Bot started with PM2"
 echo ""
