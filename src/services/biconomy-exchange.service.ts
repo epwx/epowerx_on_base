@@ -453,8 +453,15 @@ export class BiconomyExchangeService {
         timestamp: data.ctime * 1000,
         fee: 0,
       };
-    } catch (error) {
-      logger.error(`Failed to get order ${orderId}:`, error);
+    } catch (error: any) {
+      const message = error?.message || 'Failed to get order';
+
+      if (message.includes('Order not found or already completed')) {
+        logger.info(`Order ${orderId} is no longer pending on the exchange.`);
+      } else {
+        logger.error(`Failed to get order ${orderId}:`, error);
+      }
+
       throw error;
     }
   }
