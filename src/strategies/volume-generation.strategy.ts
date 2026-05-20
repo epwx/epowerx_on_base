@@ -302,9 +302,8 @@ export class VolumeGenerationStrategy {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
           let amount = Math.min(safeOrderSizeUSD, remaining) / buyPrice;
           amount = Math.floor(amount); // Ensure integer amount for EPWX
-          const minAmount = Math.ceil(7 / buyPrice);
-          if (amount < minAmount || amount === 0) {
-            logger.warn(`⚠️  Skipping buy order: amount (${amount}) < minimum required for 7 USDT (${minAmount}) at price ${buyPrice}.`);
+          if (amount === 0 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping buy order: amount (${amount}) * price (${buyPrice}) < minimum required for 5.01 USDT.`);
             break;
           }
           logger.info(`🟢 Placing depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} (98%-100% of Mid-Price)`);
@@ -337,9 +336,8 @@ export class VolumeGenerationStrategy {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
           let amount = safeOrderSizeUSD / buyPrice;
           amount = Math.floor(amount); // Ensure integer amount for EPWX
-          const minAmount = Math.ceil(7 / buyPrice);
-          if (amount < minAmount || amount === 0) {
-            logger.warn(`⚠️  Skipping book-depth buy order: amount (${amount}) < minimum required for 7 USDT (${minAmount}) at price ${buyPrice}.`);
+          if (amount === 0 || amount * buyPrice < 5.01) {
+            logger.warn(`⚠️  Skipping book-depth buy order: amount (${amount}) * price (${buyPrice}) < minimum required for 5.01 USDT.`);
             continue;
           }
           logger.info(`🛒 [${i+1}/${needBuys}] Placing book-depth buy order: ${amount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
@@ -367,9 +365,8 @@ export class VolumeGenerationStrategy {
         const matchPrice = priceReference;
         let amount = safeOrderSizeUSD / matchPrice;
         amount = Math.floor(amount); // Ensure integer amount for EPWX
-        const minAmount = Math.ceil(7 / matchPrice);
-        if (amount < minAmount || amount === 0) {
-          logger.warn(`⚠️  Skipping wash trade buy/sell: amount (${amount}) < minimum required for 7 USDT (${minAmount}) at price ${matchPrice}.`);
+        if (amount === 0 || amount * matchPrice < 5.01) {
+          logger.warn(`⚠️  Skipping wash trade buy/sell: amount (${amount}) * price (${matchPrice}) < minimum required for 5.01 USDT.`);
           continue;
         }
         logger.info(`🛒 [Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${amount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
@@ -537,9 +534,8 @@ export class VolumeGenerationStrategy {
       logger.info(`🔄 Exact match wash trade: Buy & Sell ${amount.toFixed(4)} EPWX @ $${matchPrice.toExponential(4)}`);
       // Place buy and sell orders at the exact same price and size
       amount = Math.floor(amount); // Ensure integer amount for EPWX
-      const minAmount = Math.ceil(7 / matchPrice);
-      if (amount < minAmount || amount === 0) {
-        logger.warn(`⚠️  Skipping exact match wash trade buy: amount (${amount}) < minimum required for 7 USDT (${minAmount}) at price ${matchPrice}.`);
+      if (amount === 0 || amount * matchPrice < 5.01) {
+        logger.warn(`⚠️  Skipping exact match wash trade buy: amount (${amount}) * price (${matchPrice}) < minimum required for 5.01 USDT.`);
         return;
       }
       await this.placeBuyOrder(matchPrice, amount);
