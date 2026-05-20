@@ -1,6 +1,8 @@
 // ...existing code...
 import axios, { AxiosInstance } from 'axios';
 import crypto from 'crypto';
+import { execSync } from 'child_process';
+import path from 'path';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { getEPWXPairInfo, PairInfo } from '../utils/exchange-info';
@@ -60,7 +62,26 @@ export class BiconomyExchangeService {
   private apiKey: string;
   private apiSecret: string;
   private epwxPairInfo?: PairInfo;
-  private static readonly BUILD_MARKER = 'build-e38bfba-marker';
+  private static readonly BUILD_MARKER = BiconomyExchangeService.resolveBuildMarker();
+
+  private static resolveBuildMarker(): string {
+    const runtimeSha = process.env.RUNTIME_GIT_SHA;
+    if (runtimeSha) {
+      return `build-${runtimeSha}-marker`;
+    }
+
+    try {
+      const gitSha = execSync('git rev-parse --short HEAD', {
+        cwd: path.resolve(__dirname, '..', '..'),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+
+      return `build-${gitSha}-marker`;
+    } catch {
+      return 'build-unknown-marker';
+    }
+  }
 
   constructor() {
     this.apiKey = config.biconomyExchange.apiKey;

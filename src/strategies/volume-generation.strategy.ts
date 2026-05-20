@@ -50,6 +50,8 @@ export class VolumeGenerationStrategy {
   private activeOrders: Map<string, Order> = new Map();
   private orderPrices: Map<string, { side: string; price: number }> = new Map(); // Track original order prices for profit calculation
   private processedTradeIds: Set<string> = new Set();
+  private positionAdjustedOrderIds: Set<string> = new Set();
+  private settledWashOrderIds: Set<string> = new Set();
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private currentPosition: number = 0;
@@ -521,8 +523,9 @@ export class VolumeGenerationStrategy {
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
       const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
-      // Track wash trade pairs for reliable fill detection
-      this.washTradePairsActive = [];
+      this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
+        !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
+      );
       if (!bookSeeded) {
         logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
       }
@@ -823,6 +826,12 @@ export class VolumeGenerationStrategy {
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (trades && trades.length > 0) {
         this.recordTrades(trades, orderId, isWashTrade, side);
+        const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
+        const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
+        this.applyPositionForFilledOrder(orderId, side, filledAmount);
+        if (isWashTrade) {
+          this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
+        }
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
       }
@@ -972,6 +981,53 @@ export class VolumeGenerationStrategy {
     }
   }
 
+  private applyPositionForFilledOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number): void {
+    if (this.positionAdjustedOrderIds.has(orderId) || filledAmount <= 0) {
+      return;
+    }
+
+    if (side === 'BUY') {
+      this.currentPosition += filledAmount;
+    } else {
+      this.currentPosition -= filledAmount;
+    }
+
+    this.positionAdjustedOrderIds.add(orderId);
+  }
+
+  private settlePairedWashOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number, filledVolumeUSD: number): void {
+    const pair = this.washTradePairsActive.find(candidate =>
+      candidate.buyOrderId === orderId || candidate.sellOrderId === orderId
+    );
+
+    if (!pair) {
+      return;
+    }
+
+    const counterpartOrderId = pair.buyOrderId === orderId ? pair.sellOrderId : pair.buyOrderId;
+    const counterpartSide: 'BUY' | 'SELL' = side === 'BUY' ? 'SELL' : 'BUY';
+
+    if (this.settledWashOrderIds.has(counterpartOrderId)) {
+      return;
+    }
+
+    this.volumeStats.totalVolume += filledVolumeUSD;
+    if (counterpartSide === 'BUY') {
+      this.volumeStats.buyVolume += filledVolumeUSD;
+    } else {
+      this.volumeStats.sellVolume += filledVolumeUSD;
+    }
+
+    this.applyPositionForFilledOrder(counterpartOrderId, counterpartSide, filledAmount);
+    this.settledWashOrderIds.add(orderId);
+    this.settledWashOrderIds.add(counterpartOrderId);
+    this.activeOrders.delete(counterpartOrderId);
+    this.orderPrices.delete(counterpartOrderId);
+    this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
+
+    logger.info(`🔁 Settled paired wash ${counterpartSide} leg for ${counterpartOrderId} after ${side} fill on ${orderId}.`);
+  }
+
   private async captureTradesForCompletedOrder(orderId: string): Promise<void> {
     try {
       const trades = await this.exchange.getRecentTrades(this.symbol, 20, orderId);
@@ -981,14 +1037,15 @@ export class VolumeGenerationStrategy {
 
       const trackedOrder = this.activeOrders.get(orderId);
       const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
-      this.recordTrades(trades, orderId, isWashTrade, trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined));
+      const trackedOrderSide = trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined);
+      this.recordTrades(trades, orderId, isWashTrade, trackedOrderSide);
 
-      if (trackedOrder) {
+      if (trackedOrderSide) {
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
-        if (trackedOrder.side === 'BUY') {
-          this.currentPosition += filledAmount;
-        } else {
-          this.currentPosition -= filledAmount;
+        const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
+        this.applyPositionForFilledOrder(orderId, trackedOrderSide, filledAmount);
+        if (isWashTrade) {
+          this.settlePairedWashOrder(orderId, trackedOrderSide, filledAmount, filledVolumeUSD);
         }
       }
     } catch (error) {
