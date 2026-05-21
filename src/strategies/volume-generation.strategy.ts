@@ -116,6 +116,20 @@ export class VolumeGenerationStrategy {
     return VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD + 0.25;
   }
 
+  private getDynamicOrderUsdTarget(baseUsd: number, remainingUsd?: number): number {
+    const minimumUsd = this.getMinimumOrderUsdTarget();
+    const safeBaseUsd = Math.max(baseUsd, minimumUsd);
+    const lowerBoundUsd = Math.max(minimumUsd, safeBaseUsd * 0.82);
+    const upperBoundUsd = Math.max(lowerBoundUsd, safeBaseUsd * 1.18);
+    const randomizedUsd = lowerBoundUsd + (Math.random() * (upperBoundUsd - lowerBoundUsd));
+
+    if (remainingUsd === undefined) {
+      return randomizedUsd;
+    }
+
+    return Math.min(randomizedUsd, Math.max(minimumUsd, remainingUsd));
+  }
+
   async start(): Promise<void> {
     if (this.isRunning) {
       logger.warn('Volume generation strategy is already running');
@@ -396,10 +410,7 @@ export class VolumeGenerationStrategy {
         const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
         while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasBuyPlacementBudget()) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
-          const targetOrderUsd = Math.max(
-            this.getMinimumOrderUsdTarget(),
-            Math.min(safeOrderSizeUSD, remaining)
-          );
+          const targetOrderUsd = this.getDynamicOrderUsdTarget(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / buyPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -434,10 +445,7 @@ export class VolumeGenerationStrategy {
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
-          const targetOrderUsd = Math.max(
-            this.getMinimumOrderUsdTarget(),
-            Math.min(safeOrderSizeUSD, remaining)
-          );
+          const targetOrderUsd = this.getDynamicOrderUsdTarget(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / sellPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -473,7 +481,7 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          const buyOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+          const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
           let rawAmount = buyOrderUsdTarget / buyPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth buy: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${buyPrice}`);
@@ -500,7 +508,7 @@ export class VolumeGenerationStrategy {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const sellOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+          const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
           let rawAmount = sellOrderUsdTarget / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth sell: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${sellPrice}`);
@@ -534,7 +542,7 @@ export class VolumeGenerationStrategy {
       }
       for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
         const matchPrice = priceReference;
-        const washOrderUsdTarget = Math.max(safeOrderSizeUSD, this.getMinimumOrderUsdTarget());
+        const washOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
         logger.info(`[ORDER DEBUG] Wash trade: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${matchPrice}`);
@@ -630,13 +638,14 @@ export class VolumeGenerationStrategy {
         } else {
           buyPrice = lastPrice * (1 - targetSpread - (i * 0.0001));
         }
-        const amount = safeOrderSizeUSD / buyPrice;
+        const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
+        const amount = buyOrderUsdTarget / buyPrice;
         const normalizedBuyAmount = this.normalizeOrderAmount(amount);
         if (normalizedBuyAmount === null) {
           logger.warn(`⚠️  Skipping fillOrderBook buy after normalization: amount=${amount}, minQty=${this.minQty}`);
           continue;
         }
-        logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${normalizedBuyAmount} EPWX @ ${buyPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        logger.info(`🛒 [${i+1}/${needBuys}] Placing buy order: ${normalizedBuyAmount} EPWX @ ${buyPrice.toExponential(4)} (~$${buyOrderUsdTarget.toFixed(2)}) [Source: ${priceSource}]`);
         await this.placeBuyOrder(buyPrice, normalizedBuyAmount);
         await new Promise(resolve => setTimeout(resolve, 200));
       }
@@ -653,13 +662,14 @@ export class VolumeGenerationStrategy {
         } else {
           sellPrice = lastPrice * (1 + targetSpread + (i * 0.0001));
         }
-        let amount = safeOrderSizeUSD / sellPrice;
+        const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
+        let amount = sellOrderUsdTarget / sellPrice;
         const normalizedSellAmount = this.normalizeOrderAmount(amount);
         if (normalizedSellAmount === null) {
           logger.warn(`⚠️  Skipping fillOrderBook sell after normalization: amount=${amount}, minQty=${this.minQty}`);
           continue;
         }
-        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${normalizedSellAmount} EPWX @ ${sellPrice.toExponential(4)} (~$${safeOrderSizeUSD.toFixed(2)}) [Source: ${priceSource}]`);
+        logger.info(`💰 [${i+1}/${needSells}] Placing sell order: ${normalizedSellAmount} EPWX @ ${sellPrice.toExponential(4)} (~$${sellOrderUsdTarget.toFixed(2)}) [Source: ${priceSource}]`);
         await this.placeSellOrder(sellPrice, normalizedSellAmount);
         logger.info(`✅ Sell order placed: ${normalizedSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Source: ${priceSource}]`);
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -696,7 +706,7 @@ export class VolumeGenerationStrategy {
       }
 
       // Determine the maximum possible size for both buy and sell (in EPWX)
-      const maxUSD = Math.min(availableUSDT, 5);
+      const maxUSD = this.getDynamicOrderUsdTarget(Math.min(availableUSDT, 5));
       let amount = maxUSD / matchPrice;
       if (amount > availableEPWX) {
         amount = availableEPWX;

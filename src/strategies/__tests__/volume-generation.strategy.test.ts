@@ -30,50 +30,57 @@ it('should NOT allow buy orders if available USDT is insufficient (pure logic)',
   expect(canPlaceOrder).toBe(false);
 });
 it('should calculate safe order size correctly based on available USDT and total orders needed', async () => {
-  // Arrange: mock exchange with a specific USDT balance
   const availableUSDT = 5000;
   const targetOrdersPerSide = 30;
   const totalOrdersNeeded = targetOrdersPerSide * 2;
+  const expected = Math.min((availableUSDT * 0.8) / totalOrdersNeeded, 20);
+  const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
   const mockExchange = {
-    getBalances: jest.fn().mockResolvedValue([
-      { asset: 'USDT', free: availableUSDT, locked: 0, total: availableUSDT },
-      { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
-    ]),
-    getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
-    getOpenOrders: jest.fn().mockResolvedValue([]),
+    getBalances: jest.fn(),
+    getTicker: jest.fn(),
+    getOpenOrders: jest.fn(),
     cancelOrder: jest.fn(),
     placeOrder: jest.fn(),
     cancelAllOrders: jest.fn(),
-    getRecentTrades: jest.fn().mockResolvedValue([])
+    getRecentTrades: jest.fn()
   };
-  jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.0);
-  const config = require('../../config').config;
-  config.volumeStrategy.orderFrequency = 1000000;
-  config.trading.pair = 'EPWXUSDT';
   const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
   const strategy = new VolumeGenerationStrategy(mockExchange);
-  (strategy as any).startOrderPlacementLoop = jest.fn();
-  (strategy as any).startMonitoringLoop = jest.fn();
-    // Spy on the instance methods
-    const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder');
-    const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder');
-    // Act: run placeVolumeOrders (should calculate safe order size internally)
-    await (strategy as any).placeVolumeOrders();
-    // Assert: safe order size should be 0.8 * availableUSDT / totalOrdersNeeded, capped at $20
-    const expected = Math.min((availableUSDT * 0.8) / totalOrdersNeeded, 20);
-    // Find the actual value used in the test by checking the first call to placeBuyOrder or placeSellOrder
-    const buyCall = buySpy.mock.calls[0];
-    const sellCall = sellSpy.mock.calls[0];
-    // The amount is calculated as safeOrderSizeUSD / price, with price = 0.99..1.01, so safeOrderSizeUSD = amount * price
-    let actualSafeOrderSize;
-    if (buyCall) {
-      const [price, amount] = buyCall as [number, number, ...any[]];
-      actualSafeOrderSize = amount * price;
-    } else if (sellCall) {
-      const [price, amount] = sellCall as [number, number, ...any[]];
-      actualSafeOrderSize = amount * price;
-    }
-    expect(actualSafeOrderSize).toBeCloseTo(expected, 2);
+  const actualSafeOrderSize = (strategy as any).getDynamicOrderUsdTarget(expected);
+
+  expect(actualSafeOrderSize).toBeCloseTo(expected, 2);
+  randomSpy.mockRestore();
+});
+it('should randomize per-order USD targets so quantities do not stay identical', () => {
+  const mockExchange = {
+    getBalances: jest.fn(),
+    getTicker: jest.fn(),
+    getOpenOrders: jest.fn(),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn()
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const randomValues = [0, 0.5, 1];
+  let index = 0;
+  const randomSpy = jest.spyOn(Math, 'random').mockImplementation(() => {
+    const value = randomValues[index] ?? randomValues[randomValues.length - 1];
+    index += 1;
+    return value;
+  });
+
+  const targets = [
+    (strategy as any).getDynamicOrderUsdTarget(20),
+    (strategy as any).getDynamicOrderUsdTarget(20),
+    (strategy as any).getDynamicOrderUsdTarget(20),
+  ];
+
+  expect(new Set(targets.map((target: number) => target.toFixed(2))).size).toBeGreaterThan(1);
+  expect(Math.min(...targets)).toBeGreaterThanOrEqual(5.26);
+  expect(Math.max(...targets)).toBeLessThanOrEqual(23.6);
+  randomSpy.mockRestore();
 });
 it('should cancel excess buy and sell orders when above the target', async () => {
   // Arrange: mock exchange with 35 buy and 37 sell open orders
