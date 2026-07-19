@@ -565,6 +565,7 @@ export class VolumeGenerationStrategy {
           `⚖️  Sell-side imbalance guard active: openBook=${buyOrders.length} buys/${sellOrders.length} sells; prioritizing buy placements this cycle.`
         );
       }
+      let shouldPrioritizeBuysForDepth = shouldPrioritizeBuys;
 
       let buyPlacementsThisCycle = 0;
       let sellPlacementsThisCycle = 0;
@@ -624,7 +625,7 @@ export class VolumeGenerationStrategy {
           }
         }
 
-        if (hasSellPlacementBudget() && !shouldPrioritizeBuys) {
+        if (hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
           const sellTouchPrice = executableBestBid;
           const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
@@ -644,6 +645,19 @@ export class VolumeGenerationStrategy {
           buyOrders = openOrders.filter(o => o.side === 'BUY');
           sellOrders = openOrders.filter(o => o.side === 'SELL');
           logger.info(`📌 After top-touch orders: ${buyOrders.length} buys, ${sellOrders.length} sells`);
+
+          const sellBuyGapAfterTopTouch = sellOrders.length - buyOrders.length;
+          const sellToBuyRatioAfterTopTouch = sellOrders.length / Math.max(buyOrders.length, 1);
+          const shouldPrioritizeBuysAfterTopTouch =
+            sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
+            sellToBuyRatioAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO;
+
+          if (shouldPrioritizeBuysAfterTopTouch && !shouldPrioritizeBuysForDepth) {
+            shouldPrioritizeBuysForDepth = true;
+            logger.warn(
+              `⚖️  Sell-side imbalance guard activated after top-touch refresh: openBook=${buyOrders.length} buys/${sellOrders.length} sells; suppressing additional sell placements this cycle.`
+            );
+          }
         }
       }
 
@@ -703,12 +717,12 @@ export class VolumeGenerationStrategy {
       // Place additional sell orders if needed to reach 200 USDT depth (business requirement)
       let sellDepthShortfall = 200 - sellDepth;
       if (sellDepthShortfall > 0) {
-        if (shouldPrioritizeBuys) {
+        if (shouldPrioritizeBuysForDepth) {
           logger.info('⏭️  Skipping depth sell additions this cycle because buy-side replenishment is prioritized.');
         }
       }
 
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuys) {
+      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% of Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
@@ -774,7 +788,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuys) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
