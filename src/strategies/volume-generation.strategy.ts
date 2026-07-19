@@ -156,16 +156,21 @@ export class VolumeGenerationStrategy {
       .join(' | ');
   }
 
-  private async logExecutableBookSnapshot(referencePrice: number, tickerBid: number, tickerAsk: number): Promise<void> {
+  private async logExecutableBookSnapshot(
+    referencePrice: number,
+    tickerBid: number,
+    tickerAsk: number
+  ): Promise<{ bestBid: number; bestAsk: number; midPrice: number } | null> {
     const exchangeWithBook = this.exchange as any;
     if (typeof exchangeWithBook.getOrderBook !== 'function') {
-      return;
+      return null;
     }
 
     try {
       const orderBook = await exchangeWithBook.getOrderBook(this.symbol);
       const bestBid = orderBook.bids[0]?.[0] ?? 0;
       const bestAsk = orderBook.asks[0]?.[0] ?? 0;
+      const midPrice = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : 0;
       const spread = bestBid > 0 && bestAsk > 0 ? ((bestAsk - bestBid) / bestBid) * 100 : 0;
 
       logger.info(
@@ -174,8 +179,10 @@ export class VolumeGenerationStrategy {
       logger.info(
         `📚 [EXEC BOOK] bids: ${this.formatTopBookLevels(orderBook.bids)} | asks: ${this.formatTopBookLevels(orderBook.asks)}`
       );
+      return { bestBid, bestAsk, midPrice };
     } catch (error) {
       logger.warn('⚠️  Failed to fetch executable order book snapshot for diagnostics:', error);
+      return null;
     }
   }
 
@@ -434,16 +441,24 @@ export class VolumeGenerationStrategy {
         logger.error('❌ Failed to fetch Biconomy market price:', error);
       }
 
-      await this.logExecutableBookSnapshot(lastPrice, biconomyBid, biconomyAsk);
+      const executableBookSnapshot = await this.logExecutableBookSnapshot(lastPrice, biconomyBid, biconomyAsk);
+      const executableMidPrice = executableBookSnapshot?.midPrice ?? 0;
 
       // Compare DEX and Biconomy price
-      // Always use DEX price as reference for wash trade
-      let priceReference = lastPrice;
-      let priceSource = 'DEX';
+      // Keep DEX as wash reference, but use executable book mid for placements when available.
+      const washPriceReference = lastPrice;
+      const priceReference = executableMidPrice > 0 ? executableMidPrice : lastPrice;
+
+      if (executableMidPrice > 0) {
+        logger.info(`🎯 Using executable orderbook mid-price for placements: ${executableMidPrice.toExponential(4)} (wash reference remains DEX ${washPriceReference.toExponential(4)})`);
+      } else {
+        logger.warn(`⚠️  Executable orderbook mid unavailable, using DEX price for placements: ${washPriceReference.toExponential(4)}`);
+      }
+
       logger.info('Using DEX price as reference for all wash trades.');
       const hasValidBiconomyReference = Number.isFinite(biconomyPrice) && biconomyPrice > 0;
       const dexCexDriftPercent = hasValidBiconomyReference
-        ? (Math.abs(priceReference - biconomyPrice) / biconomyPrice) * 100
+        ? (Math.abs(washPriceReference - biconomyPrice) / biconomyPrice) * 100
         : 0;
       const maxDexCexDriftPercent = Math.max(config.volumeStrategy.maxDexCexDriftPercent, 0);
       const canRunWashTradesByDrift =
@@ -728,7 +743,7 @@ export class VolumeGenerationStrategy {
         logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
       }
       for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
-        const matchPrice = priceReference;
+        const matchPrice = washPriceReference;
         const washOrderUsdTarget = this.getDynamicOrderUsdTarget(washSafeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
