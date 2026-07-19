@@ -1285,6 +1285,12 @@ export class VolumeGenerationStrategy {
           this.orderPrices.delete(orderId);
         }
       } catch (error: any) {
+        if (error.message && error.message.includes('Service is not available')) {
+          logger.warn(`Exchange service temporarily unavailable while checking order ${orderId}. Retrying on next cycle.`);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          backoff = Math.min(backoff * 2, 15000); // Exponential backoff up to 15s
+          continue;
+        }
         if (error.response && error.response.status === 429) {
           logger.warn('Rate limit hit (429). Backing off...');
           await new Promise(resolve => setTimeout(resolve, backoff));
