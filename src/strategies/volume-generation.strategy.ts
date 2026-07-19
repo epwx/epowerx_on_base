@@ -34,6 +34,7 @@ export class VolumeGenerationStrategy {
   private static readonly MIN_ORDER_NOTIONAL_USD = 5.01;
   private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
   private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
+  private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -445,14 +446,28 @@ export class VolumeGenerationStrategy {
 
       const executableBookSnapshot = await this.logExecutableBookSnapshot(lastPrice, biconomyBid, biconomyAsk);
       const executableMidPrice = executableBookSnapshot?.midPrice ?? 0;
+      const executableBestBid = executableBookSnapshot?.bestBid ?? 0;
+      const executableBestAsk = executableBookSnapshot?.bestAsk ?? 0;
+      const executableSpreadPercent =
+        executableBestBid > 0 && executableBestAsk > 0
+          ? ((executableBestAsk - executableBestBid) / executableBestBid) * 100
+          : Infinity;
+      const executableMidUsable =
+        executableMidPrice > 0 &&
+        Number.isFinite(executableSpreadPercent) &&
+        executableSpreadPercent <= VolumeGenerationStrategy.MAX_EXECUTABLE_SPREAD_PERCENT;
 
       // Compare DEX and Biconomy price
       // Keep DEX as wash reference, but use executable book mid for placements when available.
       const washPriceReference = lastPrice;
-      const priceReference = executableMidPrice > 0 ? executableMidPrice : lastPrice;
+      const priceReference = executableMidUsable ? executableMidPrice : lastPrice;
 
-      if (executableMidPrice > 0) {
+      if (executableMidUsable) {
         logger.info(`🎯 Using executable orderbook mid-price for placements: ${executableMidPrice.toExponential(4)} (wash reference remains DEX ${washPriceReference.toExponential(4)})`);
+      } else if (executableMidPrice > 0) {
+        logger.warn(
+          `⚠️  Executable orderbook spread too wide (${executableSpreadPercent.toFixed(2)}%), using DEX price for placements: ${washPriceReference.toExponential(4)}`
+        );
       } else {
         logger.warn(`⚠️  Executable orderbook mid unavailable, using DEX price for placements: ${washPriceReference.toExponential(4)}`);
       }
@@ -493,9 +508,7 @@ export class VolumeGenerationStrategy {
         Math.max(maxPlacementsPerCycle - 2, 0)
       );
       const bookPlacementBudget = Math.max(maxPlacementsPerCycle - washReservedPlacements, 2);
-      const executableBestBid = executableBookSnapshot?.bestBid ?? 0;
-      const executableBestAsk = executableBookSnapshot?.bestAsk ?? 0;
-      const hasExecutableTouchLevels = executableBestBid > 0 && executableBestAsk > 0;
+      const hasExecutableTouchLevels = executableMidUsable && executableBestBid > 0 && executableBestAsk > 0;
       let placementsThisCycle = 0;
       const hasPlacementBudget = () => placementsThisCycle < maxPlacementsPerCycle;
       // Always cleanup excess orders at the start of the cycle
@@ -1078,18 +1091,6 @@ export class VolumeGenerationStrategy {
       const balances = await this.exchange.getBalances();
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableEPWX = epwxBalance?.free || 0;
-      // Check total USD balance (free + locked)
-      const usdtBalance = balances.find(b => b.asset === 'USDT');
-      const totalUSDT = (usdtBalance?.free || 0) + (usdtBalance?.locked || 0);
-      // If not a wash trade and not a market value order, skip if total USD < 1000
-      // Assume market value order means price is within 0.5% of current market price
-      const ticker = await this.exchange.getTicker(this.symbol);
-      const marketPrice = ticker.price;
-      const isMarketValueOrder = Math.abs(price - marketPrice) / marketPrice < 0.005;
-      if (!isWashTrade && !isMarketValueOrder && totalUSDT < 1000) {
-        logger.warn(`⚠️  Skipping real user SELL order: total USD balance (${totalUSDT.toFixed(2)}) < $1000 and not market value order.`);
-        return;
-      }
       if (normalizedAmount > availableEPWX) {
         logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
