@@ -134,6 +134,26 @@ export class VolumeGenerationStrategy {
     return VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD + 0.25;
   }
 
+  private getEffectiveOrderUsdCap(availableUsd: number): number {
+    const minimumUsd = this.getMinimumOrderUsdTarget();
+    const configuredMaxUsd = Math.max(config.volumeStrategy.maxOrderSize, minimumUsd);
+    const balanceDrivenCapUsd = Math.min(Math.max(availableUsd * 0.1, minimumUsd), 100);
+
+    return Math.max(configuredMaxUsd, balanceDrivenCapUsd);
+  }
+
+  private getBalanceAwareOrderUsdTarget(
+    availableUsd: number,
+    targetOrderCount: number,
+    utilizationPercent: number = 0.92
+  ): number {
+    const minimumUsd = this.getMinimumOrderUsdTarget();
+    const budgetUsd = (Math.max(availableUsd, 0) * Math.min(Math.max(utilizationPercent, 0), 1)) / Math.max(targetOrderCount, 1);
+    const cappedUsd = Math.min(budgetUsd, this.getEffectiveOrderUsdCap(availableUsd));
+
+    return Math.max(minimumUsd, cappedUsd);
+  }
+
   private getDynamicOrderUsdTarget(baseUsd: number, remainingUsd?: number): number {
     const minimumUsd = this.getMinimumOrderUsdTarget();
     const safeBaseUsd = Math.max(baseUsd, minimumUsd);
@@ -583,8 +603,8 @@ export class VolumeGenerationStrategy {
       const availableUSDT = usdtBalance?.free || 0;
       const availableEPWX = epwxBalance?.free || 0;
       const availableSellUsd = availableEPWX * priceReference;
-      const buySafeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(targetOrdersPerSide, 1), 20);
-      const sellSafeOrderSizeUSD = Math.min(availableSellUsd * 0.8 / Math.max(targetOrdersPerSide, 1), 20);
+      const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, 0.92);
+      const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, 0.92);
       const washOrderSizeCapUsd = Math.max(config.volumeStrategy.washOrderSizeCapUsd, this.getMinimumOrderUsdTarget());
       const washSafeOrderSizeUSD = Math.min(
         Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD),
@@ -610,7 +630,10 @@ export class VolumeGenerationStrategy {
       if (hasExecutableTouchLevels) {
         const topTouchBaseUsd = Math.max(
           this.getMinimumOrderUsdTarget(),
-          Math.min(Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD), 8)
+          Math.min(
+            Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD),
+            this.getEffectiveOrderUsdCap(Math.min(availableUSDT, availableSellUsd))
+          )
         );
 
         if (hasBuyPlacementBudget()) {
@@ -950,8 +973,8 @@ export class VolumeGenerationStrategy {
     }
     
     // Calculate side-specific safe order size from current balances
-    const buySafeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(needBuys, 1), 10);
-    const sellSafeOrderSizeUSD = Math.min(availableSellUsd * 0.8 / Math.max(needSells, 1), 10);
+    const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, Math.max(needBuys, 1), 0.92);
+    const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, Math.max(needSells, 1), 0.92);
     logger.info(
       `🔧 Calculated balance-aware order sizes: BUY ~$${buySafeOrderSizeUSD.toFixed(2)} (USDT), SELL ~$${sellSafeOrderSizeUSD.toFixed(2)} (EPWX) per order`
     );
