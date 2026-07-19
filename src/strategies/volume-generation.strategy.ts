@@ -94,11 +94,39 @@ export class VolumeGenerationStrategy {
     };
   }
 
-  private applyOrderAmountCap(amount: number, context: string): number {
+  private getBalanceUtilizationPercent(): number {
+    return Math.min(Math.max(config.volumeStrategy.balanceUtilizationPercent, 0), 1);
+  }
+
+  private getIdleBalanceReserveUsd(): number {
+    return Math.max(config.volumeStrategy.idleBalanceReserveUsd, 0);
+  }
+
+  private getAdaptiveOrderAmountCap(price?: number, availableUsd?: number): number {
+    const configuredTokenCap = Math.floor(config.volumeStrategy.maxOrderAmountTokens);
+    const minimumTokenCap = Math.max(this.minQty, configuredTokenCap);
+
+    if (!Number.isFinite(price) || !price || price <= 0) {
+      return minimumTokenCap;
+    }
+
+    const minimumUsd = this.getMinimumOrderUsdTarget();
+    const configuredNotionalUsd = Math.max(config.volumeStrategy.maxOrderSize, minimumUsd);
+    const reserveAdjustedUsd = Number.isFinite(availableUsd)
+      ? Math.max((availableUsd ?? 0) - this.getIdleBalanceReserveUsd(), minimumUsd)
+      : configuredNotionalUsd;
+    const targetUsd = Math.max(configuredNotionalUsd, reserveAdjustedUsd * this.getBalanceUtilizationPercent());
+    const dynamicTokenCap = Math.floor(targetUsd / price);
+
+    return Math.max(minimumTokenCap, dynamicTokenCap, this.minQty);
+  }
+
+  private applyOrderAmountCap(amount: number, context: string, price?: number, availableUsd?: number): number {
     const configuredCap = Math.floor(config.volumeStrategy.maxOrderAmountTokens);
-    const cap = Number.isFinite(configuredCap) && configuredCap >= this.minQty
-      ? configuredCap
-      : this.minQty;
+    const cap = Math.max(
+      Number.isFinite(configuredCap) && configuredCap >= this.minQty ? configuredCap : this.minQty,
+      this.getAdaptiveOrderAmountCap(price, availableUsd)
+    );
 
     if (amount > cap) {
       logger.warn(`⚠️  Capping ${context} order amount from ${amount} to ${cap} EPWX (MAX_ORDER_AMOUNT_TOKENS)`);
@@ -108,8 +136,8 @@ export class VolumeGenerationStrategy {
     return amount;
   }
 
-  private normalizeOrderAmount(amount: number): number | null {
-    const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'normalized');
+  private normalizeOrderAmount(amount: number, price?: number, availableUsd?: number): number | null {
+    const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'normalized', price, availableUsd);
 
     if (!Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
       return null;
@@ -603,8 +631,8 @@ export class VolumeGenerationStrategy {
       const availableUSDT = usdtBalance?.free || 0;
       const availableEPWX = epwxBalance?.free || 0;
       const availableSellUsd = availableEPWX * priceReference;
-      const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, 0.92);
-      const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, 0.92);
+      const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
+      const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const washOrderSizeCapUsd = Math.max(config.volumeStrategy.washOrderSizeCapUsd, this.getMinimumOrderUsdTarget());
       const washSafeOrderSizeUSD = Math.min(
         Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD),
@@ -640,7 +668,7 @@ export class VolumeGenerationStrategy {
           const buyTouchPrice = executableBestAsk;
           const buyTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const buyTouchRawAmount = buyTouchUsd / buyTouchPrice;
-          const buyTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(buyTouchRawAmount, this.stepSize));
+          const buyTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(buyTouchRawAmount, this.stepSize), buyTouchPrice, availableUSDT);
           if (buyTouchAmount !== null && this.isValidOrderAmount(buyTouchAmount, buyTouchPrice)) {
             logger.info(`🎯 Placing top-touch BUY: ${buyTouchAmount} EPWX @ ${buyTouchPrice.toExponential(4)} (bestAsk)`);
             const topTouchBuyOrderId = await this.placeBuyOrder(buyTouchPrice, buyTouchAmount);
@@ -655,7 +683,7 @@ export class VolumeGenerationStrategy {
           const sellTouchPrice = executableBestBid;
           const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
-          const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize));
+          const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize), sellTouchPrice, availableSellUsd);
           if (sellTouchAmount !== null && this.isValidOrderAmount(sellTouchAmount, sellTouchPrice)) {
             logger.info(`🎯 Placing top-touch SELL: ${sellTouchAmount} EPWX @ ${sellTouchPrice.toExponential(4)} (bestBid)`);
             const topTouchSellOrderId = await this.placeSellOrder(sellTouchPrice, sellTouchAmount);
@@ -725,7 +753,7 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping buy order: invalid amount (${amount}) or amount * price (${amount * buyPrice}) < ${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD} USDT.`);
             break;
           }
-          const buyOrderAmount = this.normalizeOrderAmount(amount);
+          const buyOrderAmount = this.normalizeOrderAmount(amount, buyPrice, availableUSDT);
           if (buyOrderAmount === null || !this.isValidOrderAmount(buyOrderAmount, buyPrice)) {
             logger.warn(`⚠️  Skipping depth buy order after normalization: amount=${amount}, minQty=${this.minQty}`);
             break;
@@ -775,7 +803,7 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping sell order: invalid amount (${amount})`);
             break;
           }
-          const sellOrderAmount = this.normalizeOrderAmount(amount);
+          const sellOrderAmount = this.normalizeOrderAmount(amount, sellPrice, availableSellUsd);
           if (sellOrderAmount === null || !this.isValidOrderAmount(sellOrderAmount, sellPrice)) {
             logger.warn(`⚠️  Skipping depth sell order after normalization: amount=${amount}, minQty=${this.minQty}`);
             break;
@@ -811,7 +839,7 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping book-depth buy order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
-          const bookBuyAmount = this.normalizeOrderAmount(amount);
+          const bookBuyAmount = this.normalizeOrderAmount(amount, buyPrice, availableUSDT);
           if (bookBuyAmount === null) {
             logger.warn(`⚠️  Skipping book-depth buy after normalization: amount=${amount}, minQty=${this.minQty}`);
             continue;
@@ -847,7 +875,7 @@ export class VolumeGenerationStrategy {
             logger.warn(`⚠️  Skipping book-depth sell order: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
             continue;
           }
-          const bookSellAmount = this.normalizeOrderAmount(amount);
+          const bookSellAmount = this.normalizeOrderAmount(amount, sellPrice, availableSellUsd);
           if (bookSellAmount === null) {
             logger.warn(`⚠️  Skipping book-depth sell after normalization: amount=${amount}, minQty=${this.minQty}`);
             continue;
@@ -898,7 +926,7 @@ export class VolumeGenerationStrategy {
           logger.warn(`⚠️  Skipping wash trade buy/sell: invalid quantized amount (${amount}), raw (${rawAmount}), stepSize=${this.stepSize}, minQty=${this.minQty}`);
           continue;
         }
-        const washAmount = this.normalizeOrderAmount(amount);
+        const washAmount = this.normalizeOrderAmount(amount, matchPrice, Math.min(availableUSDT, availableEPWX * matchPrice));
         if (washAmount === null) {
           logger.warn(`⚠️  Skipping wash trade after normalization: amount=${amount}, minQty=${this.minQty}`);
           continue;
@@ -1090,16 +1118,16 @@ export class VolumeGenerationStrategy {
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
-      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'BUY');
+      // Check available USDT before placing order
+      const balances = await this.exchange.getBalances();
+      const usdtBalance = balances.find(b => b.asset === 'USDT');
+      const availableUSDT = usdtBalance?.free || 0;
+      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'BUY', price, availableUSDT);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping buy order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
       }
 
-      // Check available USDT before placing order
-      const balances = await this.exchange.getBalances();
-      const usdtBalance = balances.find(b => b.asset === 'USDT');
-      const availableUSDT = usdtBalance?.free || 0;
       const orderValue = normalizedAmount * price;
       if (orderValue > availableUSDT) {
         logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
@@ -1142,16 +1170,16 @@ export class VolumeGenerationStrategy {
 
   protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
-      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'SELL');
+      // Check available EPWX before placing order
+      const balances = await this.exchange.getBalances();
+      const epwxBalance = balances.find(b => b.asset === 'EPWX');
+      const availableEPWX = epwxBalance?.free || 0;
+      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'SELL', price, availableEPWX * price);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping sell order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
       }
 
-      // Check available EPWX before placing order
-      const balances = await this.exchange.getBalances();
-      const epwxBalance = balances.find(b => b.asset === 'EPWX');
-      const availableEPWX = epwxBalance?.free || 0;
       if (normalizedAmount > availableEPWX) {
         logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
