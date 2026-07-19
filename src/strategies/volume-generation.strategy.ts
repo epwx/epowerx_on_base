@@ -32,6 +32,8 @@ interface ProfitStats {
  */
 export class VolumeGenerationStrategy {
   private static readonly MIN_ORDER_NOTIONAL_USD = 5.01;
+  private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
+  private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -533,6 +535,22 @@ export class VolumeGenerationStrategy {
       if (missingBuyOrders > 0 && missingSellOrders > 0 && missingTotalOrders > 0) {
         buyPlacementCap = Math.max(1, Math.floor((bookPlacementBudget * missingBuyOrders) / missingTotalOrders));
         sellPlacementCap = Math.max(1, bookPlacementBudget - buyPlacementCap);
+      }
+
+      const sellBuyGap = sellOrders.length - buyOrders.length;
+      const sellToBuyRatio = sellOrders.length / Math.max(buyOrders.length, 1);
+      const shouldPrioritizeBuys =
+        sellBuyGap >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
+        sellToBuyRatio >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO;
+
+      if (shouldPrioritizeBuys) {
+        sellPlacementCap = 0;
+        if (missingBuyOrders > 0) {
+          buyPlacementCap = Math.max(buyPlacementCap, bookPlacementBudget);
+        }
+        logger.warn(
+          `⚖️  Sell-side imbalance guard active: openBook=${buyOrders.length} buys/${sellOrders.length} sells; prioritizing buy placements this cycle.`
+        );
       }
 
       let buyPlacementsThisCycle = 0;
@@ -1221,8 +1239,10 @@ export class VolumeGenerationStrategy {
           continue;
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
-          await this.logOrderDisappearance(orderId);
-          await this.captureTradesForCompletedOrder(orderId);
+          const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
+          if (!capturedAnyTrade) {
+            await this.logOrderDisappearance(orderId);
+          }
           logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
@@ -1336,11 +1356,11 @@ export class VolumeGenerationStrategy {
     logger.info(`🔁 Settled paired wash ${counterpartSide} leg for ${counterpartOrderId} after ${side} fill on ${orderId}.`);
   }
 
-  private async captureTradesForCompletedOrder(orderId: string): Promise<void> {
+  private async captureTradesForCompletedOrder(orderId: string): Promise<boolean> {
     try {
       const trades = await this.exchange.getRecentTrades(this.symbol, 20, orderId);
       if (!trades.length) {
-        return;
+        return false;
       }
 
       const trackedOrder = this.activeOrders.get(orderId);
@@ -1356,8 +1376,11 @@ export class VolumeGenerationStrategy {
           this.settlePairedWashOrder(orderId, trackedOrderSide, filledAmount, filledVolumeUSD);
         }
       }
+
+      return true;
     } catch (error) {
       logger.warn(`Could not fetch trades for completed order ${orderId}:`, error);
+      return false;
     }
   }
 
