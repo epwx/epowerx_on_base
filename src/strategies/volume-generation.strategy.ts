@@ -2,7 +2,7 @@ import { BiconomyExchangeService, Order, Trade } from '../services/biconomy-exch
 import { getEPWXPairInfo } from '../utils/exchange-info';
 import { logger } from '../utils/logger';
 import { config } from '../config';
-import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
+import { fetchEpwXPriceFromPancake, fetchEpwXPriceInWethOnly } from '../utils/dex-price';
 import { quantizeToStepSize } from '../utils/quantize';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
@@ -452,17 +452,17 @@ export class VolumeGenerationStrategy {
   }
 
   private startPriceTrackingLoop(): void {
-    logger.info('📊 Starting real-time DEX price tracking loop (500ms interval)...');
+    logger.info('📊 Starting real-time DEX price tracking loop (500ms interval, WETH only - no CoinGecko)...');
     const PRICE_TRACK_INTERVAL_MS = 500; // Check DEX price every 500ms
 
     this.priceTrackingTimer = setInterval(async () => {
       if (!this.isRunning) return;
 
       try {
-        // Fetch current DEX price without blocking order placement
-        let currentDexPrice: number | undefined;
+        // Fetch current DEX price in WETH only (no USD conversion to avoid CoinGecko API calls)
+        let currentDexPriceInWeth: number | undefined;
         try {
-          currentDexPrice = await fetchEpwXPriceFromPancake(
+          currentDexPriceInWeth = await fetchEpwXPriceInWethOnly(
             config.trading.baseRpcUrl,
             config.trading.epwxWethPairAddress,
             config.trading.epwxAddress
@@ -471,8 +471,11 @@ export class VolumeGenerationStrategy {
           logger.warn('⚠️  Failed to fetch DEX price in price tracking loop:', error);
           return;
         }
+        
+        // Convert WETH to USD for comparison (use last known cached ETH price)
+        const currentDexPrice = currentDexPriceInWeth * 2200; // Use fallback value for relative drift calculation
 
-        if (!currentDexPrice || currentDexPrice <= 0) {
+        if (!currentDexPrice || currentDexPrice <= 0 || currentDexPriceInWeth <= 0) {
           logger.warn('⚠️  Invalid DEX price received in tracking loop');
           return;
         }
@@ -480,7 +483,7 @@ export class VolumeGenerationStrategy {
         // Initialize lastDexPrice on first fetch
         if (this.lastDexPrice === null) {
           this.lastDexPrice = currentDexPrice;
-          logger.info(`📊 [PRICE-TRACK] Initial DEX price set: $${currentDexPrice.toFixed(6)}`);
+          logger.info(`📊 [PRICE-TRACK] Initial DEX price set: ${currentDexPriceInWeth.toFixed(8)} WETH (≈$${currentDexPrice.toFixed(6)})`);
           return;
         }
 
