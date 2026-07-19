@@ -20,6 +20,8 @@ interface Config {
     volumeTargetDaily: number;
     minOrderSize: number;
     maxOrderSize: number;
+    balanceUtilizationPercent: number;
+    idleBalanceReserveUsd: number;
     spreadPercentage: number;
     orderFrequency: number;
     selfTradeEnabled: boolean;
@@ -86,6 +88,8 @@ export const config: Config = {
     volumeTargetDaily: getEnvNumber('VOLUME_TARGET_DAILY', 100000),
     minOrderSize: getEnvNumber('MIN_ORDER_SIZE', 50),
     maxOrderSize: getEnvNumber('MAX_ORDER_SIZE', 500),
+    balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.98),
+    idleBalanceReserveUsd: getEnvNumber('IDLE_BALANCE_RESERVE_USD', 5),
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
