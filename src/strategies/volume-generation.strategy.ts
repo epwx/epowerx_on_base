@@ -806,6 +806,15 @@ export class VolumeGenerationStrategy {
       if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
+          const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
+          const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
+          if (projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
+            logger.info(
+              `⏭️  Skipping book-depth sell additions: projected openBook=${projectedBuyCount} buys/${projectedSellCount} sells in a sparse cycle.`
+            );
+            break;
+          }
+
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
           const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD);
           let rawAmount = sellOrderUsdTarget / sellPrice;
