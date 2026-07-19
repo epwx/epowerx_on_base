@@ -491,6 +491,9 @@ export class VolumeGenerationStrategy {
         Math.max(maxPlacementsPerCycle - 2, 0)
       );
       const bookPlacementBudget = Math.max(maxPlacementsPerCycle - washReservedPlacements, 2);
+      const executableBestBid = executableBookSnapshot?.bestBid ?? 0;
+      const executableBestAsk = executableBookSnapshot?.bestAsk ?? 0;
+      const hasExecutableTouchLevels = executableBestBid > 0 && executableBestAsk > 0;
       let placementsThisCycle = 0;
       const hasPlacementBudget = () => placementsThisCycle < maxPlacementsPerCycle;
       // Always cleanup excess orders at the start of the cycle
@@ -567,6 +570,51 @@ export class VolumeGenerationStrategy {
       logger.info(
         `🧮 Placement budgets: max=${maxPlacementsPerCycle}, book=${bookPlacementBudget}, reservedWash=${washReservedPlacements}, targetWashPairs=${dynamicWashTradePairs}`
       );
+
+      // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
+      if (hasExecutableTouchLevels) {
+        const topTouchBaseUsd = Math.max(
+          this.getMinimumOrderUsdTarget(),
+          Math.min(Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD), 8)
+        );
+
+        if (hasBuyPlacementBudget()) {
+          const buyTouchPrice = executableBestAsk;
+          const buyTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
+          const buyTouchRawAmount = buyTouchUsd / buyTouchPrice;
+          const buyTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(buyTouchRawAmount, this.stepSize));
+          if (buyTouchAmount !== null && this.isValidOrderAmount(buyTouchAmount, buyTouchPrice)) {
+            logger.info(`🎯 Placing top-touch BUY: ${buyTouchAmount} EPWX @ ${buyTouchPrice.toExponential(4)} (bestAsk)`);
+            const topTouchBuyOrderId = await this.placeBuyOrder(buyTouchPrice, buyTouchAmount);
+            if (topTouchBuyOrderId) {
+              placementsThisCycle++;
+              buyPlacementsThisCycle++;
+            }
+          }
+        }
+
+        if (hasSellPlacementBudget()) {
+          const sellTouchPrice = executableBestBid;
+          const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
+          const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
+          const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize));
+          if (sellTouchAmount !== null && this.isValidOrderAmount(sellTouchAmount, sellTouchPrice)) {
+            logger.info(`🎯 Placing top-touch SELL: ${sellTouchAmount} EPWX @ ${sellTouchPrice.toExponential(4)} (bestBid)`);
+            const topTouchSellOrderId = await this.placeSellOrder(sellTouchPrice, sellTouchAmount, true);
+            if (topTouchSellOrderId) {
+              placementsThisCycle++;
+              sellPlacementsThisCycle++;
+            }
+          }
+        }
+
+        if (placementsThisCycle > 0) {
+          openOrders = await this.exchange.getOpenOrders(this.symbol);
+          buyOrders = openOrders.filter(o => o.side === 'BUY');
+          sellOrders = openOrders.filter(o => o.side === 'SELL');
+          logger.info(`📌 After top-touch orders: ${buyOrders.length} buys, ${sellOrders.length} sells`);
+        }
+      }
 
       // --- Order Depth Logic ---
       // Calculate cumulative buy orders between 98%-100% of mid-price
