@@ -33,6 +33,48 @@ const ERC20_ABI = [
   'function decimals() external view returns (uint8)'
 ];
 
+// Cache for ETH/USD price to avoid hammering CoinGecko API
+const ETH_PRICE_CACHE = {
+  price: 2200, // Default fallback
+  timestamp: 0,
+  cacheTTL: 60000 // Cache for 60 seconds
+};
+
+async function getCachedEthPrice(): Promise<number> {
+  const now = Date.now();
+  const cacheStale = now - ETH_PRICE_CACHE.timestamp > ETH_PRICE_CACHE.cacheTTL;
+  
+  if (!cacheStale) {
+    logger.debug(`💾 Using cached ETH/USD price: $${ETH_PRICE_CACHE.price} (cache age: ${now - ETH_PRICE_CACHE.timestamp}ms)`);
+    return ETH_PRICE_CACHE.price;
+  }
+
+  // Cache is stale, fetch fresh price
+  let ethPriceUSD = 0;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', {
+        timeout: 5000
+      });
+      ethPriceUSD = response.data?.ethereum?.usd || 0;
+      if (ethPriceUSD) {
+        logger.debug(`✅ Fetched fresh ETH/USD price from CoinGecko: $${ethPriceUSD}`);
+        ETH_PRICE_CACHE.price = ethPriceUSD;
+        ETH_PRICE_CACHE.timestamp = now;
+        return ethPriceUSD;
+      }
+    } catch (error) {
+      logger.warn(`CoinGecko ETH/USD fetch failed (attempt ${i + 1}/3)`, { error });
+      if (i < 2) await new Promise(res => setTimeout(res, 2000 * (i + 1)));
+    }
+  }
+
+  // All retries failed, use cached price
+  logger.warn(`⚠️  Failed to fetch ETH/USD from CoinGecko, using cached fallback: $${ETH_PRICE_CACHE.price}`);
+  ETH_PRICE_CACHE.timestamp = now; // Reset cache timer to avoid constant retry attempts
+  return ETH_PRICE_CACHE.price;
+}
+
 export async function fetchEpwXPriceFromPancake(
   providerUrl: string,
   epwxWethPairAddress: string,
@@ -79,24 +121,8 @@ export async function fetchEpwXPriceFromPancake(
   const wethReserveNorm = Number(formatUnits(wethReserve, wethDecimals));
   const epwxPriceInWeth = wethReserveNorm / epwxReserveNorm;
 
-  // Fetch ETH/USD price from CoinGecko with retry and fallback
-  let ethPriceUSD = 0;
-  let coingeckoError = null;
-  for (let i = 0; i < 3; i++) {
-    try {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-      ethPriceUSD = response.data?.ethereum?.usd || 0;
-      if (ethPriceUSD) break;
-    } catch (error) {
-      coingeckoError = error;
-      logger.warn(`CoinGecko ETH/USD fetch failed (attempt ${i + 1}/3)`, { error });
-      await new Promise(res => setTimeout(res, 1000 * (i + 1)));
-    }
-  }
-  if (!ethPriceUSD) {
-    logger.error('Failed to fetch ETH/USD from CoinGecko after retries, using static fallback value 2200');
-    ethPriceUSD = 2200; // Fallback static value
-  }
+  // Fetch ETH/USD price from cache (which handles CoinGecko fetch with 60s TTL)
+  const ethPriceUSD = await getCachedEthPrice();
 
   // Final price: EPWX in USD
   const epwxPriceInUsd = epwxPriceInWeth * ethPriceUSD;
