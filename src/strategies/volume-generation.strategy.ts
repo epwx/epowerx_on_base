@@ -58,12 +58,17 @@ export class VolumeGenerationStrategy {
   private settledWashOrderIds: Set<string> = new Set();
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
+  private priceTrackingTimer?: NodeJS.Timeout;
   private initialEpwxBalance: number | null = null;
   private currentPosition: number = 0;
   private orderStatusIndex: number = 0;
   private isPlacingOrders: boolean = false;
   private lastPerformanceLogAt: number = 0;
   private noFillDiagnosticsThisCycle: number = 0;
+  private lastDexPrice: number | null = null;
+  private lastOrderRefreshTime: number = 0;
+  private static readonly DEX_PRICE_DRIFT_THRESHOLD_PERCENT = 1.5; // Refresh orders if DEX price moves >1.5%
+  private static readonly MIN_REFRESH_INTERVAL_MS = 2000; // Don't refresh more than once per 2 seconds
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -363,6 +368,9 @@ export class VolumeGenerationStrategy {
       // Start monitoring loop
       this.startMonitoringLoop();
 
+      // Start real-time DEX price tracking
+      this.startPriceTrackingLoop();
+
       logger.info('✅ Volume generation bot started successfully');
     } catch (error) {
       logger.error('Failed to start volume generation bot:', error);
@@ -387,6 +395,11 @@ export class VolumeGenerationStrategy {
     if (this.updateTimer) {
       clearInterval(this.updateTimer);
       this.updateTimer = undefined;
+    }
+
+    if (this.priceTrackingTimer) {
+      clearInterval(this.priceTrackingTimer);
+      this.priceTrackingTimer = undefined;
     }
 
     try {
@@ -436,6 +449,127 @@ export class VolumeGenerationStrategy {
         logger.error('Error in monitoring loop:', error);
       }
     }, config.marketMaking.updateInterval);
+  }
+
+  private startPriceTrackingLoop(): void {
+    logger.info('📊 Starting real-time DEX price tracking loop (500ms interval)...');
+    const PRICE_TRACK_INTERVAL_MS = 500; // Check DEX price every 500ms
+
+    this.priceTrackingTimer = setInterval(async () => {
+      if (!this.isRunning) return;
+
+      try {
+        // Fetch current DEX price without blocking order placement
+        let currentDexPrice: number | undefined;
+        try {
+          currentDexPrice = await fetchEpwXPriceFromPancake(
+            config.trading.baseRpcUrl,
+            config.trading.epwxWethPairAddress,
+            config.trading.epwxAddress
+          );
+        } catch (error) {
+          logger.warn('⚠️  Failed to fetch DEX price in price tracking loop:', error);
+          return;
+        }
+
+        if (!currentDexPrice || currentDexPrice <= 0) {
+          logger.warn('⚠️  Invalid DEX price received in tracking loop');
+          return;
+        }
+
+        // Initialize lastDexPrice on first fetch
+        if (this.lastDexPrice === null) {
+          this.lastDexPrice = currentDexPrice;
+          logger.info(`📊 [PRICE-TRACK] Initial DEX price set: $${currentDexPrice.toFixed(6)}`);
+          return;
+        }
+
+        // Calculate drift percentage
+        const priceDriftPercent = Math.abs(currentDexPrice - this.lastDexPrice) / this.lastDexPrice * 100;
+
+        // Log price changes (only significant ones to avoid spam)
+        if (priceDriftPercent >= 0.3) {
+          logger.info(`📊 [PRICE-TRACK] DEX price: $${currentDexPrice.toFixed(6)} (drift: ${priceDriftPercent.toFixed(2)}%)`);
+        }
+
+        // If drift exceeds threshold and enough time has passed since last refresh, trigger order refresh
+        if (priceDriftPercent >= VolumeGenerationStrategy.DEX_PRICE_DRIFT_THRESHOLD_PERCENT) {
+          const timeSinceLastRefresh = Date.now() - this.lastOrderRefreshTime;
+          if (timeSinceLastRefresh >= VolumeGenerationStrategy.MIN_REFRESH_INTERVAL_MS) {
+            logger.warn(
+              `🔄 [PRICE-DRIFT] DEX price drifted ${priceDriftPercent.toFixed(2)}% (threshold: ${VolumeGenerationStrategy.DEX_PRICE_DRIFT_THRESHOLD_PERCENT}%) - triggering order refresh`
+            );
+            this.lastDexPrice = currentDexPrice;
+            this.lastOrderRefreshTime = Date.now();
+            await this.refreshOrdersOnPriceDrift(currentDexPrice);
+          } else {
+            logger.debug(`⏱️  [PRICE-DRIFT] Detected drift but refresh cooldown active (${timeSinceLastRefresh}ms / ${VolumeGenerationStrategy.MIN_REFRESH_INTERVAL_MS}ms)`);
+          }
+        } else {
+          // Update tracking price if drift is minor but positive
+          if (priceDriftPercent >= 0.1) {
+            this.lastDexPrice = currentDexPrice;
+          }
+        }
+      } catch (error) {
+        logger.error('❌ Error in price tracking loop:', error);
+      }
+    }, PRICE_TRACK_INTERVAL_MS);
+  }
+
+  private async refreshOrdersOnPriceDrift(newDexPrice: number): Promise<void> {
+    // Skip if already placing orders to avoid conflicts
+    if (this.isPlacingOrders) {
+      logger.info('⏭️  Price drift refresh deferred - order placement cycle already running');
+      return;
+    }
+
+    try {
+      logger.info('🔄 [DRIFT-REFRESH] Starting order refresh due to price drift...');
+
+      // Cancel excess orders to make room for new ones aligned with current DEX price
+      const openOrders = await this.exchange.getOpenOrders(this.symbol);
+      const buyOrders = openOrders.filter(o => o.side === 'BUY');
+      const sellOrders = openOrders.filter(o => o.side === 'SELL');
+      const targetOrdersPerSide = 30;
+
+      // Only cancel a subset to allow gradual refresh rather than full flush
+      const refreshPercentage = 0.3; // Refresh 30% of orders
+      const buysToCancel = Math.ceil(buyOrders.length * refreshPercentage);
+      const sellsToCancel = Math.ceil(sellOrders.length * refreshPercentage);
+
+      if (buysToCancel > 0) {
+        const oldestBuys = buyOrders
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .slice(0, buysToCancel);
+        for (const order of oldestBuys) {
+          try {
+            await this.exchange.cancelOrder(this.symbol, order.orderId);
+            logger.debug(`[DRIFT-REFRESH] Cancelled old BUY order: ${order.orderId}`);
+          } catch (error) {
+            logger.warn(`Failed to cancel BUY order ${order.orderId}:`, error);
+          }
+        }
+      }
+
+      if (sellsToCancel > 0) {
+        const oldestSells = sellOrders
+          .sort((a, b) => a.timestamp - b.timestamp)
+          .slice(0, sellsToCancel);
+        for (const order of oldestSells) {
+          try {
+            await this.exchange.cancelOrder(this.symbol, order.orderId);
+            logger.debug(`[DRIFT-REFRESH] Cancelled old SELL order: ${order.orderId}`);
+          } catch (error) {
+            logger.warn(`Failed to cancel SELL order ${order.orderId}:`, error);
+          }
+        }
+      }
+
+      logger.info(`✅ [DRIFT-REFRESH] Cancelled ${buysToCancel} BUY and ${sellsToCancel} SELL orders to refresh at new price`);
+    } catch (error) {
+      logger.error('❌ Error refreshing orders on price drift:', error);
+    }
   }
 
   private async placeVolumeOrders(): Promise<void> {
