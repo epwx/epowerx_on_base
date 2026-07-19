@@ -319,6 +319,25 @@ export class VolumeGenerationStrategy {
       let priceReference = lastPrice;
       let priceSource = 'DEX';
       logger.info('Using DEX price as reference for all wash trades.');
+      const hasValidBiconomyReference = Number.isFinite(biconomyPrice) && biconomyPrice > 0;
+      const dexCexDriftPercent = hasValidBiconomyReference
+        ? (Math.abs(priceReference - biconomyPrice) / biconomyPrice) * 100
+        : 0;
+      const maxDexCexDriftPercent = Math.max(config.volumeStrategy.maxDexCexDriftPercent, 0);
+      const canRunWashTradesByDrift =
+        !config.volumeStrategy.pauseWashOnHighDrift ||
+        !hasValidBiconomyReference ||
+        dexCexDriftPercent <= maxDexCexDriftPercent;
+      if (hasValidBiconomyReference) {
+        logger.info(
+          `📐 DEX/CEX drift: ${dexCexDriftPercent.toFixed(2)}% (limit ${maxDexCexDriftPercent.toFixed(2)}%)`
+        );
+      }
+      if (config.volumeStrategy.pauseWashOnHighDrift && !canRunWashTradesByDrift) {
+        logger.warn(
+          `⏸️  Pausing wash trades this cycle: DEX/CEX drift ${dexCexDriftPercent.toFixed(2)}% exceeds ${maxDexCexDriftPercent.toFixed(2)}%`
+        );
+      }
 
       // Place and maintain at least 30 buy and 30 sell orders in the order book
       const targetOrdersPerSide = 30;
@@ -566,14 +585,20 @@ export class VolumeGenerationStrategy {
       const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
       const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
       const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washTradePairs = Math.min(
-        dynamicWashTradePairs,
-        Math.max(washPairsByRemainingSlots, 0),
-        Math.max(washPairsByReservedBudget, 0)
-      );
+      const washFeatureEnabled = config.volumeStrategy.selfTradeEnabled && canRunWashTradesByDrift;
+      const washTradePairs = washFeatureEnabled
+        ? Math.min(
+            dynamicWashTradePairs,
+            Math.max(washPairsByRemainingSlots, 0),
+            Math.max(washPairsByReservedBudget, 0)
+          )
+        : 0;
       this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
         !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
       );
+      if (!config.volumeStrategy.selfTradeEnabled) {
+        logger.info('⏭️  Wash trades disabled via SELF_TRADE_ENABLED=false');
+      }
       if (!bookSeeded) {
         logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
       }
