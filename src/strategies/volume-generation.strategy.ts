@@ -618,13 +618,14 @@ export class VolumeGenerationStrategy {
 
       // --- Hybrid price reference logic ---
       // Fetch Biconomy market price (ticker)
-      let biconomyPrice = 0, biconomyBid = 0, biconomyAsk = 0;
+      let biconomyPrice = 0, biconomyBid = 0, biconomyAsk = 0, biconomyLast = 0;
       try {
         const ticker = await this.exchange.getTicker(this.symbol);
+        biconomyLast = ticker.price;
         biconomyBid = ticker.bid;
         biconomyAsk = ticker.ask;
         biconomyPrice = (ticker.ask + ticker.bid) / 2;
-        logger.info(`Biconomy market price: ${biconomyPrice}, bid: ${biconomyBid}, ask: ${biconomyAsk}`);
+        logger.info(`Biconomy market price: last=${biconomyLast}, mid=${biconomyPrice}, bid=${biconomyBid}, ask=${biconomyAsk}`);
       } catch (error) {
         logger.error('❌ Failed to fetch Biconomy market price:', error);
       }
@@ -653,14 +654,24 @@ export class VolumeGenerationStrategy {
         executableMidPrice > 0 &&
         Number.isFinite(executableSpreadPercent) &&
         executableSpreadPercent <= VolumeGenerationStrategy.MAX_EXECUTABLE_SPREAD_PERCENT;
+      const hasValidTickerLast = Number.isFinite(biconomyLast) && biconomyLast > 0;
 
       // Compare DEX and Biconomy price
-      // Keep DEX as wash reference, but use executable book mid for placements when available.
+      // Keep DEX as wash reference, but use an exchange-compliant source for placements.
       const washPriceReference = lastPrice;
-      const priceReference = executableMidUsable ? executableMidPrice : lastPrice;
+      let priceReference = lastPrice;
+      if (executableMidUsable) {
+        priceReference = executableMidPrice;
+      } else if (hasValidTickerLast) {
+        priceReference = biconomyLast;
+      }
 
       if (executableMidUsable) {
         logger.info(`🎯 Using executable orderbook mid-price for placements: ${executableMidPrice.toExponential(4)} (wash reference remains DEX ${washPriceReference.toExponential(4)})`);
+      } else if (hasValidTickerLast) {
+        logger.warn(
+          `⚠️  Executable orderbook mid unavailable, using ticker last-price for placements to satisfy exchange price bands: ${biconomyLast.toExponential(4)} (wash reference remains DEX ${washPriceReference.toExponential(4)})`
+        );
       } else if (executableMidPrice > 0) {
         logger.warn(
           `⚠️  Executable orderbook spread too wide (${executableSpreadPercent.toFixed(2)}%), using DEX price for placements: ${washPriceReference.toExponential(4)}`
@@ -672,7 +683,7 @@ export class VolumeGenerationStrategy {
       logger.info('Using DEX price as reference for all wash trades.');
       const biconomyReferenceForDrift = executableMidPrice > 0
         ? executableMidPrice
-        : (tickerLooksValid ? biconomyPrice : 0);
+        : (tickerLooksValid ? biconomyPrice : (hasValidTickerLast ? biconomyLast : 0));
       const hasValidBiconomyReference = Number.isFinite(biconomyReferenceForDrift) && biconomyReferenceForDrift > 0;
       const dexCexDriftPercent = hasValidBiconomyReference
         ? (Math.abs(washPriceReference - biconomyReferenceForDrift) / biconomyReferenceForDrift) * 100
@@ -681,6 +692,8 @@ export class VolumeGenerationStrategy {
         logger.info(`📌 Drift reference source: executable orderbook mid (${executableMidPrice.toExponential(4)})`);
       } else if (tickerLooksValid) {
         logger.info(`📌 Drift reference source: ticker mid (${biconomyPrice.toExponential(4)})`);
+      } else if (hasValidTickerLast) {
+        logger.info(`📌 Drift reference source: ticker last (${biconomyLast.toExponential(4)})`);
       } else {
         logger.warn('⚠️  No valid CEX reference for drift check; drift gating will be skipped this cycle.');
       }
