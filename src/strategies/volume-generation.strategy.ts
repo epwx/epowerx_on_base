@@ -1323,13 +1323,12 @@ export class VolumeGenerationStrategy {
   }
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
-    let normalizedAmount = 0;
     try {
       // Check available USDT before placing order
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
       const availableUSDT = usdtBalance?.free || 0;
-      normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'BUY', price, availableUSDT);
+      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'BUY', price, availableUSDT);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping buy order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
@@ -1371,54 +1370,17 @@ export class VolumeGenerationStrategy {
       void this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
       return order.orderId;
     } catch (error) {
-      const errorMessage = this.extractErrorMessage(error);
-      if (this.isPriceBandError(errorMessage)) {
-        logger.warn(`⚠️  BUY rejected by exchange price band at ${price.toExponential(4)}; retrying with ticker last price.`);
-        try {
-          const ticker = await this.exchange.getTicker(this.symbol);
-          const fallbackPrice = ticker.price;
-          if (Number.isFinite(fallbackPrice) && fallbackPrice > 0) {
-            const fallbackOrder = await this.exchange.placeOrder(
-              this.symbol,
-              'BUY',
-              'LIMIT',
-              normalizedAmount,
-              fallbackPrice
-            );
-            if (!fallbackOrder) {
-              logger.error('Buy fallback order placement returned undefined');
-              return;
-            }
-            if (!this.isRunning) {
-              logger.warn(`⚠️  Cancelling buy fallback order ${fallbackOrder.orderId} because it was placed during shutdown.`);
-              await this.exchange.cancelOrder(this.symbol, fallbackOrder.orderId);
-              return;
-            }
-            this.activeOrders.set(fallbackOrder.orderId, fallbackOrder);
-            this.orderPrices.set(fallbackOrder.orderId, { side: 'BUY', price: fallbackPrice });
-            this.volumeStats.orderCount++;
-            logger.info(`✅ Buy fallback order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${fallbackPrice.toExponential(4)}`);
-            void this.logPostPlacementOrderState(fallbackOrder.orderId, 'BUY', fallbackPrice);
-            void this.pollOrderFills(fallbackOrder.orderId, 'BUY', isWashTrade);
-            return fallbackOrder.orderId;
-          }
-        } catch (fallbackError) {
-          logger.error('Error placing buy fallback order after price-band rejection:', fallbackError);
-          return;
-        }
-      }
       logger.error('Error placing buy order:', error);
     }
   }
 
   protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
-    let normalizedAmount = 0;
     try {
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableEPWX = epwxBalance?.free || 0;
-      normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'SELL', price, availableEPWX * price);
+      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'SELL', price, availableEPWX * price);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping sell order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
@@ -1459,53 +1421,8 @@ export class VolumeGenerationStrategy {
       void this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
       return order.orderId;
     } catch (error) {
-      const errorMessage = this.extractErrorMessage(error);
-      if (this.isPriceBandError(errorMessage)) {
-        logger.warn(`⚠️  SELL rejected by exchange price band at ${price.toExponential(4)}; retrying with ticker last price.`);
-        try {
-          const ticker = await this.exchange.getTicker(this.symbol);
-          const fallbackPrice = ticker.price;
-          if (Number.isFinite(fallbackPrice) && fallbackPrice > 0) {
-            const fallbackOrder = await this.exchange.placeOrder(
-              this.symbol,
-              'SELL',
-              'LIMIT',
-              normalizedAmount,
-              fallbackPrice
-            );
-            if (!fallbackOrder) {
-              logger.error('Sell fallback order placement returned undefined');
-              return;
-            }
-            if (!this.isRunning) {
-              logger.warn(`⚠️  Cancelling sell fallback order ${fallbackOrder.orderId} because it was placed during shutdown.`);
-              await this.exchange.cancelOrder(this.symbol, fallbackOrder.orderId);
-              return;
-            }
-            this.activeOrders.set(fallbackOrder.orderId, fallbackOrder);
-            this.orderPrices.set(fallbackOrder.orderId, { side: 'SELL', price: fallbackPrice });
-            this.volumeStats.orderCount++;
-            logger.info(`✅ Sell fallback order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${fallbackPrice.toExponential(4)}`);
-            void this.logPostPlacementOrderState(fallbackOrder.orderId, 'SELL', fallbackPrice);
-            void this.pollOrderFills(fallbackOrder.orderId, 'SELL', isWashTrade);
-            return fallbackOrder.orderId;
-          }
-        } catch (fallbackError) {
-          logger.error('Error placing sell fallback order after price-band rejection:', fallbackError);
-          return;
-        }
-      }
       logger.error('Error placing sell order:', error);
     }
-  }
-
-  private extractErrorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message || '';
-    return String(error || '');
-  }
-
-  private isPriceBandError(message: string): boolean {
-    return message.toLowerCase().includes('price must be between');
   }
 
   // Poll for fills after placing an order
