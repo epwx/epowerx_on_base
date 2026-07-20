@@ -35,7 +35,6 @@ export class VolumeGenerationStrategy {
   private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
   private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
-  private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -560,7 +559,6 @@ export class VolumeGenerationStrategy {
       const hasExecutableTouchLevels = executableMidUsable && executableBestBid > 0 && executableBestAsk > 0;
       let placementsThisCycle = 0;
       const hasPlacementBudget = () => placementsThisCycle < maxPlacementsPerCycle;
-      let cleanupCancelledCount = 0;
       // Always cleanup excess orders at the start of the cycle
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
@@ -573,7 +571,6 @@ export class VolumeGenerationStrategy {
         for (const order of excessBuyOrders) {
           logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
-          cleanupCancelledCount++;
         }
       }
       if (sellOrders.length > targetOrdersPerSide) {
@@ -582,7 +579,6 @@ export class VolumeGenerationStrategy {
         for (const order of excessSellOrders) {
           logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
-          cleanupCancelledCount++;
         }
       }
       // Re-fetch open orders after cleanup
@@ -590,37 +586,6 @@ export class VolumeGenerationStrategy {
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
-
-      const bookAlreadyFull = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
-      if (bookAlreadyFull && cleanupCancelledCount === 0) {
-        const refreshPerSide = Math.min(
-          VolumeGenerationStrategy.QUOTE_CHURN_REFRESH_PER_SIDE,
-          Math.max(Math.floor(bookPlacementBudget / 2), 1)
-        );
-
-        if (refreshPerSide > 0) {
-          const oldestBuys = [...buyOrders]
-            .sort((a, b) => a.timestamp - b.timestamp)
-            .slice(0, refreshPerSide);
-          const oldestSells = [...sellOrders]
-            .sort((a, b) => a.timestamp - b.timestamp)
-            .slice(0, refreshPerSide);
-
-          for (const order of oldestBuys) {
-            logger.info(`[Churn] Cancelling oldest BUY order for refresh: ${order.orderId}`);
-            await this.exchange.cancelOrder(this.symbol, order.orderId);
-          }
-          for (const order of oldestSells) {
-            logger.info(`[Churn] Cancelling oldest SELL order for refresh: ${order.orderId}`);
-            await this.exchange.cancelOrder(this.symbol, order.orderId);
-          }
-
-          openOrders = await this.exchange.getOpenOrders(this.symbol);
-          buyOrders = openOrders.filter(o => o.side === 'BUY');
-          sellOrders = openOrders.filter(o => o.side === 'SELL');
-          logger.info(`🔁 [CHURN] Refreshed quotes: ${buyOrders.length} buys, ${sellOrders.length} sells after oldest-order replacement.`);
-        }
-      }
 
       const missingBuyOrders = Math.max(targetOrdersPerSide - buyOrders.length, 0);
       const missingSellOrders = Math.max(targetOrdersPerSide - sellOrders.length, 0);
