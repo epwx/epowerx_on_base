@@ -326,15 +326,6 @@ export class VolumeGenerationStrategy {
         8,
         Math.min(targetOrdersPerSide, Math.floor(config.volumeStrategy.orderFrequency / 4000))
       );
-      const configuredWashReservedPlacements = Math.max(
-        0,
-        Math.floor(config.volumeStrategy.washReservedPlacementsPerCycle)
-      );
-      const washReservedPlacements = Math.min(
-        configuredWashReservedPlacements,
-        Math.max(maxPlacementsPerCycle - 2, 0)
-      );
-      const bookPlacementBudget = Math.max(maxPlacementsPerCycle - washReservedPlacements, 2);
       let placementsThisCycle = 0;
       const hasPlacementBudget = () => placementsThisCycle < maxPlacementsPerCycle;
       // Always cleanup excess orders at the start of the cycle
@@ -368,12 +359,12 @@ export class VolumeGenerationStrategy {
       const missingBuyOrders = Math.max(targetOrdersPerSide - buyOrders.length, 0);
       const missingSellOrders = Math.max(targetOrdersPerSide - sellOrders.length, 0);
       const missingTotalOrders = missingBuyOrders + missingSellOrders;
-      let buyPlacementCap = missingBuyOrders > 0 ? bookPlacementBudget : 0;
-      let sellPlacementCap = missingSellOrders > 0 ? bookPlacementBudget : 0;
+      let buyPlacementCap = missingBuyOrders > 0 ? maxPlacementsPerCycle : 0;
+      let sellPlacementCap = missingSellOrders > 0 ? maxPlacementsPerCycle : 0;
 
       if (missingBuyOrders > 0 && missingSellOrders > 0 && missingTotalOrders > 0) {
-        buyPlacementCap = Math.max(1, Math.floor((bookPlacementBudget * missingBuyOrders) / missingTotalOrders));
-        sellPlacementCap = Math.max(1, bookPlacementBudget - buyPlacementCap);
+        buyPlacementCap = Math.max(1, Math.floor((maxPlacementsPerCycle * missingBuyOrders) / missingTotalOrders));
+        sellPlacementCap = Math.max(1, maxPlacementsPerCycle - buyPlacementCap);
       }
 
       let buyPlacementsThisCycle = 0;
@@ -382,35 +373,15 @@ export class VolumeGenerationStrategy {
       const hasSellPlacementBudget = () => hasPlacementBudget() && sellPlacementsThisCycle < sellPlacementCap;
 
       // --- Order Depth Logic ---
-      // Place new orders using side-specific balance-aware sizing
+      // Place new buy orders if needed
+      // Fetch available USDT balance
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
-      const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableUSDT = usdtBalance?.free || 0;
-      const availableEPWX = epwxBalance?.free || 0;
-      const availableSellUsd = availableEPWX * priceReference;
-      const buySafeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(targetOrdersPerSide, 1), 20);
-      const sellSafeOrderSizeUSD = Math.min(availableSellUsd * 0.8 / Math.max(targetOrdersPerSide, 1), 20);
-      const washOrderSizeCapUsd = Math.max(config.volumeStrategy.washOrderSizeCapUsd, this.getMinimumOrderUsdTarget());
-      const washSafeOrderSizeUSD = Math.min(
-        Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD),
-        washOrderSizeCapUsd
-      );
-      const washScaleThreshold = Math.max(config.volumeStrategy.washUsdtScaleThreshold, 1);
-      const scaledWashPairs = Math.floor(availableUSDT / washScaleThreshold);
-      const dynamicWashTradePairs = Math.min(
-        Math.max(
-          Math.floor(config.volumeStrategy.washBasePairsPerCycle) + scaledWashPairs,
-          0
-        ),
-        Math.max(Math.floor(config.volumeStrategy.washMaxPairsPerCycle), 0)
-      );
-      logger.info(
-        `🔧 Calculated balance-aware order sizes: BUY ~$${buySafeOrderSizeUSD.toFixed(2)} (USDT), SELL ~$${sellSafeOrderSizeUSD.toFixed(2)} (EPWX), WASH ~$${washSafeOrderSizeUSD.toFixed(2)} per order`
-      );
-      logger.info(
-        `🧮 Placement budgets: max=${maxPlacementsPerCycle}, book=${bookPlacementBudget}, reservedWash=${washReservedPlacements}, targetWashPairs=${dynamicWashTradePairs}`
-      );
+      // Calculate safe order size: divide available balance by number of orders
+      const totalOrdersNeeded = targetOrdersPerSide * 2;
+      const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 20); // Max $20/order to be safe
+      logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
 
       // --- Order Depth Logic ---
       // Calculate cumulative buy orders between 98%-100% of mid-price
@@ -439,7 +410,7 @@ export class VolumeGenerationStrategy {
         const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
         while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasBuyPlacementBudget()) {
           const buyPrice = Math.max(minBuyPrice, Math.min(maxBuyPrice, priceReference * (1 - 0.01 * Math.random())));
-          const targetOrderUsd = this.getDynamicOrderUsdTarget(buySafeOrderSizeUSD, remaining);
+          const targetOrderUsd = this.getDynamicOrderUsdTarget(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / buyPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -474,7 +445,7 @@ export class VolumeGenerationStrategy {
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
-          const targetOrderUsd = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD, remaining);
+          const targetOrderUsd = this.getDynamicOrderUsdTarget(safeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / sellPrice;
           amount = quantizeToStepSize(amount, this.stepSize);
           amount = Math.max(this.minQty, amount);
@@ -510,7 +481,7 @@ export class VolumeGenerationStrategy {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = priceReference * (1 - 0.01 - i * 0.0002); // 1% below reference, staggered
-          const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(buySafeOrderSizeUSD);
+          const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
           let rawAmount = buyOrderUsdTarget / buyPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth buy: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${buyPrice}`);
@@ -537,7 +508,7 @@ export class VolumeGenerationStrategy {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
-          const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD);
+          const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
           let rawAmount = sellOrderUsdTarget / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
           logger.info(`[ORDER DEBUG] Book-depth sell: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${sellPrice}`);
@@ -562,27 +533,16 @@ export class VolumeGenerationStrategy {
       }
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
-      const remainingPlacementSlots = Math.max(maxPlacementsPerCycle - placementsThisCycle, 0);
-      const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
-      const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
-      const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washTradePairs = Math.min(
-        dynamicWashTradePairs,
-        Math.max(washPairsByRemainingSlots, 0),
-        Math.max(washPairsByReservedBudget, 0)
-      );
+      const washTradePairs = 5; // Number of wash trade pairs per cycle (adjust as needed)
       this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
         !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
       );
       if (!bookSeeded) {
         logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
       }
-      if (bookSeeded && washTradePairs === 0) {
-        logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
-      }
       for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
         const matchPrice = priceReference;
-        const washOrderUsdTarget = this.getDynamicOrderUsdTarget(washSafeOrderSizeUSD);
+        const washOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
         logger.info(`[ORDER DEBUG] Wash trade: rawAmount=${rawAmount}, quantized=${amount}, stepSize=${this.stepSize}, minQty=${this.minQty}, price=${matchPrice}`);
@@ -651,10 +611,7 @@ export class VolumeGenerationStrategy {
     // Check available balance
     const balances = await this.exchange.getBalances();
     const usdtBalance = balances.find(b => b.asset === 'USDT');
-    const epwxBalance = balances.find(b => b.asset === 'EPWX');
     const availableUSDT = usdtBalance?.free || 0;
-    const availableEPWX = epwxBalance?.free || 0;
-    const availableSellUsd = availableEPWX * lastPrice;
     
     logger.info(`💰 Available USDT balance: $${availableUSDT.toFixed(2)}`);
     
@@ -664,12 +621,11 @@ export class VolumeGenerationStrategy {
       // Still allow wash trading with very low balances
     }
     
-    // Calculate side-specific safe order size from current balances
-    const buySafeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(needBuys, 1), 10);
-    const sellSafeOrderSizeUSD = Math.min(availableSellUsd * 0.8 / Math.max(needSells, 1), 10);
-    logger.info(
-      `🔧 Calculated balance-aware order sizes: BUY ~$${buySafeOrderSizeUSD.toFixed(2)} (USDT), SELL ~$${sellSafeOrderSizeUSD.toFixed(2)} (EPWX) per order`
-    );
+    // Calculate safe order size: divide available balance by number of orders
+    const totalOrdersNeeded = needBuys + needSells;
+    const safeOrderSizeUSD = Math.min(availableUSDT * 0.8 / Math.max(totalOrdersNeeded, 1), 10); // Max $10/order to be safe
+    
+    logger.info(`🔧 Calculated safe order size: $${safeOrderSizeUSD.toFixed(2)} per order`);
     
     const targetSpread = 0.003; // 0.3% spread around last price
     
@@ -682,7 +638,7 @@ export class VolumeGenerationStrategy {
         } else {
           buyPrice = lastPrice * (1 - targetSpread - (i * 0.0001));
         }
-        const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(buySafeOrderSizeUSD);
+        const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
         const amount = buyOrderUsdTarget / buyPrice;
         const normalizedBuyAmount = this.normalizeOrderAmount(amount);
         if (normalizedBuyAmount === null) {
@@ -706,7 +662,7 @@ export class VolumeGenerationStrategy {
         } else {
           sellPrice = lastPrice * (1 + targetSpread + (i * 0.0001));
         }
-        const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD);
+        const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(safeOrderSizeUSD);
         let amount = sellOrderUsdTarget / sellPrice;
         const normalizedSellAmount = this.normalizeOrderAmount(amount);
         if (normalizedSellAmount === null) {
