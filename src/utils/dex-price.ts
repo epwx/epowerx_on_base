@@ -197,29 +197,21 @@ export async function fetchEpwXPriceInWethOnly(
     const token0 = await retry(() => {
       return new Contract(epwxWethPairAddress, UNISWAP_V2_PAIR_ABI, provider).token0();
     }, 2, 300, 'token0 for price tracking');
-
-    const token1 = await retry(() => {
-      return new Contract(epwxWethPairAddress, UNISWAP_V2_PAIR_ABI, provider).token1();
-    }, 2, 300, 'token1 for price tracking');
     
     const decimals0 = await retry(() => {
       return new Contract(token0, ERC20_ABI, provider).decimals();
     }, 2, 300, 'decimals0 for price tracking');
-
-    const decimals1 = await retry(() => {
-      return new Contract(token1, ERC20_ABI, provider).decimals();
-    }, 2, 300, 'decimals1 for price tracking');
     
     let epwxReserve: bigint, wethReserve: bigint, epwxDecimals: number, wethDecimals: number;
     if (token0.toLowerCase() === epwxAddress.toLowerCase()) {
       epwxReserve = reserve0;
       wethReserve = reserve1;
       epwxDecimals = decimals0;
-      wethDecimals = decimals1;
+      wethDecimals = 18; // WETH is always 18 decimals
     } else {
       epwxReserve = reserve1;
       wethReserve = reserve0;
-      epwxDecimals = decimals1;
+      epwxDecimals = 18; // Fallback
       wethDecimals = decimals0;
     }
     
