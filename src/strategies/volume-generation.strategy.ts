@@ -611,14 +611,14 @@ export class VolumeGenerationStrategy {
           }
         }
 
-        if (hasSellPlacementBudget() && !shouldPrioritizeBuys) {
+        if (hasSellPlacementBudget()) {
           const sellTouchPrice = executableBestBid;
           const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
           const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize));
           if (sellTouchAmount !== null && this.isValidOrderAmount(sellTouchAmount, sellTouchPrice)) {
             logger.info(`🎯 Placing top-touch SELL: ${sellTouchAmount} EPWX @ ${sellTouchPrice.toExponential(4)} (bestBid)`);
-            const topTouchSellOrderId = await this.placeSellOrder(sellTouchPrice, sellTouchAmount);
+            const topTouchSellOrderId = await this.placeSellOrder(sellTouchPrice, sellTouchAmount, true);
             if (topTouchSellOrderId) {
               placementsThisCycle++;
               sellPlacementsThisCycle++;
@@ -690,12 +690,6 @@ export class VolumeGenerationStrategy {
       // Place additional sell orders if needed to reach 200 USDT depth (business requirement)
       let sellDepthShortfall = 200 - sellDepth;
       if (sellDepthShortfall > 0) {
-        if (shouldPrioritizeBuys) {
-          logger.info('⏭️  Skipping depth sell additions this cycle because buy-side replenishment is prioritized.');
-        }
-      }
-
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuys) {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in 100%-102% of Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
@@ -716,7 +710,7 @@ export class VolumeGenerationStrategy {
             break;
           }
           logger.info(`🔴 Placing depth sell order: ${sellOrderAmount} EPWX @ ${sellPrice.toExponential(4)} (100%-102% of Mid-Price)`);
-          const sellOrderId = await this.placeSellOrder(sellPrice, sellOrderAmount);
+          const sellOrderId = await this.placeSellOrder(sellPrice, sellOrderAmount, true);
           if (!sellOrderId) {
             break;
           }
@@ -761,7 +755,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuys) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget()) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const sellPrice = priceReference * (1 + 0.01 + i * 0.0002); // 1% above reference, staggered
@@ -779,7 +773,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-          const bookSellOrderId = await this.placeSellOrder(sellPrice, bookSellAmount);
+          const bookSellOrderId = await this.placeSellOrder(sellPrice, bookSellAmount, true);
           if (!bookSellOrderId) {
             break;
           }
@@ -1187,7 +1181,6 @@ export class VolumeGenerationStrategy {
 
           // Calculate profit from spread capture
           const originalPrice = this.orderPrices.get(orderId);
-          const trackedAsWashPair = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
           let profit = 0;
           let spreadPercent = 0;
           let isRealFill = true;
@@ -1204,15 +1197,8 @@ export class VolumeGenerationStrategy {
               spreadPercent = ((order.price - originalPrice.price) / originalPrice.price) * 100;
             }
 
-            // When self-trading is disabled, classify all fills as real fills.
-            if (!config.volumeStrategy.selfTradeEnabled) {
-              isRealFill = true;
-            } else if (trackedAsWashPair) {
-              isRealFill = false;
-            } else {
-              // Fallback heuristic when wash mode is enabled but order wasn't explicitly tracked.
-              isRealFill = Math.abs(spreadPercent - 0.3) > 0.05; // More than 0.05% deviation = likely real fill
-            }
+            // If spread is close to 0.3%, likely a wash trade fill; otherwise real user
+            isRealFill = Math.abs(spreadPercent - 0.3) > 0.05; // More than 0.05% deviation = likely real fill
           }
 
           this.profitStats.totalProfit += profit;
