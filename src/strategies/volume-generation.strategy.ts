@@ -59,7 +59,6 @@ export class VolumeGenerationStrategy {
   private orderStatusIndex: number = 0;
   private isPlacingOrders: boolean = false;
   private lastPerformanceLogAt: number = 0;
-  private noFillDiagnosticsThisCycle: number = 0;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -143,110 +142,6 @@ export class VolumeGenerationStrategy {
     }
 
     return Math.min(randomizedUsd, Math.max(minimumUsd, remainingUsd));
-  }
-
-  private formatTopBookLevels(levels: Array<[number, number]>, maxLevels: number = 5): string {
-    if (!levels.length) {
-      return 'none';
-    }
-
-    return levels
-      .slice(0, maxLevels)
-      .map(([price, amount]) => `${price.toExponential(4)} x ${Math.floor(amount).toLocaleString()}`)
-      .join(' | ');
-  }
-
-  private async logExecutableBookSnapshot(referencePrice: number, tickerBid: number, tickerAsk: number): Promise<void> {
-    const exchangeWithBook = this.exchange as any;
-    if (typeof exchangeWithBook.getOrderBook !== 'function') {
-      return;
-    }
-
-    try {
-      const orderBook = await exchangeWithBook.getOrderBook(this.symbol);
-      const bestBid = orderBook.bids[0]?.[0] ?? 0;
-      const bestAsk = orderBook.asks[0]?.[0] ?? 0;
-      const spread = bestBid > 0 && bestAsk > 0 ? ((bestAsk - bestBid) / bestBid) * 100 : 0;
-
-      logger.info(
-        `📚 [EXEC BOOK] bestBid=${bestBid.toExponential(4)} bestAsk=${bestAsk.toExponential(4)} spread=${spread.toFixed(3)}% | tickerBid=${tickerBid.toExponential(4)} tickerAsk=${tickerAsk.toExponential(4)} ref=${referencePrice.toExponential(4)}`
-      );
-      logger.info(
-        `📚 [EXEC BOOK] bids: ${this.formatTopBookLevels(orderBook.bids)} | asks: ${this.formatTopBookLevels(orderBook.asks)}`
-      );
-    } catch (error) {
-      logger.warn('⚠️  Failed to fetch executable order book snapshot for diagnostics:', error);
-    }
-  }
-
-  private async logPostPlacementOrderState(orderId: string, side: 'BUY' | 'SELL', requestedPrice: number): Promise<void> {
-    const exchangeWithOrder = this.exchange as any;
-    if (typeof exchangeWithOrder.getOrder !== 'function') {
-      return;
-    }
-
-    try {
-      const pendingOrder = await exchangeWithOrder.getOrder(this.symbol, orderId);
-      logger.info(
-        `🧾 [POST-PLACE] ${side} ${orderId} pending: price=${pendingOrder.price.toExponential(4)} amount=${Math.floor(pendingOrder.amount).toLocaleString()} filled=${Math.floor(pendingOrder.filled).toLocaleString()} requested=${requestedPrice.toExponential(4)}`
-      );
-    } catch (error: any) {
-      const message = error?.message || 'unknown';
-      logger.warn(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
-    }
-  }
-
-  private async logNoFillDiagnostics(orderId: string, side: 'BUY' | 'SELL'): Promise<void> {
-    const exchangeWithOpenOrders = this.exchange as any;
-    if (typeof exchangeWithOpenOrders.getOpenOrders !== 'function') {
-      return;
-    }
-
-    const maxDiagnosticsPerCycle = 3;
-    if (this.noFillDiagnosticsThisCycle >= maxDiagnosticsPerCycle) {
-      return;
-    }
-
-    this.noFillDiagnosticsThisCycle += 1;
-
-    try {
-      const openOrders: Order[] = await exchangeWithOpenOrders.getOpenOrders(this.symbol);
-      const pendingOrder = openOrders.find((order: Order) => order.orderId === orderId);
-      const buyCount = openOrders.filter((order: Order) => order.side === 'BUY').length;
-      const sellCount = openOrders.filter((order: Order) => order.side === 'SELL').length;
-
-      if (pendingOrder) {
-        logger.info(
-          `🔎 [NO-FILL] ${side} ${orderId} still pending after 1s: price=${pendingOrder.price.toExponential(4)} amount=${Math.floor(pendingOrder.amount).toLocaleString()} filled=${Math.floor(pendingOrder.filled).toLocaleString()} | openBook=${buyCount} buys/${sellCount} sells`
-        );
-      } else {
-        logger.warn(
-          `🔎 [NO-FILL] ${side} ${orderId} not found in pending list after 1s | openBook=${buyCount} buys/${sellCount} sells`
-        );
-      }
-    } catch (error) {
-      logger.warn(`⚠️  [NO-FILL] Failed to collect pending-order diagnostics for ${orderId}:`, error);
-    }
-  }
-
-  private async logOrderDisappearance(orderId: string): Promise<void> {
-    const exchangeWithOpenOrders = this.exchange as any;
-    if (typeof exchangeWithOpenOrders.getOpenOrders !== 'function') {
-      return;
-    }
-
-    try {
-      const openOrders: Order[] = await exchangeWithOpenOrders.getOpenOrders(this.symbol);
-      const stillPending = openOrders.some((order: Order) => order.orderId === orderId);
-      const buyCount = openOrders.filter((order: Order) => order.side === 'BUY').length;
-      const sellCount = openOrders.filter((order: Order) => order.side === 'SELL').length;
-
-      logger.warn(
-        `🛰️  [ORDER-DISAPPEARED] ${orderId} missing from pending detail; pendingListContainsOrder=${stillPending} | openBook=${buyCount} buys/${sellCount} sells`
-      );
-    } catch (error) {
-      logger.warn(`⚠️  Failed to log disappearance diagnostics for order ${orderId}:`, error);
-    }
   }
 
   async start(): Promise<void> {
@@ -385,7 +280,6 @@ export class VolumeGenerationStrategy {
     }
 
     this.isPlacingOrders = true;
-    this.noFillDiagnosticsThisCycle = 0;
 
     try {
       logger.info('🔄 Starting order placement cycle');
@@ -433,8 +327,6 @@ export class VolumeGenerationStrategy {
       } catch (error) {
         logger.error('❌ Failed to fetch Biconomy market price:', error);
       }
-
-      await this.logExecutableBookSnapshot(lastPrice, biconomyBid, biconomyAsk);
 
       // Compare DEX and Biconomy price
       // Always use DEX price as reference for wash trade
@@ -969,7 +861,6 @@ export class VolumeGenerationStrategy {
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
       this.volumeStats.orderCount++;
       logger.info(`✅ Buy order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
-      void this.logPostPlacementOrderState(order.orderId, 'BUY', price);
 
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
@@ -1032,7 +923,6 @@ export class VolumeGenerationStrategy {
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
       this.volumeStats.orderCount++;
       logger.info(`✅ Sell order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
-      void this.logPostPlacementOrderState(order.orderId, 'SELL', price);
 
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
@@ -1058,7 +948,6 @@ export class VolumeGenerationStrategy {
         }
       } else {
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
-        await this.logNoFillDiagnostics(orderId, side);
       }
     } catch (error) {
       logger.error(`Error polling fills for order ${orderId}:`, error);
@@ -1158,7 +1047,6 @@ export class VolumeGenerationStrategy {
           continue;
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
-          await this.logOrderDisappearance(orderId);
           await this.captureTradesForCompletedOrder(orderId);
           logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
