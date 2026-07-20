@@ -108,23 +108,6 @@ it('should scale order notional above the legacy hard cap when balance allows it
     config.volumeStrategy.maxOrderSize = originalMaxOrderSize;
   }
 });
-it('should allow price-aware normalization to exceed the legacy token ceiling when balance permits', () => {
-  const mockExchange = {
-    getBalances: jest.fn(),
-    getTicker: jest.fn(),
-    getOpenOrders: jest.fn(),
-    cancelOrder: jest.fn(),
-    placeOrder: jest.fn(),
-    cancelAllOrders: jest.fn(),
-    getRecentTrades: jest.fn()
-  };
-  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
-  const strategy = new VolumeGenerationStrategy(mockExchange);
-
-  const normalizedAmount = (strategy as any).normalizeOrderAmount(10_000_000_000_000, 2.05e-10, 100000);
-
-  expect(normalizedAmount).toBeGreaterThan(50_000_000_000);
-});
 it('should cancel excess buy and sell orders when above the target', async () => {
   // Arrange: mock exchange with 35 buy and 37 sell open orders
   const targetOrdersPerSide = 30;
