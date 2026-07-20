@@ -629,18 +629,6 @@ export class VolumeGenerationStrategy {
         logger.error('❌ Failed to fetch Biconomy market price:', error);
       }
 
-      const tickerLooksValid =
-        Number.isFinite(biconomyBid) &&
-        Number.isFinite(biconomyAsk) &&
-        biconomyBid > 0 &&
-        biconomyAsk > 0 &&
-        biconomyAsk >= biconomyBid;
-      if (!tickerLooksValid && (biconomyBid > 0 || biconomyAsk > 0)) {
-        logger.warn(
-          `⚠️  Ignoring invalid ticker reference for drift checks: bid=${biconomyBid.toExponential(4)} ask=${biconomyAsk.toExponential(4)} (expected ask >= bid)`
-        );
-      }
-
       const executableBookSnapshot = await this.logExecutableBookSnapshot(lastPrice, biconomyBid, biconomyAsk);
       const executableMidPrice = executableBookSnapshot?.midPrice ?? 0;
       const executableBestBid = executableBookSnapshot?.bestBid ?? 0;
@@ -670,20 +658,10 @@ export class VolumeGenerationStrategy {
       }
 
       logger.info('Using DEX price as reference for all wash trades.');
-      const biconomyReferenceForDrift = executableMidPrice > 0
-        ? executableMidPrice
-        : (tickerLooksValid ? biconomyPrice : 0);
-      const hasValidBiconomyReference = Number.isFinite(biconomyReferenceForDrift) && biconomyReferenceForDrift > 0;
+      const hasValidBiconomyReference = Number.isFinite(biconomyPrice) && biconomyPrice > 0;
       const dexCexDriftPercent = hasValidBiconomyReference
-        ? (Math.abs(washPriceReference - biconomyReferenceForDrift) / biconomyReferenceForDrift) * 100
+        ? (Math.abs(washPriceReference - biconomyPrice) / biconomyPrice) * 100
         : 0;
-      if (executableMidPrice > 0) {
-        logger.info(`📌 Drift reference source: executable orderbook mid (${executableMidPrice.toExponential(4)})`);
-      } else if (tickerLooksValid) {
-        logger.info(`📌 Drift reference source: ticker mid (${biconomyPrice.toExponential(4)})`);
-      } else {
-        logger.warn('⚠️  No valid CEX reference for drift check; drift gating will be skipped this cycle.');
-      }
       const maxDexCexDriftPercent = Math.max(config.volumeStrategy.maxDexCexDriftPercent, 0);
       const canRunWashTradesByDrift =
         !config.volumeStrategy.pauseWashOnHighDrift ||
