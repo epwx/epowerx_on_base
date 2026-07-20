@@ -597,19 +597,18 @@ export class VolumeGenerationStrategy {
           config.trading.epwxAddress
         );
         logger.info(`🥞 DEX (PancakeSwap) price fetched: 1 EPWX ≈ ${dexPriceUSD} USD`);
-        // Apply markup for CEX mirroring
-        // Use 6% less than DEX price for reference
-        const discountPercent = 6;
-        const discountMultiplier = 1 - discountPercent / 100;
-        const discountedPrice = dexPriceUSD * discountMultiplier;
-        logger.info(`🔸 DEX price after ${discountPercent}% discount: 1 EPWX ≈ ${discountedPrice} USD`);
-        // Use discountedPrice as the reference for order placement
-        var lastPrice = discountedPrice;
+        const configuredDiscountPercent = Math.max(config.volumeStrategy.dexPriceDiscountPercent, 0);
+        const discountMultiplier = 1 - configuredDiscountPercent / 100;
+        const adjustedDexPrice = dexPriceUSD * discountMultiplier;
+        logger.info(
+          `🔸 DEX placement reference: raw=${dexPriceUSD.toExponential(4)} adjusted=${adjustedDexPrice.toExponential(4)} discount=${configuredDiscountPercent.toFixed(2)}%`
+        );
+        var lastPrice = adjustedDexPrice;
       } catch (error) {
         logger.error('❌ Failed to fetch DEX price from PancakeSwap:', error);
         return;
       }
-      logger.debug(`DEBUG: After DEX price fetch and markup, lastPrice=${lastPrice}`);
+      logger.debug(`DEBUG: After DEX price fetch and adjustment, lastPrice=${lastPrice}`);
       if (!lastPrice || lastPrice === 0) {
         logger.warn('⚠️  No valid DEX price available after USD conversion, skipping');
         logger.debug('DEBUG: Early return due to invalid lastPrice');

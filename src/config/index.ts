@@ -26,6 +26,7 @@ interface Config {
     orderFrequency: number;
     selfTradeEnabled: boolean;
     mirrorMarkupPercentage: number;
+    dexPriceDiscountPercent: number;
     washBasePairsPerCycle: number;
     washMaxPairsPerCycle: number;
     washReservedPlacementsPerCycle: number;
@@ -94,6 +95,7 @@ export const config: Config = {
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
+    dexPriceDiscountPercent: getEnvNumber('DEX_PRICE_DISCOUNT_PERCENT', 0),
     washBasePairsPerCycle: getEnvNumber('WASH_BASE_PAIRS_PER_CYCLE', 5),
     washMaxPairsPerCycle: getEnvNumber('WASH_MAX_PAIRS_PER_CYCLE', 12),
     washReservedPlacementsPerCycle: getEnvNumber('WASH_RESERVED_PLACEMENTS_PER_CYCLE', 10),
