@@ -552,12 +552,9 @@ export class VolumeGenerationStrategy {
 
       const sellBuyGap = sellOrders.length - buyOrders.length;
       const sellToBuyRatio = sellOrders.length / Math.max(buyOrders.length, 1);
-      const lowBookSellHeavy = buyOrders.length <= 2 && sellOrders.length > buyOrders.length;
       const shouldPrioritizeBuys =
-        lowBookSellHeavy || (
-          sellBuyGap >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
-          sellToBuyRatio >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO
-        );
+        sellBuyGap >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
+        sellToBuyRatio >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO;
 
       if (shouldPrioritizeBuys) {
         sellPlacementCap = 0;
@@ -651,12 +648,9 @@ export class VolumeGenerationStrategy {
 
           const sellBuyGapAfterTopTouch = sellOrders.length - buyOrders.length;
           const sellToBuyRatioAfterTopTouch = sellOrders.length / Math.max(buyOrders.length, 1);
-          const lowBookSellHeavyAfterTopTouch = buyOrders.length <= 2 && sellOrders.length > buyOrders.length;
           const shouldPrioritizeBuysAfterTopTouch =
-            lowBookSellHeavyAfterTopTouch || (
-              sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
-              sellToBuyRatioAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO
-            );
+            sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
+            sellToBuyRatioAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO;
 
           if (shouldPrioritizeBuysAfterTopTouch && !shouldPrioritizeBuysForDepth) {
             shouldPrioritizeBuysForDepth = true;
