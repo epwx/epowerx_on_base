@@ -29,7 +29,6 @@ interface Config {
     washReservedPlacementsPerCycle: number;
     washUsdtScaleThreshold: number;
     washOrderSizeCapUsd: number;
-    maxOrderAmountTokens: number;
     pauseWashOnHighDrift: boolean;
     maxDexCexDriftPercent: number;
   };
@@ -95,7 +94,6 @@ export const config: Config = {
     washReservedPlacementsPerCycle: getEnvNumber('WASH_RESERVED_PLACEMENTS_PER_CYCLE', 10),
     washUsdtScaleThreshold: getEnvNumber('WASH_USDT_SCALE_THRESHOLD', 1500),
     washOrderSizeCapUsd: getEnvNumber('WASH_ORDER_SIZE_CAP_USD', 35),
-    maxOrderAmountTokens: getEnvNumber('MAX_ORDER_AMOUNT_TOKENS', 50000000000),
     pauseWashOnHighDrift: getEnvBoolean('PAUSE_WASH_ON_HIGH_DRIFT', true),
     maxDexCexDriftPercent: getEnvNumber('MAX_DEX_CEX_DRIFT_PERCENT', 20),
   },

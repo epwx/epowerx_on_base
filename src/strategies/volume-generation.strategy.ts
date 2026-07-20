@@ -90,22 +90,8 @@ export class VolumeGenerationStrategy {
     };
   }
 
-  private applyOrderAmountCap(amount: number, context: string): number {
-    const configuredCap = Math.floor(config.volumeStrategy.maxOrderAmountTokens);
-    const cap = Number.isFinite(configuredCap) && configuredCap >= this.minQty
-      ? configuredCap
-      : this.minQty;
-
-    if (amount > cap) {
-      logger.warn(`⚠️  Capping ${context} order amount from ${amount} to ${cap} EPWX (MAX_ORDER_AMOUNT_TOKENS)`);
-      return cap;
-    }
-
-    return amount;
-  }
-
   private normalizeOrderAmount(amount: number): number | null {
-    const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'normalized');
+    const normalizedAmount = Math.floor(amount);
 
     if (!Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
       return null;
@@ -821,7 +807,7 @@ export class VolumeGenerationStrategy {
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
-      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'BUY');
+      const normalizedAmount = Math.floor(amount);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping buy order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
@@ -872,7 +858,7 @@ export class VolumeGenerationStrategy {
 
   protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
-      const normalizedAmount = this.applyOrderAmountCap(Math.floor(amount), 'SELL');
+      const normalizedAmount = Math.floor(amount);
       if (!this.isRunning || !Number.isFinite(price) || !Number.isFinite(normalizedAmount) || normalizedAmount < this.minQty) {
         logger.warn(`⚠️  Skipping sell order before placement: running=${this.isRunning}, amount=${normalizedAmount}, minQty=${this.minQty}, price=${price}`);
         return;
