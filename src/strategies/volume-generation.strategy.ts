@@ -734,15 +734,6 @@ export class VolumeGenerationStrategy {
         let supportSellsPlaced = 0;
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
-          const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
-          const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
-          if (projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
-            logger.info(
-              `⏭️  Stopping depth sell additions: projected openBook=${projectedBuyCount} buys/${projectedSellCount} sells in a sparse cycle.`
-            );
-            break;
-          }
-
           const sellPrice = Math.max(minSellPrice, Math.min(maxSellPrice, priceReference * (1 + 0.01 * Math.random())));
           const targetOrderUsd = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD, remaining);
           let amount = targetOrderUsd / sellPrice;
