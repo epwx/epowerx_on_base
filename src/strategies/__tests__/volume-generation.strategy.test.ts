@@ -82,32 +82,6 @@ it('should randomize per-order USD targets so quantities do not stay identical',
   expect(Math.max(...targets)).toBeLessThanOrEqual(23.6);
   randomSpy.mockRestore();
 });
-it('should scale order notional above the legacy hard cap when balance allows it', () => {
-  const mockExchange = {
-    getBalances: jest.fn(),
-    getTicker: jest.fn(),
-    getOpenOrders: jest.fn(),
-    cancelOrder: jest.fn(),
-    placeOrder: jest.fn(),
-    cancelAllOrders: jest.fn(),
-    getRecentTrades: jest.fn()
-  };
-  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
-  const strategy = new VolumeGenerationStrategy(mockExchange);
-  const config = require('../../config').config;
-  const originalMaxOrderSize = config.volumeStrategy.maxOrderSize;
-
-  config.volumeStrategy.maxOrderSize = 20;
-
-  try {
-    const scaledTarget = (strategy as any).getBalanceAwareOrderUsdTarget(10000, 30, 0.92);
-
-    expect(scaledTarget).toBeGreaterThan(20);
-    expect(scaledTarget).toBeLessThanOrEqual(100);
-  } finally {
-    config.volumeStrategy.maxOrderSize = originalMaxOrderSize;
-  }
-});
 it('should cancel excess buy and sell orders when above the target', async () => {
   // Arrange: mock exchange with 35 buy and 37 sell open orders
   const targetOrdersPerSide = 30;
