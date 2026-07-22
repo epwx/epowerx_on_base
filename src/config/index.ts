@@ -20,10 +20,28 @@ interface Config {
     volumeTargetDaily: number;
     minOrderSize: number;
     maxOrderSize: number;
+    maxOrderAmountTokens: number;
     spreadPercentage: number;
     orderFrequency: number;
     selfTradeEnabled: boolean;
     mirrorMarkupPercentage: number;
+    balanceUtilizationPercent: number;
+    idleBalanceReserveUsd: number;
+    maxDexCexDriftPercent: number;
+    pauseWashOnHighDrift: boolean;
+    washReservedPlacementsPerCycle: number;
+    washOrderSizeCapUsd: number;
+    washUsdtScaleThreshold: number;
+    washBasePairsPerCycle: number;
+    washMaxPairsPerCycle: number;
+    inventorySkewMaxPercent: number;
+    inventorySkewActivationRatio: number;
+    passiveBuyBandOuterOffsetPercent: number;
+    passiveBuyBandInnerOffsetPercent: number;
+    passiveSellBandInnerOffsetPercent: number;
+    passiveSellBandOuterOffsetPercent: number;
+    passiveSeedBaseOffsetPercent: number;
+    passiveSeedStepOffsetPercent: number;
   };
 
   marketMaking: {
@@ -78,10 +96,28 @@ export const config: Config = {
     volumeTargetDaily: getEnvNumber('VOLUME_TARGET_DAILY', 100000),
     minOrderSize: getEnvNumber('MIN_ORDER_SIZE', 50),
     maxOrderSize: getEnvNumber('MAX_ORDER_SIZE', 500),
+    maxOrderAmountTokens: getEnvNumber('MAX_ORDER_AMOUNT_TOKENS', 500000000000000),
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
+    balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),
+    idleBalanceReserveUsd: getEnvNumber('IDLE_BALANCE_RESERVE_USD', 25),
+    maxDexCexDriftPercent: getEnvNumber('MAX_DEX_CEX_DRIFT_PERCENT', 5),
+    pauseWashOnHighDrift: getEnvBoolean('PAUSE_WASH_ON_HIGH_DRIFT', true),
+    washReservedPlacementsPerCycle: getEnvNumber('WASH_RESERVED_PLACEMENTS_PER_CYCLE', 6),
+    washOrderSizeCapUsd: getEnvNumber('WASH_ORDER_SIZE_CAP_USD', 25),
+    washUsdtScaleThreshold: getEnvNumber('WASH_USDT_SCALE_THRESHOLD', 250),
+    washBasePairsPerCycle: getEnvNumber('WASH_BASE_PAIRS_PER_CYCLE', 0),
+    washMaxPairsPerCycle: getEnvNumber('WASH_MAX_PAIRS_PER_CYCLE', 3),
+    inventorySkewMaxPercent: getEnvNumber('INVENTORY_SKEW_MAX_PERCENT', 0.003),
+    inventorySkewActivationRatio: getEnvNumber('INVENTORY_SKEW_ACTIVATION_RATIO', 0.15),
+    passiveBuyBandOuterOffsetPercent: getEnvNumber('PASSIVE_BUY_BAND_OUTER_OFFSET_PERCENT', 0.004),
+    passiveBuyBandInnerOffsetPercent: getEnvNumber('PASSIVE_BUY_BAND_INNER_OFFSET_PERCENT', 0),
+    passiveSellBandInnerOffsetPercent: getEnvNumber('PASSIVE_SELL_BAND_INNER_OFFSET_PERCENT', 0),
+    passiveSellBandOuterOffsetPercent: getEnvNumber('PASSIVE_SELL_BAND_OUTER_OFFSET_PERCENT', 0.004),
+    passiveSeedBaseOffsetPercent: getEnvNumber('PASSIVE_SEED_BASE_OFFSET_PERCENT', 0.001),
+    passiveSeedStepOffsetPercent: getEnvNumber('PASSIVE_SEED_STEP_OFFSET_PERCENT', 0.0001),
   },
 
   marketMaking: {

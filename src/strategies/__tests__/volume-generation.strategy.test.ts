@@ -82,6 +82,49 @@ it('should randomize per-order USD targets so quantities do not stay identical',
   expect(Math.max(...targets)).toBeLessThanOrEqual(23.6);
   randomSpy.mockRestore();
 });
+it('should scale order notional above the legacy hard cap when balance allows it', () => {
+  const mockExchange = {
+    getBalances: jest.fn(),
+    getTicker: jest.fn(),
+    getOpenOrders: jest.fn(),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn()
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+  const originalMaxOrderSize = config.volumeStrategy.maxOrderSize;
+
+  config.volumeStrategy.maxOrderSize = 20;
+
+  try {
+    const scaledTarget = (strategy as any).getBalanceAwareOrderUsdTarget(10000, 30, 0.92);
+
+    expect(scaledTarget).toBeGreaterThan(20);
+    expect(scaledTarget).toBeLessThanOrEqual(100);
+  } finally {
+    config.volumeStrategy.maxOrderSize = originalMaxOrderSize;
+  }
+});
+it('should allow price-aware normalization to exceed the legacy token ceiling when balance permits', () => {
+  const mockExchange = {
+    getBalances: jest.fn(),
+    getTicker: jest.fn(),
+    getOpenOrders: jest.fn(),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn()
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+
+  const normalizedAmount = (strategy as any).normalizeOrderAmount(10_000_000_000_000, 2.05e-10, 100000);
+
+  expect(normalizedAmount).toBeGreaterThan(50_000_000_000);
+});
 it('should cancel excess buy and sell orders when above the target', async () => {
   // Arrange: mock exchange with 35 buy and 37 sell open orders
   const targetOrdersPerSide = 30;
@@ -126,6 +169,7 @@ it('should cancel excess buy and sell orders when above the target', async () =>
   config.trading.pair = 'EPWXUSDT';
   const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
   const strategy = new VolumeGenerationStrategy(mockExchange);
+  (strategy as any).isRunning = true;
   (strategy as any).startOrderPlacementLoop = jest.fn();
   (strategy as any).startMonitoringLoop = jest.fn();
   // Act: run placeVolumeOrders (should trigger cancellation of excess orders)
@@ -147,20 +191,23 @@ it('should cancel excess buy and sell orders when above the target', async () =>
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
-      it('should SKIP real user SELL order if MM balance < $1000 and not market value order', async () => {
+      it('should EXECUTE real user SELL order even if MM USDT balance < $1000 and price is away from market', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
             { asset: 'USDT', free: 500, locked: 0, total: 500 },
             { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
           ]),
           getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
-          placeOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'testSell', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.02, amount: 10, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
         };
         const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
         const strategy = new VolumeGenerationStrategy(mockExchange);
+        (strategy as any).isRunning = true;
         // Price is NOT market value (more than 0.5% away)
         await strategy.placeSellOrder(1.02, 10, false);
-        expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+        expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'SELL', 'LIMIT', 10, 1.02);
       });
 
       it('should EXECUTE real user SELL order if MM balance < $1000 but IS market value order', async () => {
@@ -174,11 +221,12 @@ describe('Order Placement Logic', () => {
         };
         const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
         const strategy = new VolumeGenerationStrategy(mockExchange);
+        (strategy as any).isRunning = true;
         // Price IS market value (within 0.5%)
         await strategy.placeSellOrder(1.004, 10, false);
         expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'SELL', 'LIMIT', 10, 1.004);
       });
-    it('should place at least 30 buy and 30 sell orders in the target price bands', async () => {
+    it('should place budgeted buy and sell orders in the target price bands each cycle', async () => {
       // Always return a fresh, sufficient balance for every call
       const mockExchange = {
         getBalances: jest.fn().mockImplementation(() => [
@@ -199,6 +247,7 @@ describe('Order Placement Logic', () => {
 
       const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
       strategy = new VolumeGenerationStrategy(mockExchange);
+      (strategy as any).isRunning = true;
       (strategy as any).startOrderPlacementLoop = jest.fn();
       (strategy as any).startMonitoringLoop = jest.fn();
 
@@ -208,11 +257,12 @@ describe('Order Placement Logic', () => {
 
       await (strategy as any).placeVolumeOrders();
 
-      // Only count book-depth orders (isWashTrade !== true)
-      const buyBookDepthCalls = buySpy.mock.calls.filter(args => args[2] !== true);
-      const sellBookDepthCalls = sellSpy.mock.calls.filter(args => args[2] !== true);
-      expect(buyBookDepthCalls.length).toBeGreaterThanOrEqual(30);
-      expect(sellBookDepthCalls.length).toBeGreaterThanOrEqual(30);
+      const buyPlacementCalls = buySpy.mock.calls;
+      const sellPlacementCalls = sellSpy.mock.calls;
+      // Current strategy reserves part of per-cycle slots for wash trades, so book placements are lower.
+      expect(buyPlacementCalls.length).toBeGreaterThanOrEqual(10);
+      expect(sellPlacementCalls.length).toBeGreaterThanOrEqual(10);
+      expect(buyPlacementCalls.length + sellPlacementCalls.length).toBeGreaterThanOrEqual(20);
     });
   let strategy: import('../volume-generation.strategy').VolumeGenerationStrategy | undefined;
   let setTimeoutSpy: jest.SpyInstance;
@@ -382,6 +432,7 @@ describe('MM account balance < $1000 order execution', () => {
     constructor(mockExchange: any, symbol: string = 'EPWXUSDT') {
       super(mockExchange);
       (this as any).symbol = symbol; // Bypass private for test only
+      (this as any).isRunning = true;
     }
     // Expose protected method for testing
     public async testPlaceSellOrder(price: number, amount: number, isWashTrade: boolean = false) {
@@ -389,7 +440,7 @@ describe('MM account balance < $1000 order execution', () => {
     }
   }
 
-  it('should NOT execute real user SELL order if MM balance < $1000 and not market order', async () => {
+  it('should execute real user SELL order if MM balance < $1000 and not market order', async () => {
     // Mock exchange with low USDT balance
     const mockExchange = {
       getBalances: async () => [
@@ -397,15 +448,15 @@ describe('MM account balance < $1000 order execution', () => {
         { asset: 'USDT', free: 500, locked: 0 }
       ],
       getTicker: async () => ({ price: 10 }),
-      placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 })
+      placeOrder: jest.fn().mockResolvedValue({ orderId: 'test', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+      getRecentTrades: jest.fn().mockResolvedValue([]),
+      getOpenOrders: jest.fn().mockResolvedValue([])
     };
     const strategy = new TestMMStrategy(mockExchange);
     // Price is far from market (not a market order)
       const result = await strategy.testPlaceSellOrder(12, 1, false);
-      // Should not place order, so result should be undefined
-      expect(result).toBeUndefined();
-    // Optionally, check that placeOrder was called or not, depending on the actual logic
-    // expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+      expect(result).toBe('test');
+      expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'SELL', 'LIMIT', 1, 12);
   });
 
   it('should execute real user SELL market order even if MM balance < $1000', async () => {
@@ -451,6 +502,7 @@ describe('MM account balance < $1000 order execution', () => {
       constructor(mockExchange: any, symbol: string = 'EPWXUSDT') {
         super(mockExchange);
         (this as any).symbol = symbol; // Bypass private for test only
+        (this as any).isRunning = true;
       }
       public async testPlaceBuyOrder(price: number, amount: number, isWashTrade: boolean = false) {
         return this.placeBuyOrder(price, amount, isWashTrade);
@@ -799,4 +851,228 @@ describe('Order book depth logic', () => {
     expect(strategy.placedSells.length).toBe(0);
   });
 
+});
+
+describe('Placement price anchor selection', () => {
+  it('prefers executable orderbook mid when the book is usable', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPlacementPriceReference(0.94, 1.01, true, 0.99);
+
+    expect(result).toEqual({
+      priceReference: 1.01,
+      source: 'EXECUTABLE_BOOK_MID'
+    });
+  });
+
+  it('falls back to CEX ticker mid before using discounted DEX reference', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPlacementPriceReference(0.94, 1.01, false, 0.99);
+
+    expect(result).toEqual({
+      priceReference: 0.99,
+      source: 'CEX_TICKER_MID'
+    });
+  });
+
+  it('uses DEX fallback only when no usable CEX reference exists', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPlacementPriceReference(0.94, 0, false, 0);
+
+    expect(result).toEqual({
+      priceReference: 0.94,
+      source: 'DEX_FALLBACK'
+    });
+  });
+});
+
+describe('Passive top-touch selection', () => {
+  it('keeps the top-touch buy at or below the best bid', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPassiveTopTouchPrices(0.99, 1.01);
+
+    expect(result).toEqual({
+      buyPrice: 0.99,
+      sellPrice: 1.01
+    });
+    expect(result.buyPrice).toBeLessThanOrEqual(0.99);
+  });
+
+  it('keeps the top-touch sell at or above the best ask', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPassiveTopTouchPrices(0.99, 1.01);
+
+    expect(result).toEqual({
+      buyPrice: 0.99,
+      sellPrice: 1.01
+    });
+    expect(result.sellPrice).toBeGreaterThanOrEqual(1.01);
+  });
+
+  it('does not produce crossing prices in default passive mode', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectPassiveTopTouchPrices(1.01, 0.99);
+
+    expect(result).toEqual({
+      buyPrice: 0.99,
+      sellPrice: 1.01
+    });
+    expect(result.buyPrice).toBeLessThanOrEqual(result.sellPrice);
+  });
+});
+
+describe('Quote drift protection', () => {
+  it('pauses live quote placement when high drift would force DEX fallback quoting', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectQuotePlacementDriftMode('DEX_FALLBACK', true, 6, 5);
+
+    expect(result).toEqual({
+      allowQuotePlacements: false,
+      mode: 'PAUSED'
+    });
+  });
+
+  it('allows CEX-only live quoting when drift is high but a CEX price anchor exists', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectQuotePlacementDriftMode('CEX_TICKER_MID', true, 6, 5);
+
+    expect(result).toEqual({
+      allowQuotePlacements: true,
+      mode: 'CEX_ONLY'
+    });
+  });
+
+  it('keeps normal quoting when drift is within threshold', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).selectQuotePlacementDriftMode('DEX_FALLBACK', true, 4, 5);
+
+    expect(result).toEqual({
+      allowQuotePlacements: true,
+      mode: 'NORMAL'
+    });
+  });
+});
+
+describe('Inventory-aware quote skew', () => {
+  it('lowers quote prices when inventory is long before hard rebalance', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    (strategy as any).currentPosition = 600;
+
+    const adjustedBuy = (strategy as any).applyInventorySkewToQuotePrice(1.0);
+    const adjustedSell = (strategy as any).applyInventorySkewToQuotePrice(1.01);
+
+    expect(adjustedBuy).toBeLessThan(1.0);
+    expect(adjustedSell).toBeLessThan(1.01);
+  });
+
+  it('raises quote prices when inventory is short before hard rebalance', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    (strategy as any).currentPosition = -600;
+
+    const adjustedBuy = (strategy as any).applyInventorySkewToQuotePrice(1.0);
+    const adjustedSell = (strategy as any).applyInventorySkewToQuotePrice(1.01);
+
+    expect(adjustedBuy).toBeGreaterThan(1.0);
+    expect(adjustedSell).toBeGreaterThan(1.01);
+  });
+
+  it('keeps quote prices unchanged when inventory is near neutral', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    (strategy as any).currentPosition = 0;
+
+    const adjustedBuy = (strategy as any).applyInventorySkewToQuotePrice(1.0);
+    const adjustedSell = (strategy as any).applyInventorySkewToQuotePrice(1.01);
+
+    expect(adjustedBuy).toBe(1.0);
+    expect(adjustedSell).toBe(1.01);
+  });
+});
+
+describe('Passive quote bands', () => {
+  it('keeps buy band below the active anchor using configured passive offsets', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).getPassiveQuoteBands(1.0);
+
+    expect(result.minBuyPrice).toBeCloseTo(0.996, 6);
+    expect(result.maxBuyPrice).toBeCloseTo(1.0, 6);
+    expect(result.maxBuyPrice).toBeLessThanOrEqual(1.0);
+  });
+
+  it('keeps sell band above the active anchor using configured passive offsets', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const result = (strategy as any).getPassiveQuoteBands(1.0);
+
+    expect(result.minSellPrice).toBeCloseTo(1.0, 6);
+    expect(result.maxSellPrice).toBeCloseTo(1.004, 6);
+    expect(result.minSellPrice).toBeGreaterThanOrEqual(1.0);
+  });
+
+  it('keeps seeded buy and sell layers ordered and non-overlapping', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const buyLevel0 = (strategy as any).getPassiveSeededQuotePrice(1.0, 'BUY', 0);
+    const buyLevel5 = (strategy as any).getPassiveSeededQuotePrice(1.0, 'BUY', 5);
+    const sellLevel0 = (strategy as any).getPassiveSeededQuotePrice(1.0, 'SELL', 0);
+    const sellLevel5 = (strategy as any).getPassiveSeededQuotePrice(1.0, 'SELL', 5);
+
+    expect(buyLevel0).toBeLessThan(1.0);
+    expect(buyLevel5).toBeLessThan(buyLevel0);
+    expect(sellLevel0).toBeGreaterThan(1.0);
+    expect(sellLevel5).toBeGreaterThan(sellLevel0);
+    expect(buyLevel0).toBeLessThan(sellLevel0);
+  });
+});
+
+describe('True trading PnL tracking', () => {
+  it('realizes PnL on a completed buy-then-sell round trip', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const openPnl = (strategy as any).applyEconomicFill('BUY', 100, 1.0, false);
+    const closePnl = (strategy as any).applyEconomicFill('SELL', 100, 1.1, false);
+    const profitStats = strategy.getProfitStats();
+
+    expect(openPnl).toBeCloseTo(0, 6);
+    expect(closePnl).toBeCloseTo(10, 6);
+    expect(profitStats.realizedPnl).toBeCloseTo(10, 6);
+    expect(profitStats.totalPnl).toBeCloseTo(10, 6);
+    expect(profitStats.inventoryQuantity).toBeCloseTo(0, 6);
+  });
+
+  it('tracks unrealized PnL for one-sided inventory after mark update', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    (strategy as any).applyEconomicFill('BUY', 100, 1.0, false);
+    (strategy as any).updateInventoryMarkPrice(1.05);
+    const profitStats = strategy.getProfitStats();
+
+    expect(profitStats.realizedPnl).toBeCloseTo(0, 6);
+    expect(profitStats.unrealizedPnl).toBeCloseTo(5, 6);
+    expect(profitStats.totalPnl).toBeCloseTo(5, 6);
+    expect(profitStats.inventoryQuantity).toBeCloseTo(100, 6);
+  });
+
+  it('does not inflate real-user PnL for wash-trade accounting', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+
+    const realizedPnl = (strategy as any).applyEconomicFill('BUY', 100, 1.0, true);
+    const profitStats = strategy.getProfitStats();
+
+    expect(realizedPnl).toBeCloseTo(0, 6);
+    expect(profitStats.realizedPnl).toBeCloseTo(0, 6);
+    expect(profitStats.realFillRealizedPnl).toBeCloseTo(0, 6);
+    expect(profitStats.inventoryQuantity).toBeCloseTo(0, 6);
+  });
 });
