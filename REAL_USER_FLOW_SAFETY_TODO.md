@@ -299,6 +299,38 @@ Implementation notes:
 - Increased runtime setting to `MAX_ORDER_AMOUNT_TOKENS=40000000000` for current production validation.
 - Post-change logs show materially more placements in the `36B-40B` token range, improving depth progression while preserving cap safety.
 
+### 13. Pause futile buy placement loops when reserve-constrained spendable USDT is too low
+Status: Completed on 2026-07-24
+
+Objective:
+- Prevent repeated per-order buy attempts when `availableUSDT - IDLE_BALANCE_RESERVE_USD` is below minimum order notional.
+- Reduce repetitive warning noise and keep cycle behavior deterministic under tight reserve conditions.
+
+Implementation notes:
+- Added a cycle-level buy feasibility gate in the strategy based on reserve-constrained spendable USDT.
+- When spendable USDT is below minimum notional, buy placement paths are skipped for the current cycle.
+- Added a single cycle summary warning (`Buy placements paused this cycle...`) instead of repeated per-order skip warnings.
+- Ensured sell-side imbalance buy-priority logic does not force buy-path attempts when reserve gating disables buys.
+
+Tests:
+- Added a regression test proving buy placement loops are skipped when spendable USDT after reserve is below minimum notional.
+- Added a regression assertion for the single summary warning behavior.
+- Re-ran focused strategy suite and full project suite after patching.
+
+Acceptance criteria:
+- No repeated futile buy placement attempts occur in cycles where spendable reserve-constrained USDT is below minimum notional.
+- Logging remains concise and explanatory with one cycle-level warning for the gating condition.
+- Existing strategy behavior remains regression-safe.
+
+Validation outcomes:
+- Focused strategy suite passed (`56/56`).
+- Full Jest suite passed (`110/110`).
+- Changes committed and pushed in commit `e6f8c1b`.
+
+Post-deploy checks:
+- Verify production logs show cycle-level pause warnings instead of repeated per-order reserve skip spam.
+- Confirm sell-side maintenance still proceeds while buy paths remain safely gated under low spendable balance.
+
 Acceptance criteria:
 - Cap warnings become occasional safety events rather than dominant sizing behavior.
 - Book depth progresses toward configured targets with fewer under-sized placements.
