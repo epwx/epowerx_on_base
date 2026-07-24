@@ -40,6 +40,11 @@ export class VolumeGenerationStrategy {
   private static readonly MIN_ORDER_NOTIONAL_USD = 5.01;
   private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
   private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
+  private static readonly ADVERSE_BUY_FILL_GUARD_MIN_REAL_BUY_FILLS = 3;
+  private static readonly ADVERSE_BUY_FILL_GUARD_MIN_GAP = 2;
+  private static readonly ADVERSE_BUY_FILL_GUARD_MIN_RATIO = 1.6;
+  private static readonly ADVERSE_BUY_FILL_GUARD_INVENTORY_DEPTH_MULTIPLIER = 1.25;
+  private static readonly ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD = 25;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
@@ -74,6 +79,8 @@ export class VolumeGenerationStrategy {
   private noFillDiagnosticsThisCycle: number = 0;
   private rebalanceInProgress: boolean = false;
   private lastRebalanceAt: number = 0;
+  private realBuyFills: number = 0;
+  private realSellFills: number = 0;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -204,6 +211,11 @@ export class VolumeGenerationStrategy {
     this.profitStats.realizedPnl += realizedPnl;
     this.profitStats.realFillRealizedPnl += realizedPnl;
     this.profitStats.realFills++;
+    if (side === 'BUY') {
+      this.realBuyFills++;
+    } else {
+      this.realSellFills++;
+    }
 
     if (realizedPnl > this.profitStats.bestRealizedFillPnl) {
       this.profitStats.bestRealizedFillPnl = realizedPnl;
@@ -278,6 +290,37 @@ export class VolumeGenerationStrategy {
 
   private getMinimumOrderUsdTarget(): number {
     return VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD + 0.25;
+  }
+
+  private evaluateAdverseBuyFillGuard(markPrice: number, targetBuyDepthUsd: number): {
+    active: boolean;
+    buyFillGap: number;
+    buySellRatio: number;
+    longInventoryUsd: number;
+    inventoryLimitUsd: number;
+  } {
+    const buyFillGap = this.realBuyFills - this.realSellFills;
+    const buySellRatio = this.realBuyFills / Math.max(this.realSellFills, 1);
+    const safeMarkPrice = Number.isFinite(markPrice) && markPrice > 0 ? markPrice : 0;
+    const longInventoryUsd = Math.max(this.profitStats.inventoryQuantity, 0) * safeMarkPrice;
+    const inventoryLimitUsd = Math.max(
+      targetBuyDepthUsd * VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_INVENTORY_DEPTH_MULTIPLIER,
+      VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD
+    );
+
+    const hasPersistentBuyFillImbalance =
+      this.realBuyFills >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_REAL_BUY_FILLS &&
+      buyFillGap >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_GAP &&
+      buySellRatio >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_RATIO;
+    const hasExcessLongInventory = longInventoryUsd >= inventoryLimitUsd;
+
+    return {
+      active: hasPersistentBuyFillImbalance || hasExcessLongInventory,
+      buyFillGap,
+      buySellRatio,
+      longInventoryUsd,
+      inventoryLimitUsd,
+    };
   }
 
   private getEffectiveOrderUsdCap(availableUsd: number): number {
@@ -1018,6 +1061,17 @@ export class VolumeGenerationStrategy {
         `🧮 Placement budgets: max=${maxPlacementsPerCycle}, book=${bookPlacementBudget}, reservedWash=${washReservedPlacements}, targetWashPairs=${dynamicWashTradePairs}`
       );
 
+      const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
+      if (adverseBuyGuard.active) {
+        buyPlacementCap = 0;
+        if (shouldPrioritizeBuysForDepth) {
+          shouldPrioritizeBuysForDepth = false;
+        }
+        logger.warn(
+          `🛑 Adverse-fill buy guard active: realFills BUY=${this.realBuyFills}, SELL=${this.realSellFills}, gap=${adverseBuyGuard.buyFillGap}, ratio=${adverseBuyGuard.buySellRatio.toFixed(2)}x, longInventory=$${adverseBuyGuard.longInventoryUsd.toFixed(2)} (limit $${adverseBuyGuard.inventoryLimitUsd.toFixed(2)}). Suppressing new BUY placements this cycle.`
+        );
+      }
+
       if (!canPlaceReserveConstrainedBuys) {
         logger.warn(
           `⚠️  Buy placements paused this cycle: spendable USDT $${spendableBuyUsd.toFixed(2)} is below minimum notional $${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD.toFixed(2)} after reserve $${buyReserveUsd.toFixed(2)}.`
@@ -1300,7 +1354,7 @@ export class VolumeGenerationStrategy {
       const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
       const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
       const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washFeatureEnabled = config.volumeStrategy.selfTradeEnabled && canRunWashTradesByDrift;
+      const washFeatureEnabled = config.volumeStrategy.selfTradeEnabled && canRunWashTradesByDrift && !adverseBuyGuard.active;
       const washTradePairs = washFeatureEnabled
         ? Math.min(
             dynamicWashTradePairs,
@@ -1313,6 +1367,9 @@ export class VolumeGenerationStrategy {
       );
       if (!config.volumeStrategy.selfTradeEnabled) {
         logger.info('⏭️  Wash trades disabled via SELF_TRADE_ENABLED=false');
+      }
+      if (adverseBuyGuard.active) {
+        logger.info('⏭️  Wash trades paused while adverse-fill buy guard is active.');
       }
       if (!bookSeeded) {
         logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
