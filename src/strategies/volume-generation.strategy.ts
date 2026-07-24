@@ -140,6 +140,18 @@ export class VolumeGenerationStrategy {
       (this.profitStats.realizedPnl / Math.max(runtimeHours, 0.01)) * 24;
   }
 
+  private getTargetOrdersPerSide(): number {
+    return Math.max(1, Math.floor(config.volumeStrategy.targetOrdersPerSide));
+  }
+
+  private getTargetBuyDepthUsd(): number {
+    return Math.max(0, config.volumeStrategy.targetBuyDepthUsd);
+  }
+
+  private getTargetSellDepthUsd(): number {
+    return Math.max(0, config.volumeStrategy.targetSellDepthUsd);
+  }
+
   private applyEconomicFill(side: 'BUY' | 'SELL', amount: number, price: number, isWashTrade: boolean): number {
     if (!Number.isFinite(amount) || !Number.isFinite(price) || amount <= 0 || price <= 0) {
       return 0;
@@ -794,10 +806,12 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      // Place and maintain at least 30 buy and 30 sell orders in the order book
-      const targetOrdersPerSide = 30;
+      // Place and maintain the configured live-book targets for this deployment profile.
+      const targetOrdersPerSide = this.getTargetOrdersPerSide();
+      const targetBuyDepthUsd = this.getTargetBuyDepthUsd();
+      const targetSellDepthUsd = this.getTargetSellDepthUsd();
       const maxPlacementsPerCycle = Math.max(
-        8,
+        2,
         Math.min(targetOrdersPerSide, Math.floor(config.volumeStrategy.orderFrequency / 4000))
       );
       const configuredWashReservedPlacements = Math.max(
@@ -1025,11 +1039,11 @@ export class VolumeGenerationStrategy {
         .filter(o => o.price >= minSellPrice && o.price <= maxSellPrice)
         .reduce((sum, o) => sum + o.price * o.amount, 0);
 
-      logger.info(`📏 Buy depth (${buyBandLabel}): $${buyDepth.toFixed(2)} | Sell depth (${sellBandLabel}): $${sellDepth.toFixed(2)}`);
+      logger.info(`📏 Buy depth (${buyBandLabel}): $${buyDepth.toFixed(2)} / $${targetBuyDepthUsd.toFixed(2)} | Sell depth (${sellBandLabel}): $${sellDepth.toFixed(2)} / $${targetSellDepthUsd.toFixed(2)}`);
 
 
-      // Place additional buy orders if needed to reach 200 USDT depth (business requirement)
-      let buyDepthShortfall = 200 - buyDepth;
+      // Place additional buy orders if needed to reach the configured buy-side depth target.
+      let buyDepthShortfall = targetBuyDepthUsd - buyDepth;
       if (buyDepthShortfall > 0) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in ${buyBandLabel} of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
@@ -1064,8 +1078,8 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      // Place additional sell orders if needed to reach 200 USDT depth (business requirement)
-      let sellDepthShortfall = 200 - sellDepth;
+      // Place additional sell orders if needed to reach the configured sell-side depth target.
+      let sellDepthShortfall = targetSellDepthUsd - sellDepth;
       if (sellDepthShortfall > 0) {
         if (shouldPrioritizeBuysForDepth) {
           logger.info('⏭️  Skipping depth sell additions this cycle because buy-side replenishment is prioritized.');

@@ -233,3 +233,27 @@ Implementation notes:
 
 Verification goals:
 - Ensure the rollout sequence preserves rollback paths and minimizes production risk.
+
+### 10. Add configurable low-liquidity rollout book caps
+Status: Completed on 2026-07-23
+
+Objective:
+- Prevent small-balance observation runs from silently growing toward the default production book-size targets.
+
+Implementation notes:
+- Make target orders per side configurable instead of fixed at `30`.
+- Make target buy depth and target sell depth configurable instead of fixed at `$200` each.
+- Keep production defaults unchanged while allowing much smaller caps for cautious first-run deployments.
+
+Tests:
+- Add a test proving cleanup respects a lower configured target order count.
+- Add a test proving a low-liquidity rollout cycle does not place extra depth orders beyond the configured per-side cap.
+
+Acceptance criteria:
+- A small-balance deployment can cap total live orders and book depth through `.env` without changing code again.
+- Default behavior remains backward compatible for existing production profiles.
+
+Implementation notes:
+- Added `TARGET_ORDERS_PER_SIDE`, `TARGET_BUY_DEPTH_USD`, and `TARGET_SELL_DEPTH_USD` config values.
+- Replaced the hard-coded `30` orders-per-side target and `$200` per-side depth targets with those config values in the strategy.
+- Preserved previous production behavior through unchanged defaults while enabling true low-liquidity observation profiles.

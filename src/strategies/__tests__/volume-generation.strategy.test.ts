@@ -188,6 +188,79 @@ it('should cancel excess buy and sell orders when above the target', async () =>
   expect(buyIds).toEqual(buyOrders.slice(-30).map((o: any) => o.orderId));
   expect(sellIds).toEqual(sellOrders.slice(-30).map((o: any) => o.orderId));
 });
+
+it('honors a lower configured target orders per side during cleanup', async () => {
+  const targetOrdersPerSide = 4;
+  const buyOrders = Array.from({ length: 7 }, (_, index) => ({
+    orderId: `buy-${index}`,
+    side: 'BUY',
+    price: 1,
+    amount: 10,
+    timestamp: index + 1,
+    filled: 0,
+    status: 'NEW',
+  }));
+  const sellOrders = Array.from({ length: 6 }, (_, index) => ({
+    orderId: `sell-${index}`,
+    side: 'SELL',
+    price: 1,
+    amount: 10,
+    timestamp: index + 1,
+    filled: 0,
+    status: 'NEW',
+  }));
+  const openOrders = [...buyOrders, ...sellOrders];
+  const cancelledOrders: string[] = [];
+  const mockExchange = {
+    getBalances: jest.fn().mockResolvedValue([
+      { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+      { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+    ]),
+    getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+    getOpenOrders: jest.fn().mockImplementation(() => Promise.resolve(openOrders.filter((o: any) => !cancelledOrders.includes(o.orderId)))),
+    cancelOrder: jest.fn().mockImplementation((_symbol: any, orderId: string) => {
+      cancelledOrders.push(orderId);
+      return Promise.resolve();
+    }),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn().mockResolvedValue([])
+  };
+
+  jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.0);
+  const config = require('../../config').config;
+  const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+  const originalPair = config.trading.pair;
+  const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+  const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+  const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+
+  config.volumeStrategy.orderFrequency = 1000000;
+  config.trading.pair = 'EPWXUSDT';
+  config.volumeStrategy.targetOrdersPerSide = targetOrdersPerSide;
+  config.volumeStrategy.targetBuyDepthUsd = 0;
+  config.volumeStrategy.targetSellDepthUsd = 0;
+
+  try {
+    const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+    const strategy = new VolumeGenerationStrategy(mockExchange);
+    (strategy as any).isRunning = true;
+
+    await (strategy as any).placeVolumeOrders();
+
+    const remainingOrders = await mockExchange.getOpenOrders();
+    const remainingBuys = remainingOrders.filter((o: any) => o.side === 'BUY');
+    const remainingSells = remainingOrders.filter((o: any) => o.side === 'SELL');
+    expect(remainingBuys.length).toBe(targetOrdersPerSide);
+    expect(remainingSells.length).toBe(targetOrdersPerSide);
+  } finally {
+    config.volumeStrategy.orderFrequency = originalOrderFrequency;
+    config.trading.pair = originalPair;
+    config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+    config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+    config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+  }
+});
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
@@ -264,6 +337,56 @@ describe('Order Placement Logic', () => {
       expect(sellPlacementCalls.length).toBeGreaterThanOrEqual(10);
       expect(buyPlacementCalls.length + sellPlacementCalls.length).toBeGreaterThanOrEqual(20);
     });
+
+      it('should limit a low-liquidity rollout cycle to the configured order and depth caps', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockImplementation(() => [
+            { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ].map(b => ({ ...b }))),
+          getTicker: async () => ({ bid: 1.0, ask: 1.0, price: 1.0 }),
+          getOpenOrders: async () => [],
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: Math.random().toString(), symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([])
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.0);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+
+        config.volumeStrategy.orderFrequency = 1000000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 4;
+        config.volumeStrategy.targetBuyDepthUsd = 30;
+        config.volumeStrategy.targetSellDepthUsd = 30;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+          (strategy as any).startOrderPlacementLoop = jest.fn();
+          (strategy as any).startMonitoringLoop = jest.fn();
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue('buyId');
+          const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sellId');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).toHaveBeenCalledTimes(1);
+          expect(sellSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+        }
+      });
   let strategy: import('../volume-generation.strategy').VolumeGenerationStrategy | undefined;
   let setTimeoutSpy: jest.SpyInstance;
   let setIntervalSpy: jest.SpyInstance;

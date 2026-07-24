@@ -21,6 +21,9 @@ interface Config {
     minOrderSize: number;
     maxOrderSize: number;
     maxOrderAmountTokens: number;
+    targetOrdersPerSide: number;
+    targetBuyDepthUsd: number;
+    targetSellDepthUsd: number;
     spreadPercentage: number;
     orderFrequency: number;
     selfTradeEnabled: boolean;
@@ -97,6 +100,9 @@ export const config: Config = {
     minOrderSize: getEnvNumber('MIN_ORDER_SIZE', 50),
     maxOrderSize: getEnvNumber('MAX_ORDER_SIZE', 500),
     maxOrderAmountTokens: getEnvNumber('MAX_ORDER_AMOUNT_TOKENS', 500000000000000),
+    targetOrdersPerSide: getEnvNumber('TARGET_ORDERS_PER_SIDE', 30),
+    targetBuyDepthUsd: getEnvNumber('TARGET_BUY_DEPTH_USD', 200),
+    targetSellDepthUsd: getEnvNumber('TARGET_SELL_DEPTH_USD', 200),
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
