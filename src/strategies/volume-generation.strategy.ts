@@ -308,7 +308,9 @@ export class VolumeGenerationStrategy {
       VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD
     );
 
+    const hasLongInventoryBias = this.profitStats.inventoryQuantity > 0 || this.currentPosition > 0;
     const hasPersistentBuyFillImbalance =
+      hasLongInventoryBias &&
       this.realBuyFills >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_REAL_BUY_FILLS &&
       buyFillGap >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_GAP &&
       buySellRatio >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_RATIO;
@@ -1064,6 +1066,9 @@ export class VolumeGenerationStrategy {
       const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
       if (adverseBuyGuard.active) {
         buyPlacementCap = 0;
+        if (missingSellOrders > 0) {
+          sellPlacementCap = Math.max(sellPlacementCap, bookPlacementBudget);
+        }
         if (shouldPrioritizeBuysForDepth) {
           shouldPrioritizeBuysForDepth = false;
         }

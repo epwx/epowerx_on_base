@@ -817,6 +817,8 @@ describe('Order Placement Logic', () => {
           (strategy as any).isRunning = true;
           (strategy as any).realBuyFills = 6;
           (strategy as any).realSellFills = 2;
+          (strategy as any).currentPosition = 1_000_000_000;
+          (strategy as any).profitStats.inventoryQuantity = 1_000_000_000;
 
           const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
           const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
@@ -873,6 +875,64 @@ describe('Order Placement Logic', () => {
           (strategy as any).isRunning = true;
           (strategy as any).realBuyFills = 4;
           (strategy as any).realSellFills = 4;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue('buy-seed');
+          jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).toHaveBeenCalled();
+          expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Adverse-fill buy guard active'));
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          warnSpy.mockRestore();
+        }
+      });
+
+      it('should allow corrective buy placements when inventory is short even if buy fill-count skew exists', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 250, locked: 0, total: 250 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.582e-10, ask: 1.325e-10, price: 1.4535e-10 }),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'adverse-buy-short-inventory', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 25;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+          (strategy as any).realBuyFills = 6;
+          (strategy as any).realSellFills = 2;
+          (strategy as any).currentPosition = -1_000_000_000;
+          (strategy as any).profitStats.inventoryQuantity = -1_000_000_000;
 
           const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue('buy-seed');
           jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
