@@ -309,7 +309,7 @@ Observed production outcomes:
 - Order-count and depth controls remained bounded during the same windows (`4x4` target behavior and depth progression toward configured limits).
 
 ### 13. Add rebalance execution price guard for abnormal-book conditions
-Status: Completed on 2026-07-24 (spread-guard production validated)
+Status: Completed on 2026-07-24 (spread+deviation production validated)
 
 Objective:
 - Prevent rebalance orders from executing at clearly unsafe prices during temporary orderbook dislocations or thin-book anomalies.
@@ -339,4 +339,6 @@ Observed production outcomes:
 - Real SELL flow was validated in a follow-up live window, including sell fill detection, positive realized PnL progression, and stable post-fill orderbook maintenance under configured caps.
 - Position recovery behavior remained bounded after buy/sell activity, with inventory moving toward neutral and skew logic continuing to adjust quotes without triggering unsafe rebalance execution.
 - Intermittent exchange API outages (`Service is not available`) were observed during the same period and should be treated as an external reliability caveat, not a guard-logic regression.
-- Live-only validation of the deviation guard branch remains optional follow-up work when market conditions produce a deviation-trigger scenario.
+- Deviation-guard branch was validated in production using a temporary strict threshold run (`REBALANCE_MAX_SPREAD_PERCENT=30`, `REBALANCE_MAX_PRICE_DEVIATION_PERCENT=0.5`), with explicit skip evidence: `Skipping rebalance BUY because quote deviation is too high (8.78% > 0.50%; ...)` and `... (9.15% > 0.50%; ...)`.
+- Cooldown behavior remained correct after deviation-guard skips (`Rebalance cooldown active ...`) and regular order-placement/fill maintenance continued without rebalance storm recurrence.
+- After validation, production-safe guard values were restored to `REBALANCE_MAX_SPREAD_PERCENT=5` and `REBALANCE_MAX_PRICE_DEVIATION_PERCENT=5`.
