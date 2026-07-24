@@ -1029,13 +1029,15 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      let canPlaceSellQuotesThisCycle = true;
+      let sellPlacementPriceReference = skewedPriceReference;
+      let sellPlacementMode: 'PASSIVE' | 'EXCHANGE_BAND_FALLBACK' = 'PASSIVE';
       const sellClampProbePrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', 0);
       const sellClampProbeExecutablePrice = await this.clampPriceToLatestBand(sellClampProbePrice);
       if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice)) {
-        canPlaceSellQuotesThisCycle = false;
+        sellPlacementPriceReference = sellClampProbeExecutablePrice;
+        sellPlacementMode = 'EXCHANGE_BAND_FALLBACK';
         logger.warn(
-          `⚠️  Sell placements paused this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
+          `⚠️  Sell placements using exchange-band fallback this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
         );
       }
       const allowSparseSellRecovery = !canPlaceReserveConstrainedBuys;
@@ -1067,7 +1069,10 @@ export class VolumeGenerationStrategy {
         }
 
         if (hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth && passiveTopTouchPrices) {
-          const sellTouchPrice = this.applyInventorySkewToQuotePrice(passiveTopTouchPrices.sellPrice);
+          const sellTouchAnchorPrice = sellPlacementMode === 'EXCHANGE_BAND_FALLBACK'
+            ? sellPlacementPriceReference
+            : passiveTopTouchPrices.sellPrice;
+          const sellTouchPrice = this.applyInventorySkewToQuotePrice(sellTouchAnchorPrice);
           const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
           const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize), sellTouchPrice, availableSellUsd);
@@ -1108,9 +1113,10 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      const { minBuyPrice, maxBuyPrice, minSellPrice, maxSellPrice } = this.getPassiveQuoteBands(skewedPriceReference);
+      const { minBuyPrice, maxBuyPrice } = this.getPassiveQuoteBands(skewedPriceReference);
+      const { minSellPrice, maxSellPrice } = this.getPassiveQuoteBands(sellPlacementPriceReference);
       const buyBandLabel = `${((minBuyPrice / skewedPriceReference) * 100).toFixed(2)}%-${((maxBuyPrice / skewedPriceReference) * 100).toFixed(2)}%`;
-      const sellBandLabel = `${((minSellPrice / skewedPriceReference) * 100).toFixed(2)}%-${((maxSellPrice / skewedPriceReference) * 100).toFixed(2)}%`;
+      const sellBandLabel = `${((minSellPrice / sellPlacementPriceReference) * 100).toFixed(2)}%-${((maxSellPrice / sellPlacementPriceReference) * 100).toFixed(2)}%`;
 
       const buyDepth = buyOrders
         .filter(o => o.price >= minBuyPrice && o.price <= maxBuyPrice)
@@ -1172,12 +1178,13 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      if (sellDepthShortfall > 0 && !canPlaceSellQuotesThisCycle) {
-        logger.info('⏭️  Skipping sell-depth additions this cycle because passive sell prices would require extreme clamp repricing.');
-      }
-
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth && canPlaceSellQuotesThisCycle) {
-        logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in ${sellBandLabel} of Mid-Price (Business Support)`);
+      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
+        if (sellPlacementMode === 'EXCHANGE_BAND_FALLBACK') {
+          logger.info(
+            `🔁 Using exchange-band fallback sell pricing this cycle to keep sell depth building inside the latest-price band.`
+          );
+        }
+        logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in ${sellBandLabel} of Fallback Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
         const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
@@ -1251,7 +1258,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth && canPlaceSellQuotesThisCycle) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
@@ -1263,7 +1270,7 @@ export class VolumeGenerationStrategy {
             break;
           }
 
-          const sellPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', i);
+          const sellPrice = this.getPassiveSeededQuotePrice(sellPlacementPriceReference, 'SELL', i);
           const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD);
           let rawAmount = sellOrderUsdTarget / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);

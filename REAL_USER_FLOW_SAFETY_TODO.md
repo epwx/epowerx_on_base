@@ -467,27 +467,28 @@ Post-deploy checks:
 - Confirm logs show buy pause warnings plus continuing sell seeding attempts rather than repeated `0 buys / 0 sells` stalling.
 - Confirm sparse-cycle sell-suppression logs no longer block all sell placement during reserve-paused windows.
 
-### 17. Suppress futile sell placement loops when extreme clamp repricing is guaranteed
+### 17. Add guarded fallback sell pricing for extreme clamp conditions
 Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
 
 Objective:
-- Prevent repeated sell placement attempts in a cycle when passive sell quotes will certainly be skipped by the extreme clamp-reprice safety guard.
-- Reduce log noise and avoid wasted placement work under abnormal-book conditions.
+- Prevent repeated sell placement attempts in a cycle when passive sell quotes would be extreme-clamped.
+- Keep sell-side activity alive by shifting to exchange-band-compatible fallback pricing instead of hard-pausing the cycle.
 
 Implementation notes:
 - Post-deploy logs on build `7fcb681` showed repeated sell placement attempts followed by repeated skips due to extreme clamp repricing.
-- Added a cycle-level sell viability probe using passive sell anchor pricing and latest-band clamp behavior.
-- If the probe indicates repricing exceeds `MAX_CLAMP_REPRICE_RATIO`, sell placements are paused for that cycle with one summary warning.
-- Added explicit cycle-level info log for skipped sell-depth additions under guaranteed extreme clamp conditions.
+- Replaced the hard pause with a guarded exchange-band fallback reference when the passive sell anchor would extreme-clamp.
+- The fallback keeps sell-depth and seeded sell placement paths active while still respecting the latest-price band.
+- Added explicit cycle-level log output explaining when fallback sell pricing is active.
 
 Tests:
-- Added regression test proving sell placement loops are skipped when passive sell anchors would be extreme-clamped.
+- Added regression test proving sell placement loops use fallback sell pricing when passive sell anchors would be extreme-clamped.
 - Preserved existing reserve-paused buy gating coverage and extreme clamp per-order guard coverage.
 - Re-ran focused strategy suite and full project suite after patching.
 
 Acceptance criteria:
-- No repeated per-attempt sell loop churn occurs in cycles where sell quotes are guaranteed to fail extreme clamp ratio checks.
-- One clear cycle-level warning explains why sell placements are paused.
+- No repeated per-attempt sell loop churn occurs in cycles where sell quotes would be extreme-clamped.
+- One clear cycle-level warning explains why exchange-band fallback sell pricing is active.
+- Sell placements can continue inside the allowed band instead of idling the book.
 - Existing safety guards (reserve gating, drift guard, clamp-reprice guard) remain intact.
 
 Validation outcomes:
@@ -496,5 +497,29 @@ Validation outcomes:
 - Changes committed and pushed in commit `5fa631d`.
 
 Post-deploy checks:
-- Confirm logs emit the cycle-level `Sell placements paused this cycle...` warning.
+- Confirm logs emit the cycle-level exchange-band fallback warning for sell pricing.
 - Confirm repeated same-cycle sell attempt/skip sequences are no longer present under the same abnormal-book conditions.
+- Confirm sell placements resume inside the latest-price band instead of going fully idle on the sell side.
+
+### 18. Restore controlled activity with a three-step recovery plan
+Status: In progress (step 3 implemented in code; reserve tuning still pending)
+
+Objective:
+- Move from safe idle behavior back toward controlled placement activity without dropping the existing reserve, drift, and clamp protections.
+
+Plan:
+1. Keep the current safety-first idle baseline in place so the bot remains protected while the market is dislocated.
+2. Lower `IDLE_BALANCE_RESERVE_USD` gradually until spendable USDT can exceed minimum notional for buy placements.
+3. The guarded fallback quote mode for sell placements has now been implemented in code; verify it in production, then tune reserve conservatively if more activity is needed.
+
+Expected outcome:
+- The bot should progress from idle -> partial buy reactivation -> fuller two-sided book maintenance, while still respecting reserve, drift, and clamp safety logic.
+
+Risks:
+- Reducing reserve too quickly can re-enable unwanted exposure.
+- Enabling fallback quoting without guardrails could reintroduce unsafe fills if extreme market dislocations persist.
+
+Verification goals:
+- Confirm buys resume only after reserve reduction leaves enough spendable USDT above minimum notional.
+- Confirm the fallback quote mode still refuses unsafe placements and logs its decision clearly.
+- Confirm the bot does not regress into repeated skip loops or reserve-drain behavior.

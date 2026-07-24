@@ -779,7 +779,7 @@ describe('Order Placement Logic', () => {
         }
       });
 
-      it('should skip sell placement loops with one summary warning when passive sell anchors would be extreme-clamped', async () => {
+      it('should use exchange-band fallback sell pricing when passive sell anchors would be extreme-clamped', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
             { asset: 'USDT', free: 182.75, locked: 0, total: 182.75 },
@@ -819,8 +819,8 @@ describe('Order Placement Logic', () => {
 
           await (strategy as any).placeVolumeOrders();
 
-          expect(sellSpy).not.toHaveBeenCalled();
-          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Sell placements paused this cycle'));
+          expect(sellSpy).toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('exchange-band fallback'));
         } finally {
           config.volumeStrategy.orderFrequency = originalOrderFrequency;
           config.trading.pair = originalPair;
