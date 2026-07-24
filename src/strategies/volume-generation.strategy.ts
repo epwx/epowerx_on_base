@@ -1488,6 +1488,21 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      const ticker = await this.exchange.getTicker(this.symbol);
+      const latestPrice = ticker?.price ?? 0;
+      if (Number.isFinite(latestPrice) && latestPrice > 0) {
+        const lowerBound = latestPrice * 0.995;
+        const upperBound = latestPrice * 1.005;
+        const clampedPrice = Math.min(Math.max(price, lowerBound), upperBound);
+
+        if (clampedPrice !== price) {
+          logger.warn(
+            `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band around ${latestPrice.toExponential(4)}`
+          );
+          price = clampedPrice;
+        }
+      }
+
       if (normalizedAmount > availableEPWX) {
         logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
