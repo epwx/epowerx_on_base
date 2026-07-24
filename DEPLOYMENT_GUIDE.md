@@ -154,7 +154,10 @@ Update these values:
 ```env
 BICONOMY_EXCHANGE_API_KEY=your-new-api-key
 BICONOMY_EXCHANGE_API_SECRET=your-new-api-secret
+IDLE_BALANCE_RESERVE_USD=175   # Conservative low-liquidity recovery starting point; lower gradually only if needed
 ```
+
+For the current low-balance recovery profile, keep the reserve high enough to protect capital, but below the point where spendable USDT drops under the minimum order notional. On the current account balance, 175 is a conservative starting point that should allow buys to resume while preserving most idle cash.
 
 Save: `Ctrl + O`, `Enter`, `Ctrl + X`
 

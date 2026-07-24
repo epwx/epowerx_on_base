@@ -509,7 +509,7 @@ Objective:
 
 Plan:
 1. Keep the current safety-first idle baseline in place so the bot remains protected while the market is dislocated.
-2. Lower `IDLE_BALANCE_RESERVE_USD` gradually until spendable USDT can exceed minimum notional for buy placements.
+2. Lower `IDLE_BALANCE_RESERVE_USD` gradually; start around `175` on the current account so spendable USDT can exceed minimum notional for buy placements.
 3. The guarded fallback quote mode for sell placements has now been implemented in code; verify it in production, then tune reserve conservatively if more activity is needed.
 
 Expected outcome:
@@ -522,4 +522,5 @@ Risks:
 Verification goals:
 - Confirm buys resume only after reserve reduction leaves enough spendable USDT above minimum notional.
 - Confirm the fallback quote mode still refuses unsafe placements and logs its decision clearly.
+- Confirm the `175` reserve starting point produces buy placements without reintroducing reserve-drain behavior.
 - Confirm the bot does not regress into repeated skip loops or reserve-drain behavior.
