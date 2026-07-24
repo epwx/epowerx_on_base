@@ -1082,6 +1082,11 @@ export class VolumeGenerationStrategy {
           `⚠️  Buy placements paused this cycle: spendable USDT $${spendableBuyUsd.toFixed(2)} is below minimum notional $${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD.toFixed(2)} after reserve $${buyReserveUsd.toFixed(2)}.`
         );
 
+        if (sellPlacementCap === 0 && missingSellOrders > 0) {
+          sellPlacementCap = Math.max(1, bookPlacementBudget);
+          logger.info('⏭️  Restoring sell placement budget because buy placements are reserve-constrained this cycle.');
+        }
+
         if (shouldPrioritizeBuysForDepth) {
           shouldPrioritizeBuysForDepth = false;
           logger.info('⏭️  Buy-side prioritization is disabled this cycle because reserve-constrained buy placements are paused.');

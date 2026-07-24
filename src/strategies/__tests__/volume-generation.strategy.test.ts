@@ -780,6 +780,63 @@ describe('Order Placement Logic', () => {
         }
       });
 
+      it('should restore sell placement budget when reserve-paused buys collide with sell-imbalance priority', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 144.47, locked: 0, total: 144.47 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.582e-10, ask: 1.325e-10, price: 1.4535e-10 }),
+          getOpenOrders: jest.fn().mockResolvedValue([
+            { orderId: 'existing-sell-1', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 4.3154e-9, amount: 1000000000, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }
+          ]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'sell-restored-cap', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const logger = require('../../utils/logger').logger;
+        const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 10;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
+          const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).not.toHaveBeenCalled();
+          expect(sellSpy).toHaveBeenCalled();
+          expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Restoring sell placement budget because buy placements are reserve-constrained this cycle.'));
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          infoSpy.mockRestore();
+        }
+      });
+
       it('should suppress buy placements when adverse real-fill imbalance guard is active', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
