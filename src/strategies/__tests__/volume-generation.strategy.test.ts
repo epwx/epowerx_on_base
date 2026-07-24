@@ -666,6 +666,64 @@ describe('Order Placement Logic', () => {
         }
       });
 
+      it('should skip buy placement when clamp repricing is extreme', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 10, ask: 10, price: 10 }),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'buyExtreme', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+        };
+
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+        const strategy = new VolumeGenerationStrategy(mockExchange);
+        (strategy as any).isRunning = true;
+
+        try {
+          await strategy.placeBuyOrder(1, 10, false);
+
+          expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping buy order due to extreme clamp reprice'));
+        } finally {
+          warnSpy.mockRestore();
+        }
+      });
+
+      it('should skip sell placement when clamp repricing is extreme', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 10, ask: 10, price: 10 }),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'sellExtreme', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 10, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+        };
+
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+        const strategy = new VolumeGenerationStrategy(mockExchange);
+        (strategy as any).isRunning = true;
+
+        try {
+          await strategy.placeSellOrder(1, 10, false);
+
+          expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping sell order due to extreme clamp reprice'));
+        } finally {
+          warnSpy.mockRestore();
+        }
+      });
+
       it('should skip buy placement loops with one summary warning when spendable USDT is below minimum notional', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([

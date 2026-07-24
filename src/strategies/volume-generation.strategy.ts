@@ -41,6 +41,7 @@ export class VolumeGenerationStrategy {
   private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
   private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
+  private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
@@ -428,6 +429,15 @@ export class VolumeGenerationStrategy {
     const lowerBound = latestPrice * 0.995;
     const upperBound = latestPrice * 1.005;
     return Math.min(Math.max(price, lowerBound), upperBound);
+  }
+
+  private isExtremeClampReprice(requestedPrice: number, executablePrice: number): boolean {
+    if (!Number.isFinite(requestedPrice) || !Number.isFinite(executablePrice) || requestedPrice <= 0 || executablePrice <= 0) {
+      return true;
+    }
+
+    const ratio = executablePrice / requestedPrice;
+    return ratio > VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO || ratio < (1 / VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO);
   }
 
   private recalculateExecutableOrderAmount(
@@ -1511,6 +1521,13 @@ export class VolumeGenerationStrategy {
         price = clampedPrice;
       }
 
+      if (this.isExtremeClampReprice(requestedPrice, price)) {
+        logger.warn(
+          `⚠️  Skipping buy order due to extreme clamp reprice: requested=${requestedPrice.toExponential(4)}, executable=${price.toExponential(4)} (limit x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)})`
+        );
+        return;
+      }
+
       const executableAmount = this.recalculateExecutableOrderAmount('BUY', requestedPrice, requestedAmount, price, availableUSDT, 0);
       if (executableAmount === null) {
         logger.warn(
@@ -1589,6 +1606,13 @@ export class VolumeGenerationStrategy {
           `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
         );
         price = clampedPrice;
+      }
+
+      if (this.isExtremeClampReprice(requestedPrice, price)) {
+        logger.warn(
+          `⚠️  Skipping sell order due to extreme clamp reprice: requested=${requestedPrice.toExponential(4)}, executable=${price.toExponential(4)} (limit x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)})`
+        );
+        return;
       }
 
       const executableAmount = this.recalculateExecutableOrderAmount('SELL', requestedPrice, requestedAmount, price, 0, availableEPWX);
