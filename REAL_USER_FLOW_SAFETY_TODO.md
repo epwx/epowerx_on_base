@@ -336,5 +336,7 @@ Observed production outcomes:
 - New spread guard fired as expected and blocked unsafe execution: `Skipping rebalance because ticker spread is too wide (19.40% > 5.00%)`.
 - Cooldown and in-progress protections remained active after the blocked rebalance attempt (`Rebalance already in progress` and cooldown messages observed).
 - Real BUY flow remained healthy in the same validation window (real fill detection, inventory updates, and continued bounded quote maintenance).
+- Real SELL flow was validated in a follow-up live window, including sell fill detection, positive realized PnL progression, and stable post-fill orderbook maintenance under configured caps.
+- Position recovery behavior remained bounded after buy/sell activity, with inventory moving toward neutral and skew logic continuing to adjust quotes without triggering unsafe rebalance execution.
 - Intermittent exchange API outages (`Service is not available`) were observed during the same period and should be treated as an external reliability caveat, not a guard-logic regression.
 - Live-only validation of the deviation guard branch remains optional follow-up work when market conditions produce a deviation-trigger scenario.
