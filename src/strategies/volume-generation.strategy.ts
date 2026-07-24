@@ -1028,6 +1028,16 @@ export class VolumeGenerationStrategy {
           logger.info('⏭️  Buy-side prioritization is disabled this cycle because reserve-constrained buy placements are paused.');
         }
       }
+
+      let canPlaceSellQuotesThisCycle = true;
+      const sellClampProbePrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', 0);
+      const sellClampProbeExecutablePrice = await this.clampPriceToLatestBand(sellClampProbePrice);
+      if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice)) {
+        canPlaceSellQuotesThisCycle = false;
+        logger.warn(
+          `⚠️  Sell placements paused this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
+        );
+      }
       const allowSparseSellRecovery = !canPlaceReserveConstrainedBuys;
 
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
@@ -1162,7 +1172,11 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
+      if (sellDepthShortfall > 0 && !canPlaceSellQuotesThisCycle) {
+        logger.info('⏭️  Skipping sell-depth additions this cycle because passive sell prices would require extreme clamp repricing.');
+      }
+
+      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth && canPlaceSellQuotesThisCycle) {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in ${sellBandLabel} of Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
@@ -1237,7 +1251,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth && canPlaceSellQuotesThisCycle) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
