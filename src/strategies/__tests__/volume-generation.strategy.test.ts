@@ -125,6 +125,75 @@ it('should allow price-aware normalization to exceed the legacy token ceiling wh
 
   expect(normalizedAmount).toBeGreaterThan(50_000_000_000);
 });
+
+it('should enforce normalization cap upper bound from configured max order amount tokens', () => {
+  const mockExchange = {
+    getBalances: jest.fn(),
+    getTicker: jest.fn(),
+    getOpenOrders: jest.fn(),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn(),
+    getRecentTrades: jest.fn()
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMaxOrderAmountTokens = config.volumeStrategy.maxOrderAmountTokens;
+  const originalMaxOrderSize = config.volumeStrategy.maxOrderSize;
+
+  try {
+    config.volumeStrategy.maxOrderAmountTokens = 1000;
+    config.volumeStrategy.maxOrderSize = 500;
+
+    const staticBounded = (strategy as any).normalizeOrderAmount(10000, 1, 100000);
+    expect(staticBounded).toBe(1000);
+
+  } finally {
+    config.volumeStrategy.maxOrderAmountTokens = originalMaxOrderAmountTokens;
+    config.volumeStrategy.maxOrderSize = originalMaxOrderSize;
+  }
+});
+
+it('should throttle rebalance actions with cooldown to avoid repeated cancel/rebuy loops', async () => {
+  const mockExchange = {
+    getBalances: jest.fn(),
+    getTicker: jest.fn().mockResolvedValue({ bid: 1, ask: 1, price: 1 }),
+    getOpenOrders: jest.fn(),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn(),
+    cancelAllOrders: jest.fn().mockResolvedValue(0),
+    getRecentTrades: jest.fn()
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalEnablePositionLimits = config.risk.enablePositionLimits;
+  const originalPositionThreshold = config.marketMaking.positionRebalanceThreshold;
+  const originalRebalanceCooldownMs = config.marketMaking.rebalanceCooldownMs;
+
+  try {
+    config.risk.enablePositionLimits = true;
+    config.marketMaking.positionRebalanceThreshold = 1000;
+    config.marketMaking.rebalanceCooldownMs = 60_000;
+
+    (strategy as any).currentPosition = -5000;
+    const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue('rebalance-buy-1');
+
+    await (strategy as any).checkAndRebalancePosition();
+    await (strategy as any).checkAndRebalancePosition();
+
+    expect(mockExchange.cancelAllOrders).toHaveBeenCalledTimes(1);
+    expect(buySpy).toHaveBeenCalledTimes(1);
+  } finally {
+    config.risk.enablePositionLimits = originalEnablePositionLimits;
+    config.marketMaking.positionRebalanceThreshold = originalPositionThreshold;
+    config.marketMaking.rebalanceCooldownMs = originalRebalanceCooldownMs;
+  }
+});
+
 it('should cancel excess buy and sell orders when above the target', async () => {
   // Arrange: mock exchange with 35 buy and 37 sell open orders
   const targetOrdersPerSide = 30;

@@ -71,6 +71,8 @@ export class VolumeGenerationStrategy {
   private isPlacingOrders: boolean = false;
   private lastPerformanceLogAt: number = 0;
   private noFillDiagnosticsThisCycle: number = 0;
+  private rebalanceInProgress: boolean = false;
+  private lastRebalanceAt: number = 0;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -239,10 +241,9 @@ export class VolumeGenerationStrategy {
 
   private applyOrderAmountCap(amount: number, context: string, price?: number, availableUsd?: number): number {
     const configuredCap = Math.floor(config.volumeStrategy.maxOrderAmountTokens);
-    const cap = Math.max(
-      Number.isFinite(configuredCap) && configuredCap >= this.minQty ? configuredCap : this.minQty,
-      this.getAdaptiveOrderAmountCap(price, availableUsd)
-    );
+    const staticCap = Number.isFinite(configuredCap) && configuredCap >= this.minQty ? configuredCap : this.minQty;
+    const adaptiveCap = this.getAdaptiveOrderAmountCap(price, availableUsd);
+    const cap = Math.max(this.minQty, Math.min(staticCap, adaptiveCap));
 
     if (amount > cap) {
       logger.warn(`⚠️  Capping ${context} order amount from ${amount} to ${cap} EPWX (MAX_ORDER_AMOUNT_TOKENS)`);
@@ -1782,9 +1783,27 @@ export class VolumeGenerationStrategy {
     if (!config.risk.enablePositionLimits) return;
 
     const positionThreshold = config.marketMaking.positionRebalanceThreshold;
+    const rebalanceCooldownMs = Math.max(config.marketMaking.rebalanceCooldownMs, config.marketMaking.updateInterval);
 
     if (Math.abs(this.currentPosition) > positionThreshold) {
+      if (this.rebalanceInProgress) {
+        logger.info('⏭️  Rebalance already in progress; skipping this monitoring tick.');
+        return;
+      }
+
+      const now = Date.now();
+      const elapsedSinceLastRebalance = now - this.lastRebalanceAt;
+      if (this.lastRebalanceAt > 0 && elapsedSinceLastRebalance < rebalanceCooldownMs) {
+        logger.info(
+          `⏭️  Rebalance cooldown active (${Math.ceil((rebalanceCooldownMs - elapsedSinceLastRebalance) / 1000)}s remaining); skipping this monitoring tick.`
+        );
+        return;
+      }
+
       logger.warn(`⚖️ Position rebalance needed: ${this.currentPosition.toFixed(2)}`);
+
+      this.rebalanceInProgress = true;
+      this.lastRebalanceAt = now;
 
       try {
         // Cancel existing orders
@@ -1793,7 +1812,10 @@ export class VolumeGenerationStrategy {
 
         // Place rebalancing order
         const ticker = await this.exchange.getTicker(this.symbol);
-        const rebalanceAmount = this.normalizeOrderAmount(Math.abs(this.currentPosition) * 0.5); // Rebalance 50%
+        const targetResidualPosition = positionThreshold * 0.6;
+        const excessPosition = Math.max(Math.abs(this.currentPosition) - targetResidualPosition, 0);
+        const rebalanceAmountRaw = Math.min(Math.abs(this.currentPosition) * 0.25, excessPosition);
+        const rebalanceAmount = this.normalizeOrderAmount(rebalanceAmountRaw);
 
         if (rebalanceAmount === null) {
           logger.warn(`⚠️  Skipping rebalance because normalized amount is below minQty (${this.minQty})`);
@@ -1811,6 +1833,8 @@ export class VolumeGenerationStrategy {
         }
       } catch (error) {
         logger.error('Error rebalancing position:', error);
+      } finally {
+        this.rebalanceInProgress = false;
       }
     }
   }

@@ -51,6 +51,7 @@ interface Config {
     maxPositionSize: number;
     positionRebalanceThreshold: number;
     updateInterval: number;
+    rebalanceCooldownMs: number;
   };
 
   risk: {
@@ -130,6 +131,7 @@ export const config: Config = {
     maxPositionSize: getEnvNumber('MAX_POSITION_SIZE', 5000),
     positionRebalanceThreshold: getEnvNumber('POSITION_REBALANCE_THRESHOLD', 1000),
     updateInterval: getEnvNumber('UPDATE_INTERVAL', 3000),
+    rebalanceCooldownMs: getEnvNumber('REBALANCE_COOLDOWN_MS', 45000),
   },
 
   risk: {
