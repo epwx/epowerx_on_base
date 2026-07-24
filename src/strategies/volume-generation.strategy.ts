@@ -430,6 +430,34 @@ export class VolumeGenerationStrategy {
     return Math.min(Math.max(price, lowerBound), upperBound);
   }
 
+  private recalculateExecutableOrderAmount(
+    side: 'BUY' | 'SELL',
+    requestedPrice: number,
+    requestedAmount: number,
+    executablePrice: number,
+    availableUSDT: number,
+    availableEPWX: number
+  ): number | null {
+    if (!Number.isFinite(requestedPrice) || !Number.isFinite(requestedAmount) || !Number.isFinite(executablePrice) || executablePrice <= 0) {
+      return null;
+    }
+
+    const requestedNotionalUsd = requestedPrice * requestedAmount;
+    const spendableUsd = side === 'BUY'
+      ? Math.max(availableUSDT - this.getIdleBalanceReserveUsd(), 0)
+      : Math.max(availableEPWX * executablePrice, 0);
+
+    if (spendableUsd < VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD) {
+      return null;
+    }
+
+    const targetNotionalUsd = Math.min(requestedNotionalUsd, spendableUsd);
+    const recalculatedAmount = Math.floor(targetNotionalUsd / executablePrice);
+    const cappedAmount = this.applyOrderAmountCap(recalculatedAmount, side, executablePrice, spendableUsd);
+
+    return cappedAmount >= this.minQty ? cappedAmount : null;
+  }
+
   private selectPassiveTopTouchPrices(
     executableBestBid: number,
     executableBestAsk: number
@@ -1449,6 +1477,9 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      const requestedPrice = price;
+      const requestedAmount = normalizedAmount;
+
       const clampedPrice = await this.clampPriceToLatestBand(price);
       if (clampedPrice !== price) {
         logger.warn(
@@ -1457,21 +1488,38 @@ export class VolumeGenerationStrategy {
         price = clampedPrice;
       }
 
-      const orderValue = normalizedAmount * price;
-      if (orderValue > availableUSDT) {
-        logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
+      const executableAmount = this.recalculateExecutableOrderAmount('BUY', requestedPrice, requestedAmount, price, availableUSDT, 0);
+      if (executableAmount === null) {
+        logger.warn(
+          `⚠️  Skipping buy order after repricing: requested=${requestedAmount.toFixed(2)} @ ${requestedPrice.toExponential(4)}, executable=${price.toExponential(4)}, available=$${availableUSDT.toFixed(2)}, reserve=$${this.getIdleBalanceReserveUsd().toFixed(2)}`
+        );
+        return;
+      }
+
+      if (executableAmount !== normalizedAmount) {
+        logger.warn(
+          `⚠️  Reducing buy amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the reserve and executable notional`
+        );
+      }
+
+      amount = executableAmount;
+
+      const orderValue = amount * price;
+      const spendableUSDT = Math.max(availableUSDT - this.getIdleBalanceReserveUsd(), 0);
+      if (orderValue > spendableUSDT) {
+        logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > spendable $${spendableUSDT.toFixed(2)} after reserve`);
         return;
       }
       if (!this.isRunning) {
-        logger.warn(`⚠️  Aborting buy order after balance check because the bot is stopping: amount=${normalizedAmount}, price=${price}`);
+        logger.warn(`⚠️  Aborting buy order after balance check because the bot is stopping: amount=${amount}, price=${price}`);
         return;
       }
-      logger.debug(`Attempting to place buy order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
+      logger.debug(`Attempting to place buy order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
         'BUY',
         'LIMIT',
-        normalizedAmount,
+        amount,
         price
       );
       if (!order) {
@@ -1486,7 +1534,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
       this.volumeStats.orderCount++;
-      logger.info(`✅ Buy order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+      logger.info(`✅ Buy order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'BUY', price);
 
       // Poll for fills after placing order
@@ -1509,6 +1557,9 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      const requestedPrice = price;
+      const requestedAmount = normalizedAmount;
+
       const clampedPrice = await this.clampPriceToLatestBand(price);
       if (clampedPrice !== price) {
         logger.warn(
@@ -1517,20 +1568,36 @@ export class VolumeGenerationStrategy {
         price = clampedPrice;
       }
 
-      if (normalizedAmount > availableEPWX) {
-        logger.warn(`⚠️  Skipping sell order: requested ${normalizedAmount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
+      const executableAmount = this.recalculateExecutableOrderAmount('SELL', requestedPrice, requestedAmount, price, 0, availableEPWX);
+      if (executableAmount === null) {
+        logger.warn(
+          `⚠️  Skipping sell order after repricing: requested=${requestedAmount.toFixed(2)} @ ${requestedPrice.toExponential(4)}, executable=${price.toExponential(4)}, available=${availableEPWX.toFixed(2)} EPWX`
+        );
+        return;
+      }
+
+      if (executableAmount !== normalizedAmount) {
+        logger.warn(
+          `⚠️  Reducing sell amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the executable notional`
+        );
+      }
+
+      amount = executableAmount;
+
+      if (amount > availableEPWX) {
+        logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);
         return;
       }
       if (!this.isRunning) {
-        logger.warn(`⚠️  Aborting sell order after balance check because the bot is stopping: amount=${normalizedAmount}, price=${price}`);
+        logger.warn(`⚠️  Aborting sell order after balance check because the bot is stopping: amount=${amount}, price=${price}`);
         return;
       }
-      logger.debug(`Attempting to place sell order: ${normalizedAmount.toFixed(2)} @ ${price.toExponential(4)}`);
+      logger.debug(`Attempting to place sell order: ${amount.toFixed(2)} @ ${price.toExponential(4)}`);
       const order = await this.exchange.placeOrder(
         this.symbol,
         'SELL',
         'LIMIT',
-        normalizedAmount,
+        amount,
         price
       );
       if (!order) {
@@ -1545,7 +1612,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
       this.volumeStats.orderCount++;
-      logger.info(`✅ Sell order placed: ${normalizedAmount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
+      logger.info(`✅ Sell order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'SELL', price);
 
       // Poll for fills after placing order
