@@ -1779,11 +1779,33 @@ export class VolumeGenerationStrategy {
     }
   }
 
+  private getSanitizedTickerQuotes(
+    ticker: { bid: number; ask: number }
+  ): { bestBid: number; bestAsk: number; midPrice: number; spreadPercent: number } | null {
+    if (!Number.isFinite(ticker.bid) || !Number.isFinite(ticker.ask)) {
+      return null;
+    }
+
+    const bestBid = Math.min(ticker.bid, ticker.ask);
+    const bestAsk = Math.max(ticker.bid, ticker.ask);
+
+    if (bestBid <= 0 || bestAsk <= 0) {
+      return null;
+    }
+
+    const midPrice = (bestBid + bestAsk) / 2;
+    const spreadPercent = ((bestAsk - bestBid) / bestBid) * 100;
+
+    return { bestBid, bestAsk, midPrice, spreadPercent };
+  }
+
   private async checkAndRebalancePosition(): Promise<void> {
     if (!config.risk.enablePositionLimits) return;
 
     const positionThreshold = config.marketMaking.positionRebalanceThreshold;
     const rebalanceCooldownMs = Math.max(config.marketMaking.rebalanceCooldownMs, config.marketMaking.updateInterval);
+    const rebalanceMaxSpreadPercent = Math.max(config.marketMaking.rebalanceMaxSpreadPercent, 0);
+    const rebalanceMaxPriceDeviationPercent = Math.max(config.marketMaking.rebalanceMaxPriceDeviationPercent, 0);
 
     if (Math.abs(this.currentPosition) > positionThreshold) {
       if (this.rebalanceInProgress) {
@@ -1806,12 +1828,21 @@ export class VolumeGenerationStrategy {
       this.lastRebalanceAt = now;
 
       try {
-        // Cancel existing orders
-        await this.exchange.cancelAllOrders(this.symbol);
-        this.activeOrders.clear();
-
-        // Place rebalancing order
         const ticker = await this.exchange.getTicker(this.symbol);
+        const sanitizedQuotes = this.getSanitizedTickerQuotes(ticker);
+
+        if (!sanitizedQuotes) {
+          logger.warn('⚠️  Skipping rebalance because ticker quotes are invalid.');
+          return;
+        }
+
+        if (sanitizedQuotes.spreadPercent > rebalanceMaxSpreadPercent) {
+          logger.warn(
+            `⚠️  Skipping rebalance because ticker spread is too wide (${sanitizedQuotes.spreadPercent.toFixed(2)}% > ${rebalanceMaxSpreadPercent.toFixed(2)}%).`
+          );
+          return;
+        }
+
         const targetResidualPosition = positionThreshold * 0.6;
         const excessPosition = Math.max(Math.abs(this.currentPosition) - targetResidualPosition, 0);
         const rebalanceAmountRaw = Math.min(Math.abs(this.currentPosition) * 0.25, excessPosition);
@@ -1822,13 +1853,34 @@ export class VolumeGenerationStrategy {
           return;
         }
 
-        if (this.currentPosition > 0) {
+        const rebalanceSide: 'BUY' | 'SELL' = this.currentPosition > 0 ? 'SELL' : 'BUY';
+        const rebalancePrice = rebalanceSide === 'SELL' ? sanitizedQuotes.bestAsk : sanitizedQuotes.bestBid;
+        const markReference = this.profitStats.inventoryMarkPrice > 0
+          ? this.profitStats.inventoryMarkPrice
+          : sanitizedQuotes.midPrice;
+        const quoteDeviationPercent =
+          markReference > 0
+            ? (Math.abs(rebalancePrice - markReference) / markReference) * 100
+            : 0;
+
+        if (quoteDeviationPercent > rebalanceMaxPriceDeviationPercent) {
+          logger.warn(
+            `⚠️  Skipping rebalance ${rebalanceSide} because quote deviation is too high (${quoteDeviationPercent.toFixed(2)}% > ${rebalanceMaxPriceDeviationPercent.toFixed(2)}%; quote=${rebalancePrice.toExponential(4)}, reference=${markReference.toExponential(4)}).`
+          );
+          return;
+        }
+
+        // Cancel existing orders only after safety guards pass.
+        await this.exchange.cancelAllOrders(this.symbol);
+        this.activeOrders.clear();
+
+        if (rebalanceSide === 'SELL') {
           // We have too much, sell
-          await this.placeSellOrder(ticker.ask, rebalanceAmount);
+          await this.placeSellOrder(rebalancePrice, rebalanceAmount);
           logger.info(`📉 Rebalancing: Selling ${rebalanceAmount.toFixed(2)}`);
         } else {
           // We're short, buy
-          await this.placeBuyOrder(ticker.bid, rebalanceAmount);
+          await this.placeBuyOrder(rebalancePrice, rebalanceAmount);
           logger.info(`📈 Rebalancing: Buying ${rebalanceAmount.toFixed(2)}`);
         }
       } catch (error) {

@@ -259,7 +259,7 @@ Implementation notes:
 - Preserved previous production behavior through unchanged defaults while enabling true low-liquidity observation profiles.
 
 ### 11. Validate real-user fill handling under wash-off mode
-Status: In Progress on 2026-07-23
+Status: Completed on 2026-07-24
 
 Objective:
 - Confirm a real external user fill is processed cleanly with `SELF_TRADE_ENABLED=false`, including fill detection, inventory update, and PnL tracking.
@@ -283,11 +283,13 @@ Acceptance criteria:
 
 Observed production outcomes:
 - Build marker for `edf6e30` confirmed active in runtime logs.
-- Fill detection and PnL logging observed in production after the rebalance fix.
+- Real fill path validated in production: fill detection fired, inventory changed, and PnL metrics updated.
+- Runtime stats reflected live fill impact (`Real Fills: 1`, non-zero position, non-zero unrealized PnL) after the external execution test.
+- Rebalance throttling behaved as intended during live fills (`Rebalance already in progress` and cooldown logs observed, without prior rebalance storm recurrence).
 - Intermittent exchange API unavailability (`Service is not available`) still occurs and should be treated as an external reliability caveat during validation windows.
 
 ### 12. Tune token-cap sizing for tiny-price EPWX markets
-Status: In Progress on 2026-07-23
+Status: Completed on 2026-07-24
 
 Objective:
 - Keep per-order USD notional practical at low token prices by preventing premature token-cap clipping.
@@ -302,8 +304,29 @@ Acceptance criteria:
 - Book depth progresses toward configured targets with fewer under-sized placements.
 - No regression in order-count/depth caps or drift-guard behavior.
 
-Follow-up verification checklist:
-1. Execute one controlled micro external fill in a stable API window.
-2. Confirm expected sequence: fill detected -> inventory updated -> realized/unrealized PnL updated -> no rebalance storm.
-3. Verify order book remains within `TARGET_ORDERS_PER_SIDE`, `TARGET_BUY_DEPTH_USD`, and `TARGET_SELL_DEPTH_USD` bounds after that fill.
-4. Capture the final validated runtime profile values (`REBALANCE_COOLDOWN_MS`, `MAX_ORDER_AMOUNT_TOKENS`, and cap settings) for the deployment guide.
+Observed production outcomes:
+- Runtime repeatedly capped into the `36B-40B` range as expected with improved per-order notional versus the prior `8B` cap setting.
+- Order-count and depth controls remained bounded during the same windows (`4x4` target behavior and depth progression toward configured limits).
+
+### 13. Add rebalance execution price guard for abnormal-book conditions
+Status: Completed on 2026-07-24 (deployment validation pending)
+
+Objective:
+- Prevent rebalance orders from executing at clearly unsafe prices during temporary orderbook dislocations or thin-book anomalies.
+
+Implementation notes:
+- Live validation exposed a rebalance-driven sell placed at a significantly discounted price during abnormal book conditions.
+- Added rebalance quote sanitization that normalizes ticker bid/ask ordering before price selection.
+- Added spread guard and mark-deviation guard prior to `cancelAllOrders`, so unsafe rebalance attempts are skipped without wiping the book.
+- Added configurable thresholds: `REBALANCE_MAX_SPREAD_PERCENT` and `REBALANCE_MAX_PRICE_DEVIATION_PERCENT`.
+- Guard decisions now log explicit skip reasons with computed percentages and threshold values.
+
+Tests:
+- Added a test proving rebalance sell is suppressed when quote deviation exceeds the configured threshold.
+- Added a test proving rebalance is suppressed when ticker spread exceeds the configured threshold.
+- Added a test proving rebalance still executes when spread and quote deviation are within guard limits.
+
+Acceptance criteria:
+- No rebalance order is sent at a price that violates configured spread or deviation safeguards.
+- Position reduction remains functional without reverting to rebalance storm behavior.
+- Post-fill inventory recovery continues to respect order-count, depth, and drift controls.

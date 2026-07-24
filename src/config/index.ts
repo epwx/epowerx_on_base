@@ -52,6 +52,8 @@ interface Config {
     positionRebalanceThreshold: number;
     updateInterval: number;
     rebalanceCooldownMs: number;
+    rebalanceMaxSpreadPercent: number;
+    rebalanceMaxPriceDeviationPercent: number;
   };
 
   risk: {
@@ -132,6 +134,8 @@ export const config: Config = {
     positionRebalanceThreshold: getEnvNumber('POSITION_REBALANCE_THRESHOLD', 1000),
     updateInterval: getEnvNumber('UPDATE_INTERVAL', 3000),
     rebalanceCooldownMs: getEnvNumber('REBALANCE_COOLDOWN_MS', 45000),
+    rebalanceMaxSpreadPercent: getEnvNumber('REBALANCE_MAX_SPREAD_PERCENT', 5),
+    rebalanceMaxPriceDeviationPercent: getEnvNumber('REBALANCE_MAX_PRICE_DEVIATION_PERCENT', 5),
   },
 
   risk: {
