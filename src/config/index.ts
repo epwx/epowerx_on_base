@@ -26,6 +26,7 @@ interface Config {
     targetSellDepthUsd: number;
     spreadPercentage: number;
     orderFrequency: number;
+    forceBuyPause: boolean;
     selfTradeEnabled: boolean;
     mirrorMarkupPercentage: number;
     balanceUtilizationPercent: number;
@@ -108,6 +109,7 @@ export const config: Config = {
     targetSellDepthUsd: getEnvNumber('TARGET_SELL_DEPTH_USD', 200),
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
+    forceBuyPause: getEnvBoolean('FORCE_BUY_PAUSE', false),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
     balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),

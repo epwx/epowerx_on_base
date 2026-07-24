@@ -594,3 +594,31 @@ Post-deploy checks:
 - Current runtime logs still show reserve-constrained BUY pauses, but SELL maintenance continues through the exchange-band fallback path.
 - The previously observed 0-buy/1-sell deadlock no longer appears in the latest production chunks.
 - DEX/CEX drift remains elevated, so wash trades stay paused and live quoting stays restricted to CEX-based prices.
+
+### 21. Add FORCE_BUY_PAUSE policy switch for hard buy-side risk control
+Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+
+Objective:
+- Provide a deterministic policy switch to disable all BUY placements regardless of temporary spendable balance changes.
+- Keep SELL-side maintenance active so the book does not fully idle when buy-side risk is intentionally disabled.
+
+Implementation notes:
+- Added new config flag `FORCE_BUY_PAUSE` (default `false`) in runtime configuration.
+- Added cycle-level policy gating in strategy placement logic to suppress buy placement budget when the flag is enabled.
+- Added direct hard guard in buy placement path so BUY orders are never sent when the policy flag is enabled.
+- Added rebalance BUY suppression for policy-enabled windows to avoid cancel/rebuy behavior against the operator's buy-disable intent.
+- Preserved sell-side maintenance paths and sparse recovery behavior while buys are policy-paused.
+- Added explicit policy logs so policy pause is distinguishable from reserve-constrained pause.
+
+Tests:
+- Added regression test proving all buy placements are suppressed by policy while sell maintenance remains active.
+- Added regression test proving direct `placeBuyOrder` is blocked when `FORCE_BUY_PAUSE=true`.
+- Re-ran focused strategy suite after patching.
+
+Acceptance criteria:
+- No BUY orders are placed while `FORCE_BUY_PAUSE=true`, including direct placement and rebalance BUY paths.
+- SELL-side maintenance remains active under existing spread/drift/clamp guards.
+- Behavior is explicitly visible in logs and reversible by configuration.
+
+Validation outcomes:
+- Focused strategy suite passed (`65/65`).

@@ -805,6 +805,7 @@ describe('Order Placement Logic', () => {
         const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
         const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
         const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
 
         config.volumeStrategy.orderFrequency = 12000;
         config.trading.pair = 'EPWXUSDT';
@@ -812,6 +813,7 @@ describe('Order Placement Logic', () => {
         config.volumeStrategy.targetBuyDepthUsd = 10;
         config.volumeStrategy.targetSellDepthUsd = 25;
         config.volumeStrategy.idleBalanceReserveUsd = 140;
+        config.volumeStrategy.forceBuyPause = false;
 
         try {
           const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
@@ -833,7 +835,98 @@ describe('Order Placement Logic', () => {
           config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
           config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
           config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
           infoSpy.mockRestore();
+        }
+      });
+
+      it('should suppress all buy placements by policy when FORCE_BUY_PAUSE is enabled while keeping sell maintenance active', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.582e-10, ask: 1.325e-10, price: 1.4535e-10 }),
+          getOpenOrders: jest.fn().mockResolvedValue([
+            { orderId: 'existing-sell-1', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 4.3154e-9, amount: 1000000000, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }
+          ]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'sell-policy-guard', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 10;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+        config.volumeStrategy.forceBuyPause = true;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
+          const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).not.toHaveBeenCalled();
+          expect(sellSpy).toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('FORCE_BUY_PAUSE=true'));
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
+          warnSpy.mockRestore();
+        }
+      });
+
+      it('should block direct buy order placement when FORCE_BUY_PAUSE is enabled', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'buyDirectBlocked', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 10, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+        };
+
+        const config = require('../../config').config;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+        config.volumeStrategy.forceBuyPause = true;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          await strategy.placeBuyOrder(1.0, 10, false);
+
+          expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+        } finally {
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
         }
       });
 

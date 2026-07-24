@@ -233,6 +233,10 @@ export class VolumeGenerationStrategy {
     return Math.max(config.volumeStrategy.idleBalanceReserveUsd, 0);
   }
 
+  private getForceBuyPause(): boolean {
+    return config.volumeStrategy.forceBuyPause;
+  }
+
   private getAdaptiveOrderAmountCap(price?: number, availableUsd?: number): number {
     const configuredTokenCap = Math.floor(config.volumeStrategy.maxOrderAmountTokens);
     const minimumTokenCap = Math.max(this.minQty, configuredTokenCap);
@@ -656,6 +660,9 @@ export class VolumeGenerationStrategy {
     logger.info(`Pair: ${this.symbol}`);
     logger.info(`Spread: ${config.volumeStrategy.spreadPercentage}%`);
     logger.info(`Order Frequency: ${config.volumeStrategy.orderFrequency}ms`);
+    if (this.getForceBuyPause()) {
+      logger.warn('🧯 FORCE_BUY_PAUSE=true: all BUY placements are disabled by policy.');
+    }
     
     // Check if ORDER_FREQUENCY is too high (potential misconfiguration)
     if (config.volumeStrategy.orderFrequency > 60000) {
@@ -1038,7 +1045,9 @@ export class VolumeGenerationStrategy {
       const availableEPWX = epwxBalance?.free || 0;
       const buyReserveUsd = this.getIdleBalanceReserveUsd();
       const spendableBuyUsd = Math.max(availableUSDT - buyReserveUsd, 0);
+      const forceBuyPause = this.getForceBuyPause();
       const canPlaceReserveConstrainedBuys = spendableBuyUsd >= VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD;
+      const canPlaceBuysThisCycle = canPlaceReserveConstrainedBuys && !forceBuyPause;
       const availableSellUsd = availableEPWX * priceReference;
       const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
@@ -1077,6 +1086,19 @@ export class VolumeGenerationStrategy {
         );
       }
 
+      if (forceBuyPause) {
+        buyPlacementCap = 0;
+        if (sellPlacementCap === 0 && missingSellOrders > 0) {
+          sellPlacementCap = Math.max(1, bookPlacementBudget);
+          logger.info('⏭️  Restoring sell placement budget because BUY placements are policy-paused this cycle.');
+        }
+        if (shouldPrioritizeBuysForDepth) {
+          shouldPrioritizeBuysForDepth = false;
+          logger.info('⏭️  Buy-side prioritization is disabled this cycle because FORCE_BUY_PAUSE=true.');
+        }
+        logger.warn('🧯 BUY placements paused by policy: FORCE_BUY_PAUSE=true.');
+      }
+
       if (!canPlaceReserveConstrainedBuys) {
         logger.warn(
           `⚠️  Buy placements paused this cycle: spendable USDT $${spendableBuyUsd.toFixed(2)} is below minimum notional $${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD.toFixed(2)} after reserve $${buyReserveUsd.toFixed(2)}.`
@@ -1104,7 +1126,7 @@ export class VolumeGenerationStrategy {
           `⚠️  Sell placements using exchange-band fallback this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
         );
       }
-      const allowSparseSellRecovery = !canPlaceReserveConstrainedBuys;
+      const allowSparseSellRecovery = !canPlaceBuysThisCycle;
 
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
       if (hasExecutableTouchLevels) {
@@ -1117,7 +1139,7 @@ export class VolumeGenerationStrategy {
           )
         );
 
-        if (canPlaceReserveConstrainedBuys && hasBuyPlacementBudget() && passiveTopTouchPrices) {
+        if (canPlaceBuysThisCycle && hasBuyPlacementBudget() && passiveTopTouchPrices) {
           const buyTouchPrice = this.applyInventorySkewToQuotePrice(passiveTopTouchPrices.buyPrice);
           const buyTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const buyTouchRawAmount = buyTouchUsd / buyTouchPrice;
@@ -1160,7 +1182,7 @@ export class VolumeGenerationStrategy {
           const sellToBuyRatioAfterTopTouch = sellOrders.length / Math.max(buyOrders.length, 1);
           const lowBookSellHeavyAfterTopTouch = buyOrders.length <= 2 && sellOrders.length > buyOrders.length;
           const shouldPrioritizeBuysAfterTopTouch =
-            canPlaceReserveConstrainedBuys &&
+            canPlaceBuysThisCycle &&
             (
               lowBookSellHeavyAfterTopTouch || (
                 sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
@@ -1200,7 +1222,11 @@ export class VolumeGenerationStrategy {
         );
       }
 
-      if (buyDepthShortfall > 0 && canPlaceReserveConstrainedBuys) {
+      if (buyDepthShortfall > 0 && forceBuyPause) {
+        logger.info('⏭️  Skipping buy-depth additions this cycle: FORCE_BUY_PAUSE=true.');
+      }
+
+      if (buyDepthShortfall > 0 && canPlaceBuysThisCycle) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in ${buyBandLabel} of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
@@ -1295,7 +1321,7 @@ export class VolumeGenerationStrategy {
       const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceReserveConstrainedBuys) {
+      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'BUY', i);
@@ -1364,7 +1390,11 @@ export class VolumeGenerationStrategy {
       const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
       const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
       const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washFeatureEnabled = config.volumeStrategy.selfTradeEnabled && canRunWashTradesByDrift && !adverseBuyGuard.active;
+      const washFeatureEnabled =
+        config.volumeStrategy.selfTradeEnabled &&
+        canRunWashTradesByDrift &&
+        !adverseBuyGuard.active &&
+        !forceBuyPause;
       const washTradePairs = washFeatureEnabled
         ? Math.min(
             dynamicWashTradePairs,
@@ -1377,6 +1407,9 @@ export class VolumeGenerationStrategy {
       );
       if (!config.volumeStrategy.selfTradeEnabled) {
         logger.info('⏭️  Wash trades disabled via SELF_TRADE_ENABLED=false');
+      }
+      if (forceBuyPause) {
+        logger.info('⏭️  Wash trades paused because FORCE_BUY_PAUSE=true.');
       }
       if (adverseBuyGuard.active) {
         logger.info('⏭️  Wash trades paused while adverse-fill buy guard is active.');
@@ -1589,6 +1622,11 @@ export class VolumeGenerationStrategy {
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
+      if (this.getForceBuyPause()) {
+        logger.info('⏭️  Skipping buy order: FORCE_BUY_PAUSE=true.');
+        return;
+      }
+
       // Check available USDT before placing order
       const balances = await this.exchange.getBalances();
       const usdtBalance = balances.find(b => b.asset === 'USDT');
@@ -2086,6 +2124,12 @@ export class VolumeGenerationStrategy {
 
         const rebalanceSide: 'BUY' | 'SELL' = this.currentPosition > 0 ? 'SELL' : 'BUY';
         const rebalancePrice = rebalanceSide === 'SELL' ? sanitizedQuotes.bestAsk : sanitizedQuotes.bestBid;
+
+        if (rebalanceSide === 'BUY' && this.getForceBuyPause()) {
+          logger.warn('🧯 Skipping rebalance BUY because FORCE_BUY_PAUSE=true.');
+          return;
+        }
+
         const markReference = this.profitStats.inventoryMarkPrice > 0
           ? this.profitStats.inventoryMarkPrice
           : sanitizedQuotes.midPrice;
