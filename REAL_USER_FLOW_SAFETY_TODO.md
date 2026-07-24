@@ -342,3 +342,31 @@ Observed production outcomes:
 - Deviation-guard branch was validated in production using a temporary strict threshold run (`REBALANCE_MAX_SPREAD_PERCENT=30`, `REBALANCE_MAX_PRICE_DEVIATION_PERCENT=0.5`), with explicit skip evidence: `Skipping rebalance BUY because quote deviation is too high (8.78% > 0.50%; ...)` and `... (9.15% > 0.50%; ...)`.
 - Cooldown behavior remained correct after deviation-guard skips (`Rebalance cooldown active ...`) and regular order-placement/fill maintenance continued without rebalance storm recurrence.
 - After validation, production-safe guard values were restored to `REBALANCE_MAX_SPREAD_PERCENT=5` and `REBALANCE_MAX_PRICE_DEVIATION_PERCENT=5`.
+
+### 14. Add exchange-band-aware sell placement guard
+Status: Pending
+
+Objective:
+- Prevent repeated sell-order rejects when the exchange rejects a passive price as outside the latest-price band.
+- Keep the book balanced without hammering the exchange with the same invalid sell price.
+
+Implementation notes:
+- Live logs show repeated sell placement failures with `The price must be between <?>% and <?>% of the latest price` while buy placement continues.
+- The current fallback to CEX ticker mid is not sufficient by itself when the derived sell price still lands outside the exchange's allowed band.
+- Add a pre-check in sell placement that compares the intended price against the exchange-allowed latest-price window and either clamps the price or skips that placement for the cycle.
+- Keep rebalance, drift, and cooldown guards unchanged; this is a placement-level safety guard.
+
+Tests:
+- Add a test proving sell placement clamps or skips when the intended price violates the exchange band.
+- Add a test proving valid sell placements still proceed when within band.
+- Add a test proving the strategy does not retry the same invalid sell price repeatedly in one cycle.
+
+Acceptance criteria:
+- Sell placement no longer loops on exchange-band rejects.
+- Book maintenance can continue without repeated sell-side error spam.
+- The strategy remains passive and exchange-compliant under wide-book conditions.
+
+Observed production outcomes:
+- Repeated sell placement rejects were observed in production windows while buy placements continued normally.
+- The exchange rejected sell orders with `The price must be between <?>% and <?>% of the latest price` even after the executable-book fallback moved placement decisions to the CEX ticker mid.
+- This failure leaves the book temporarily lopsided (`8 buys, 0 sells`) and is the next validation target.
