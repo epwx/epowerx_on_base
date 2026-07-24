@@ -666,7 +666,7 @@ describe('Order Placement Logic', () => {
         }
       });
 
-      it('should skip buy placement when clamp repricing is extreme', async () => {
+      it('should fall back to executable band pricing when buy repricing is extreme', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
             { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
@@ -688,8 +688,9 @@ describe('Order Placement Logic', () => {
         try {
           await strategy.placeBuyOrder(1, 10, false);
 
-          expect(mockExchange.placeOrder).not.toHaveBeenCalled();
-          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping buy order due to extreme clamp reprice'));
+          expect(mockExchange.placeOrder).toHaveBeenCalledTimes(1);
+          expect(mockExchange.placeOrder).toHaveBeenCalledWith(expect.any(String), 'BUY', 'LIMIT', 1, 9.95);
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('using exchange-band fallback buy pricing'));
         } finally {
           warnSpy.mockRestore();
         }

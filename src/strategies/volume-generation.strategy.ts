@@ -1545,9 +1545,8 @@ export class VolumeGenerationStrategy {
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
         logger.warn(
-          `⚠️  Skipping buy order due to extreme clamp reprice: requested=${requestedPrice.toExponential(4)}, executable=${price.toExponential(4)} (limit x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)})`
+          `⚠️  Buy price would extreme-clamp from ${requestedPrice.toExponential(4)} to ${price.toExponential(4)}; using exchange-band fallback buy pricing this cycle.`
         );
-        return;
       }
 
       const executableAmount = this.recalculateExecutableOrderAmount('BUY', requestedPrice, requestedAmount, price, availableUSDT, 0);
