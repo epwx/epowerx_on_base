@@ -300,6 +300,49 @@ Now update with:
 
 ---
 
+## 🧭 Recovery Mode Checklist
+
+Use this checklist when the bot is intentionally moving out of safe-idle mode.
+
+### Step 1: Confirm the baseline is safe
+```bash
+pm2 logs epwx-bot --lines 50
+```
+
+Look for:
+- `Buy placements paused this cycle...` when spendable USDT is still below minimum notional
+- `Sell placements using exchange-band fallback this cycle...` when passive sells would be extreme-clamped
+
+### Step 2: Lower reserve conservatively
+Edit `.env` and set:
+```env
+IDLE_BALANCE_RESERVE_USD=175
+```
+
+If buys still do not resume, lower in small steps only, such as `170`, then `165`.
+
+### Step 3: Restart and verify
+```bash
+npm run build
+pm2 restart epwx-bot
+pm2 logs epwx-bot --lines 100
+```
+
+Look for:
+- `Calculated balance-aware order sizes...`
+- `Placing depth buy order...` or `Placing passive top-touch BUY...`
+- `Sell placements using exchange-band fallback this cycle...` only if the book remains dislocated
+- No repeated reserve-drain or skip-loop spam
+
+### Step 4: Stop lowering reserve once buys resume
+Do not keep lowering reserve after buy placements restart unless you need more activity and the logs remain stable.
+
+Target outcome:
+- Controlled buy activity returns first, then sell depth continues through guarded fallback pricing if needed.
+- The bot stays passive and safe while avoiding the fully idle state.
+
+---
+
 ## 📊 Monitoring & Alerts
 
 ### PM2 Plus (Optional - $15/month)

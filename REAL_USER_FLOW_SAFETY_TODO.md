@@ -524,3 +524,9 @@ Verification goals:
 - Confirm the fallback quote mode still refuses unsafe placements and logs its decision clearly.
 - Confirm the `175` reserve starting point produces buy placements without reintroducing reserve-drain behavior.
 - Confirm the bot does not regress into repeated skip loops or reserve-drain behavior.
+
+Operational checklist:
+- Use `pm2 logs epwx-bot --lines 50` to confirm the baseline is still safe-idle before changing reserve.
+- Set `IDLE_BALANCE_RESERVE_USD=175` first, then lower only in small steps if buys still do not resume.
+- After each reserve change, run `npm run build` and `pm2 restart epwx-bot`, then verify `Calculated balance-aware order sizes...` and at least one buy placement log.
+- Stop lowering reserve once buy placements resume and the logs remain stable.
