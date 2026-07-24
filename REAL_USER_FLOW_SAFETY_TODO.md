@@ -429,11 +429,6 @@ Acceptance criteria:
 Validation outcomes:
 - Focused strategy suite passed (`58/58`).
 - Full Jest suite passed (`112/112`).
-- Changes committed and pushed in commit `780472b`.
-
-Post-deploy checks:
-- Verify production logs show `Skipping ... due to extreme clamp reprice` during abnormal dislocation windows.
-- Verify there are no new filled orders at highly re-priced clamp levels during those windows.
 
 ### 16. Allow sell-side sparse-book recovery when reserve gating pauses buys
 Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
@@ -519,6 +514,40 @@ Risks:
 - Reducing reserve too quickly can re-enable unwanted exposure.
 - Enabling fallback quoting without guardrails could reintroduce unsafe fills if extreme market dislocations persist.
 
+### 19. Add adverse-fill buy-throttle guard to prevent one-sided inventory loss
+Status: Completed on 2026-07-24 (code + tests + push)
+
+Objective:
+- Prevent further inventory accumulation when real external BUY fills consistently outpace SELL fills.
+- Reduce loss risk from adverse flow by suppressing new BUY placements during imbalance stress windows.
+
+Implementation notes:
+- Added cumulative real-fill side counters in strategy accounting (`realBuyFills`, `realSellFills`).
+- Added a cycle-level adverse-fill guard that activates when either:
+	- Real BUY fills materially exceed real SELL fills (minimum count, gap, and ratio thresholds), or
+	- Long inventory USD exceeds a depth-based guard threshold.
+- When active, the guard suppresses BUY placement budget for that cycle and disables wash-trade placements to avoid adding synthetic buy pressure.
+- Guard decisions emit explicit warning logs including BUY/SELL fill counts, gap, ratio, and inventory-vs-limit values.
+
+Tests:
+- Added regression test proving BUY placements are suppressed when adverse real-fill imbalance guard is active.
+- Added regression test proving BUY placements resume once imbalance normalizes.
+- Re-ran focused strategy suite after patching.
+
+Acceptance criteria:
+- During adverse BUY-side flow, the bot stops adding new BUY exposure automatically.
+- Once flow/inventory pressure normalizes, BUY placements can resume without manual code changes.
+- Existing reserve, drift, clamp, and sparse-book protections remain intact.
+
+Validation outcomes:
+- Focused strategy suite passed (`61/61`).
+- Changes committed and pushed in commit `b76c4aa`.
+
+Post-deploy checks:
+- Confirm runtime logs show `Adverse-fill buy guard active` when BUY/SELL fill imbalance widens.
+- Confirm logs show `Wash trades paused while adverse-fill buy guard is active.` during guarded cycles.
+- Confirm BUY placements reappear after fill-side balance recovers and/or long inventory falls below guard threshold.
+
 Verification goals:
 - Confirm buys resume only after reserve reduction leaves enough spendable USDT above minimum notional.
 - Confirm the fallback quote mode still refuses unsafe placements and logs its decision clearly.
@@ -530,3 +559,38 @@ Operational checklist:
 - Set `IDLE_BALANCE_RESERVE_USD=175` first, then lower only in small steps if buys still do not resume.
 - After each reserve change, run `npm run build` and `pm2 restart epwx-bot`, then verify `Calculated balance-aware order sizes...` and at least one buy placement log.
 - Stop lowering reserve once buy placements resume and the logs remain stable.
+
+### 20. Add adverse-fill protection and preserve sell budget during reserve-pause cycles
+Status: Completed on 2026-07-24
+
+Objective:
+- Track real BUY and SELL fills separately and suppress fresh BUY pressure when external flow is driving one-sided accumulation.
+- Keep corrective BUYs available when inventory is short.
+- Avoid starving SELL placements when BUY placement is paused by reserve limits.
+
+Implementation notes:
+- Added real BUY/SELL fill counters and an adverse-fill guard that uses fill skew plus inventory USD depth to decide when BUY placements should pause.
+- Scoped the guard so short inventory can still trigger corrective BUY placement even if BUY fill counts are skewed.
+- Restored SELL placement budget when BUY placements are reserve-constrained, so the strategy keeps seeding the ask side instead of stalling both sides.
+
+Tests:
+- Add a test proving BUY placements are suppressed when adverse real-fill imbalance is active.
+- Add a test proving BUY placements resume after the imbalance normalizes.
+- Add a test proving corrective BUYs are still allowed when inventory is short.
+- Add a test proving SELL placements remain available when BUYs are paused by reserve.
+
+Acceptance criteria:
+- One-sided external taker flow no longer accelerates long inventory through repeated BUY placements.
+- The strategy still supports inventory correction when it is directionally needed.
+- Reserve-paused BUY cycles do not block SELL maintenance.
+
+Implementation notes:
+- Added a production guard for adverse BUY fill imbalance and a matching short-inventory exception.
+- Kept wash-trade suppression aligned with the same adverse-fill condition.
+- Added the sell-budget restoration fix so sell-side maintenance continues during reserve-constrained BUY cycles.
+- Changes committed and pushed in commit `780472b`.
+
+Post-deploy checks:
+- Current runtime logs still show reserve-constrained BUY pauses, but SELL maintenance continues through the exchange-band fallback path.
+- The previously observed 0-buy/1-sell deadlock no longer appears in the latest production chunks.
+- DEX/CEX drift remains elevated, so wash trades stay paused and live quoting stays restricted to CEX-based prices.
