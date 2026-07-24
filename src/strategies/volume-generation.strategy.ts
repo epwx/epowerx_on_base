@@ -417,6 +417,19 @@ export class VolumeGenerationStrategy {
       : referencePrice * (1 + offset);
   }
 
+  private async clampPriceToLatestBand(price: number): Promise<number> {
+    const ticker = await this.exchange.getTicker(this.symbol);
+    const latestPrice = ticker?.price ?? 0;
+
+    if (!Number.isFinite(latestPrice) || latestPrice <= 0) {
+      return price;
+    }
+
+    const lowerBound = latestPrice * 0.995;
+    const upperBound = latestPrice * 1.005;
+    return Math.min(Math.max(price, lowerBound), upperBound);
+  }
+
   private selectPassiveTopTouchPrices(
     executableBestBid: number,
     executableBestAsk: number
@@ -1436,6 +1449,14 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      const clampedPrice = await this.clampPriceToLatestBand(price);
+      if (clampedPrice !== price) {
+        logger.warn(
+          `⚠️  Clamping buy price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+        );
+        price = clampedPrice;
+      }
+
       const orderValue = normalizedAmount * price;
       if (orderValue > availableUSDT) {
         logger.warn(`⚠️  Skipping buy order: requested $${orderValue.toFixed(2)} > available $${availableUSDT.toFixed(2)}`);
@@ -1488,19 +1509,12 @@ export class VolumeGenerationStrategy {
         return;
       }
 
-      const ticker = await this.exchange.getTicker(this.symbol);
-      const latestPrice = ticker?.price ?? 0;
-      if (Number.isFinite(latestPrice) && latestPrice > 0) {
-        const lowerBound = latestPrice * 0.995;
-        const upperBound = latestPrice * 1.005;
-        const clampedPrice = Math.min(Math.max(price, lowerBound), upperBound);
-
-        if (clampedPrice !== price) {
-          logger.warn(
-            `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band around ${latestPrice.toExponential(4)}`
-          );
-          price = clampedPrice;
-        }
+      const clampedPrice = await this.clampPriceToLatestBand(price);
+      if (clampedPrice !== price) {
+        logger.warn(
+          `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+        );
+        price = clampedPrice;
       }
 
       if (normalizedAmount > availableEPWX) {

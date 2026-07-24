@@ -611,6 +611,29 @@ describe('Order Placement Logic', () => {
         expect(mockExchange.placeOrder).toHaveBeenCalledTimes(1);
         expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'SELL', 'LIMIT', 10, 1.005);
       });
+
+      it('should clamp buy placement into the latest-price band before sending it to the exchange', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 10000, locked: 0, total: 10000 },
+            { asset: 'EPWX', free: 10000, locked: 0, total: 10000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.0, price: 1.0 }),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'buyClamp', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 10, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+        };
+
+        const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+        const strategy = new VolumeGenerationStrategy(mockExchange);
+        (strategy as any).isRunning = true;
+
+        await strategy.placeBuyOrder(1.02, 10, false);
+
+        expect(mockExchange.placeOrder).toHaveBeenCalledTimes(1);
+        expect(mockExchange.placeOrder).toHaveBeenCalledWith('EPWXUSDT', 'BUY', 'LIMIT', 10, 1.005);
+      });
   let strategy: import('../volume-generation.strategy').VolumeGenerationStrategy | undefined;
   let setTimeoutSpy: jest.SpyInstance;
   let setIntervalSpy: jest.SpyInstance;
