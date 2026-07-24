@@ -257,3 +257,53 @@ Implementation notes:
 - Added `TARGET_ORDERS_PER_SIDE`, `TARGET_BUY_DEPTH_USD`, and `TARGET_SELL_DEPTH_USD` config values.
 - Replaced the hard-coded `30` orders-per-side target and `$200` per-side depth targets with those config values in the strategy.
 - Preserved previous production behavior through unchanged defaults while enabling true low-liquidity observation profiles.
+
+### 11. Validate real-user fill handling under wash-off mode
+Status: In Progress on 2026-07-23
+
+Objective:
+- Confirm a real external user fill is processed cleanly with `SELF_TRADE_ENABLED=false`, including fill detection, inventory update, and PnL tracking.
+- Ensure no rebalance/cancel storm behavior returns after the latest fixes.
+
+Implementation notes:
+- Live rollout exposed a rebalance loop where repeated rebalance checks triggered frequent `cancelAllOrders` + rebalance buys in short succession.
+- Added rebalance throttling controls and guard rails in commit `edf6e30`.
+- New runtime control added: `REBALANCE_COOLDOWN_MS` (deployed at `45000` for current validation run).
+- Confirmed post-deploy logs no longer show the prior rapid rebalance recursion pattern.
+
+Tests:
+- Added strategy regression coverage for rebalance cooldown behavior.
+- Added regression coverage to keep normalization caps from expanding past static limits.
+- Re-ran focused Jest strategy suite and TypeScript compile checks after the change.
+
+Acceptance criteria:
+- Real-user fill events increment real-fill counters and update inventory/PnL once per observed fill lifecycle.
+- Rebalance actions are rate-limited and do not trigger repeated cancel/rebuy storms.
+- Open-order maintenance remains bounded by configured caps during and after rebalance activity.
+
+Observed production outcomes:
+- Build marker for `edf6e30` confirmed active in runtime logs.
+- Fill detection and PnL logging observed in production after the rebalance fix.
+- Intermittent exchange API unavailability (`Service is not available`) still occurs and should be treated as an external reliability caveat during validation windows.
+
+### 12. Tune token-cap sizing for tiny-price EPWX markets
+Status: In Progress on 2026-07-23
+
+Objective:
+- Keep per-order USD notional practical at low token prices by preventing premature token-cap clipping.
+
+Implementation notes:
+- Initial runtime setting `MAX_ORDER_AMOUNT_TOKENS=8000000000` clipped many orders too early, reducing effective notional and causing repeated cap/skip warnings.
+- Increased runtime setting to `MAX_ORDER_AMOUNT_TOKENS=40000000000` for current production validation.
+- Post-change logs show materially more placements in the `36B-40B` token range, improving depth progression while preserving cap safety.
+
+Acceptance criteria:
+- Cap warnings become occasional safety events rather than dominant sizing behavior.
+- Book depth progresses toward configured targets with fewer under-sized placements.
+- No regression in order-count/depth caps or drift-guard behavior.
+
+Follow-up verification checklist:
+1. Execute one controlled micro external fill in a stable API window.
+2. Confirm expected sequence: fill detected -> inventory updated -> realized/unrealized PnL updated -> no rebalance storm.
+3. Verify order book remains within `TARGET_ORDERS_PER_SIDE`, `TARGET_BUY_DEPTH_USD`, and `TARGET_SELL_DEPTH_USD` bounds after that fill.
+4. Capture the final validated runtime profile values (`REBALANCE_COOLDOWN_MS`, `MAX_ORDER_AMOUNT_TOKENS`, and cap settings) for the deployment guide.
