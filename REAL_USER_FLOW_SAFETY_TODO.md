@@ -466,3 +466,35 @@ Validation outcomes:
 Post-deploy checks:
 - Confirm logs show buy pause warnings plus continuing sell seeding attempts rather than repeated `0 buys / 0 sells` stalling.
 - Confirm sparse-cycle sell-suppression logs no longer block all sell placement during reserve-paused windows.
+
+### 17. Suppress futile sell placement loops when extreme clamp repricing is guaranteed
+Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+
+Objective:
+- Prevent repeated sell placement attempts in a cycle when passive sell quotes will certainly be skipped by the extreme clamp-reprice safety guard.
+- Reduce log noise and avoid wasted placement work under abnormal-book conditions.
+
+Implementation notes:
+- Post-deploy logs on build `7fcb681` showed repeated sell placement attempts followed by repeated skips due to extreme clamp repricing.
+- Added a cycle-level sell viability probe using passive sell anchor pricing and latest-band clamp behavior.
+- If the probe indicates repricing exceeds `MAX_CLAMP_REPRICE_RATIO`, sell placements are paused for that cycle with one summary warning.
+- Added explicit cycle-level info log for skipped sell-depth additions under guaranteed extreme clamp conditions.
+
+Tests:
+- Added regression test proving sell placement loops are skipped when passive sell anchors would be extreme-clamped.
+- Preserved existing reserve-paused buy gating coverage and extreme clamp per-order guard coverage.
+- Re-ran focused strategy suite and full project suite after patching.
+
+Acceptance criteria:
+- No repeated per-attempt sell loop churn occurs in cycles where sell quotes are guaranteed to fail extreme clamp ratio checks.
+- One clear cycle-level warning explains why sell placements are paused.
+- Existing safety guards (reserve gating, drift guard, clamp-reprice guard) remain intact.
+
+Validation outcomes:
+- Focused strategy suite passed (`59/59`).
+- Full Jest suite passed (`113/113`).
+- Changes committed and pushed in commit `5fa631d`.
+
+Post-deploy checks:
+- Confirm logs emit the cycle-level `Sell placements paused this cycle...` warning.
+- Confirm repeated same-cycle sell attempt/skip sequences are no longer present under the same abnormal-book conditions.
