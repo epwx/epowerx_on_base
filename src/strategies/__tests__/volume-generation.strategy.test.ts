@@ -761,10 +761,12 @@ describe('Order Placement Logic', () => {
           (strategy as any).isRunning = true;
 
           const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
+          const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
 
           await (strategy as any).placeVolumeOrders();
 
           expect(buySpy).not.toHaveBeenCalled();
+          expect(sellSpy).toHaveBeenCalled();
           expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Buy placements paused this cycle'));
         } finally {
           config.volumeStrategy.orderFrequency = originalOrderFrequency;

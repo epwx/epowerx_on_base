@@ -1028,6 +1028,7 @@ export class VolumeGenerationStrategy {
           logger.info('⏭️  Buy-side prioritization is disabled this cycle because reserve-constrained buy placements are paused.');
         }
       }
+      const allowSparseSellRecovery = !canPlaceReserveConstrainedBuys;
 
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
       if (hasExecutableTouchLevels) {
@@ -1169,7 +1170,7 @@ export class VolumeGenerationStrategy {
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
           const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
-          if (projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
+          if (!allowSparseSellRecovery && projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
             logger.info(
               `⏭️  Stopping depth sell additions: projected openBook=${projectedBuyCount} buys/${projectedSellCount} sells in a sparse cycle.`
             );
@@ -1241,7 +1242,7 @@ export class VolumeGenerationStrategy {
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
           const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
-          if (projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
+          if (!allowSparseSellRecovery && projectedBuyCount <= 2 && projectedSellCount >= projectedBuyCount) {
             logger.info(
               `⏭️  Skipping book-depth sell additions: projected openBook=${projectedBuyCount} buys/${projectedSellCount} sells in a sparse cycle.`
             );
