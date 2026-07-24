@@ -402,3 +402,67 @@ Observed production outcomes:
 - Repeated sell placement rejects were observed in production windows while buy placements continued normally.
 - The exchange rejected sell orders with `The price must be between <?>% and <?>% of the latest price` even after the executable-book fallback moved placement decisions to the CEX ticker mid.
 - This failure leaves the book temporarily lopsided (`8 buys, 0 sells`) and is the next validation target.
+
+### 15. Add extreme clamp-reprice guard to prevent unsafe quote jumps
+Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+
+Objective:
+- Prevent orders from being executed when latest-price clamping forces a very large jump from the intended passive quote.
+- Avoid accidental execution at abnormal prices during extreme book dislocations.
+
+Implementation notes:
+- Added a clamp-reprice ratio guard in order placement for both buy and sell paths.
+- If `executablePrice / requestedPrice` exceeds the configured safety ratio (or falls below its inverse), placement is skipped.
+- The guard runs after latest-band clamping and before executable amount recalculation.
+- New constant introduced in strategy: `MAX_CLAMP_REPRICE_RATIO` (currently `1.5`).
+
+Tests:
+- Added regression test proving BUY placement is skipped when clamp repricing is extreme.
+- Added regression test proving SELL placement is skipped when clamp repricing is extreme.
+- Re-ran focused strategy suite and full Jest suite after implementation.
+
+Acceptance criteria:
+- No order is sent when clamped executable price deviates excessively from the requested passive quote.
+- Guard applies symmetrically to buy and sell placement paths.
+- Existing reserve and executable-notional protections remain intact.
+
+Validation outcomes:
+- Focused strategy suite passed (`58/58`).
+- Full Jest suite passed (`112/112`).
+- Changes committed and pushed in commit `780472b`.
+
+Post-deploy checks:
+- Verify production logs show `Skipping ... due to extreme clamp reprice` during abnormal dislocation windows.
+- Verify there are no new filled orders at highly re-priced clamp levels during those windows.
+
+### 16. Allow sell-side sparse-book recovery when reserve gating pauses buys
+Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+
+Objective:
+- Prevent a `0 buys / 0 sells` maintenance deadlock when reserve-constrained buy gating is active.
+- Keep sell-side seeding operational so the book can recover instead of stalling.
+
+Implementation notes:
+- Production logs showed reserve-paused buys (`spendable USDT below minimum notional`) combined with sparse-cycle sell suppression.
+- In that combination, depth/book sell paths were both skipped, leaving repeated `0/0` cycles.
+- Added a focused condition to allow sparse sell recovery only when buys are intentionally paused by reserve gating.
+- Existing sparse sell suppression remains unchanged for normal cycles where buys are placeable.
+
+Tests:
+- Extended the reserve-paused-cycle regression to assert buy placements remain paused.
+- Added assertion that sell placement still proceeds in the same reserve-paused cycle.
+- Re-ran focused strategy suite and full project suite after patching.
+
+Acceptance criteria:
+- When reserve gating pauses buys, sell placement paths remain eligible to seed/maintain book depth.
+- The bot avoids repeated no-order sparse-cycle loops caused by mutually blocking buy/sell guards.
+- Normal sparse-cycle sell suppression still protects against sell-heavy skew when buys are available.
+
+Validation outcomes:
+- Focused strategy suite passed (`58/58`).
+- Full Jest suite passed (`112/112`).
+- Changes committed and pushed in commit `417d435`.
+
+Post-deploy checks:
+- Confirm logs show buy pause warnings plus continuing sell seeding attempts rather than repeated `0 buys / 0 sells` stalling.
+- Confirm sparse-cycle sell-suppression logs no longer block all sell placement during reserve-paused windows.
