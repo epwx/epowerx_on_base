@@ -981,6 +981,9 @@ export class VolumeGenerationStrategy {
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
       const availableUSDT = usdtBalance?.free || 0;
       const availableEPWX = epwxBalance?.free || 0;
+      const buyReserveUsd = this.getIdleBalanceReserveUsd();
+      const spendableBuyUsd = Math.max(availableUSDT - buyReserveUsd, 0);
+      const canPlaceReserveConstrainedBuys = spendableBuyUsd >= VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD;
       const availableSellUsd = availableEPWX * priceReference;
       const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
@@ -1005,6 +1008,17 @@ export class VolumeGenerationStrategy {
         `🧮 Placement budgets: max=${maxPlacementsPerCycle}, book=${bookPlacementBudget}, reservedWash=${washReservedPlacements}, targetWashPairs=${dynamicWashTradePairs}`
       );
 
+      if (!canPlaceReserveConstrainedBuys) {
+        logger.warn(
+          `⚠️  Buy placements paused this cycle: spendable USDT $${spendableBuyUsd.toFixed(2)} is below minimum notional $${VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD.toFixed(2)} after reserve $${buyReserveUsd.toFixed(2)}.`
+        );
+
+        if (shouldPrioritizeBuysForDepth) {
+          shouldPrioritizeBuysForDepth = false;
+          logger.info('⏭️  Buy-side prioritization is disabled this cycle because reserve-constrained buy placements are paused.');
+        }
+      }
+
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
       if (hasExecutableTouchLevels) {
         const passiveTopTouchPrices = this.selectPassiveTopTouchPrices(executableBestBid, executableBestAsk);
@@ -1016,7 +1030,7 @@ export class VolumeGenerationStrategy {
           )
         );
 
-        if (hasBuyPlacementBudget() && passiveTopTouchPrices) {
+        if (canPlaceReserveConstrainedBuys && hasBuyPlacementBudget() && passiveTopTouchPrices) {
           const buyTouchPrice = this.applyInventorySkewToQuotePrice(passiveTopTouchPrices.buyPrice);
           const buyTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const buyTouchRawAmount = buyTouchUsd / buyTouchPrice;
@@ -1056,9 +1070,12 @@ export class VolumeGenerationStrategy {
           const sellToBuyRatioAfterTopTouch = sellOrders.length / Math.max(buyOrders.length, 1);
           const lowBookSellHeavyAfterTopTouch = buyOrders.length <= 2 && sellOrders.length > buyOrders.length;
           const shouldPrioritizeBuysAfterTopTouch =
-            lowBookSellHeavyAfterTopTouch || (
-              sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
-              sellToBuyRatioAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO
+            canPlaceReserveConstrainedBuys &&
+            (
+              lowBookSellHeavyAfterTopTouch || (
+                sellBuyGapAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_GAP &&
+                sellToBuyRatioAfterTopTouch >= VolumeGenerationStrategy.SELL_IMBALANCE_GUARD_MIN_RATIO
+              )
             );
 
           if (shouldPrioritizeBuysAfterTopTouch && !shouldPrioritizeBuysForDepth) {
@@ -1086,7 +1103,13 @@ export class VolumeGenerationStrategy {
 
       // Place additional buy orders if needed to reach the configured buy-side depth target.
       let buyDepthShortfall = targetBuyDepthUsd - buyDepth;
-      if (buyDepthShortfall > 0) {
+      if (buyDepthShortfall > 0 && !canPlaceReserveConstrainedBuys) {
+        logger.info(
+          `⏭️  Skipping buy-depth additions this cycle: spendable USDT $${spendableBuyUsd.toFixed(2)} is below minimum notional after reserve.`
+        );
+      }
+
+      if (buyDepthShortfall > 0 && canPlaceReserveConstrainedBuys) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in ${buyBandLabel} of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
@@ -1176,7 +1199,7 @@ export class VolumeGenerationStrategy {
       const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget()) {
+      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceReserveConstrainedBuys) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'BUY', i);
