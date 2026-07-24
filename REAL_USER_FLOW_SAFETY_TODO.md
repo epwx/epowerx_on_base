@@ -309,7 +309,7 @@ Observed production outcomes:
 - Order-count and depth controls remained bounded during the same windows (`4x4` target behavior and depth progression toward configured limits).
 
 ### 13. Add rebalance execution price guard for abnormal-book conditions
-Status: Completed on 2026-07-24 (deployment validation pending)
+Status: Completed on 2026-07-24 (spread-guard production validated)
 
 Objective:
 - Prevent rebalance orders from executing at clearly unsafe prices during temporary orderbook dislocations or thin-book anomalies.
@@ -330,3 +330,11 @@ Acceptance criteria:
 - No rebalance order is sent at a price that violates configured spread or deviation safeguards.
 - Position reduction remains functional without reverting to rebalance storm behavior.
 - Post-fill inventory recovery continues to respect order-count, depth, and drift controls.
+
+Observed production outcomes:
+- Rebalance trigger observed in production logs: `Position rebalance needed: -35003431708.90`.
+- New spread guard fired as expected and blocked unsafe execution: `Skipping rebalance because ticker spread is too wide (19.40% > 5.00%)`.
+- Cooldown and in-progress protections remained active after the blocked rebalance attempt (`Rebalance already in progress` and cooldown messages observed).
+- Real BUY flow remained healthy in the same validation window (real fill detection, inventory updates, and continued bounded quote maintenance).
+- Intermittent exchange API outages (`Service is not available`) were observed during the same period and should be treated as an external reliability caveat, not a guard-logic regression.
+- Live-only validation of the deviation guard branch remains optional follow-up work when market conditions produce a deviation-trigger scenario.
