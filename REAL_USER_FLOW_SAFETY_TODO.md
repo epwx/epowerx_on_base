@@ -921,6 +921,9 @@ Implementation notes:
 Validation outcomes:
 - `npm run build` now compiles only and is non-destructive.
 - Order cancellation still works when intentionally invoked with confirmation: `CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders`.
+- Added runtime cancellation controls for lifecycle events: `CANCEL_ORDERS_ON_START` and `CANCEL_ORDERS_ON_STOP` (both default to legacy `CANCEL_ORDERS_ON_DEPLOY` behavior when unset).
+- Production validation confirmed that with `CANCEL_ORDERS_ON_DEPLOY=false`, `CANCEL_ORDERS_ON_START=false`, and `CANCEL_ORDERS_ON_STOP=false`, manual resting orders persist across restart cycles.
+- Runtime evidence now includes explicit startup log `Skipping startup order cancellation (CANCEL_ORDERS_ON_START=false).`; shutdown path is similarly gated by `CANCEL_ORDERS_ON_STOP=false`.
 
 ### 23. Normalize `.env.example` as the production-aligned source template
 Status: Completed on 2026-07-25
