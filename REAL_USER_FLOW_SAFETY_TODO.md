@@ -429,6 +429,8 @@ Latest implementation progress (now active in code):
 - buys suppressed in `off` mode while sell maintenance continues.
 - buys suppressed in `auto` mode when spread exceeds threshold.
 - buys allowed in `auto` mode when spread/edge checks pass.
+- Added sell-freeze protection that suppresses new sell placements when buys are gated and `TARGET_SELL_DEPTH_USD=0`, including skipping the sell clamp probe in frozen cycles.
+- Added regression coverage proving the freeze path does not emit the exchange-band fallback warning.
 
 Latest production validation outcomes:
 - With `FORCE_BUY_PAUSE=false`, buy policy pause was successfully removed (phase-2 unlock confirmed).
@@ -436,14 +438,16 @@ Latest production validation outcomes:
 - Executable-book spread remained ~15.01% and DEX/CEX drift ~31%, so drift guard and wash-trade pauses behaved as expected.
 - Runtime maintained sell-side fallback maintenance while preventing unsafe buy reactivation.
 - Duplicate reserve env override issue was cleaned up; no new reserve-warning spam observed in latest validated log windows.
+- Latest droplet cadence tuning set both `ORDER_FREQUENCY` and `UPDATE_INTERVAL` to `15000`, which removed the earlier overlap/noise pattern while keeping the bot in freeze-safe mode.
 
 Latest runtime re-validation (2026-07-25, post-redeploy):
 - Build marker / runtime SHA confirmed latest deployment (`d3a90e5`).
 - Auto gate diagnostics continuously report high drift lockout (`DEX/CEX drift ~31.0% > 3.0%`) and keep BUY side paused deterministically.
 - Executable-book spread remained ~14.42%, so fallback to CEX ticker mid remained active by design.
-- Book shape repeatedly stabilized at `0 buys / 2 sells`, with sell depth maintained to target and `Need to add $0.00 sell` once full.
+- Book shape repeatedly stabilized at `0 buys / 0 sells` during the latest freeze-only window, with sell depth explicitly held at `0.00 / 0.00` because `TARGET_SELL_DEPTH_USD=0` and buys were gated.
 - Volume/PnL stayed near zero in this window (`Real fills: 0`), consistent with safety-first no-trade behavior under current market dislocation.
-- No evidence of accidental marketable BUY execution in this regime.
+- No evidence of accidental marketable BUY or SELL execution in this regime.
+- Live logs still show the wide-spread placement fallback warning when the executable book is unusable, but the separate sell-freeze warning now prevents new sell placement attempts during frozen cycles.
 
 Current operator decision point:
 - Keep current strict gates if priority is loss-avoidance while market quality is poor.
