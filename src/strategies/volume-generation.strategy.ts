@@ -1411,7 +1411,7 @@ export class VolumeGenerationStrategy {
       let sellPlacementMode: 'PASSIVE' | 'EXCHANGE_BAND_FALLBACK' = 'PASSIVE';
       const sellClampProbePrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', 0);
       const sellClampProbeExecutablePrice = await this.clampPriceToLatestBand(sellClampProbePrice);
-      if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice)) {
+      if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice) && !shouldFreezeSellPlacements) {
         sellPlacementPriceReference = sellClampProbeExecutablePrice;
         sellPlacementMode = 'EXCHANGE_BAND_FALLBACK';
         logger.warn(
