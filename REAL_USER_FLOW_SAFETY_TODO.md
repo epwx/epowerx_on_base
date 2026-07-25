@@ -376,7 +376,7 @@ Observed production outcomes:
 - After validation, production-safe guard values were restored to `REBALANCE_MAX_SPREAD_PERCENT=5` and `REBALANCE_MAX_PRICE_DEVIATION_PERCENT=5`.
 
 ### 14. Add exchange-band-aware sell placement guard
-Status: Pending
+Status: Completed on 2026-07-25 (implemented via guarded fallback sell pricing + live validation)
 
 Objective:
 - Prevent repeated sell-order rejects when the exchange rejects a passive price as outside the latest-price band.
@@ -397,6 +397,11 @@ Acceptance criteria:
 - Sell placement no longer loops on exchange-band rejects.
 - Book maintenance can continue without repeated sell-side error spam.
 - The strategy remains passive and exchange-compliant under wide-book conditions.
+
+Validation outcomes:
+- Latest production windows show exchange-band fallback sell pricing active during dislocation cycles.
+- Recent logs no longer show repeated `The price must be between <?>% and <?>% of the latest price` sell reject loops.
+- Sell-side maintenance remained active while buy-side gating stayed conservative.
 
 ### 15. Add profitability-gated buy reactivation mode (safety-first)
 Status: In progress on 2026-07-25 (phase-1 keys implemented + production validated)
@@ -465,6 +470,78 @@ Rollout note:
 - Start with `BUY_REACTIVATION_MODE=auto` and defensive multipliers only.
 - Require a statistically meaningful sample of real fills with positive net realized PnL before increasing `RISK_SIZE_MULTIPLIER_NORMAL` toward `1.0`.
 - Keep `FORCE_BUY_PAUSE` available as immediate rollback if drawdown or adverse-fill breakers trigger.
+
+Section 15 phase-2 execution checklist (implementation-first):
+
+1. Add missing config keys and parser wiring in `src/config/index.ts`:
+- `MIN_EXEC_DEPTH_BUY_USD`
+- `MIN_EXEC_DEPTH_SELL_USD`
+- `RISK_SIZE_MULTIPLIER_DEFENSIVE`
+- `RISK_SIZE_MULTIPLIER_NORMAL`
+- `ADVERSE_FILL_RATIO_MAX`
+
+Acceptance for step 1:
+- Runtime starts safely with defaults when new keys are absent.
+- Invalid env values do not unlock buy risk unexpectedly.
+
+2. Add remaining `auto`-mode gate logic in `src/strategies/volume-generation.strategy.ts`:
+- Depth gate: enforce minimum executable depth on both sides.
+- Adverse-flow gate: block buys when real BUY fills dominate real SELL fills beyond ratio threshold.
+- Keep spread and edge gates active and combine all gate outputs into a deterministic cycle decision.
+
+Acceptance for step 2:
+- In `auto`, BUY budget is enabled only when all gates pass.
+- Any single gate failure suppresses BUY placements for that cycle.
+- Logs include explicit pass/fail reasons per gate.
+
+3. Add dynamic risk sizing based on market regime in `src/strategies/volume-generation.strategy.ts`:
+- Use `RISK_SIZE_MULTIPLIER_DEFENSIVE` during marginal-but-allowed conditions.
+- Use `RISK_SIZE_MULTIPLIER_NORMAL` only in healthy conditions with stronger confirmation.
+- Clamp multipliers to a safe range so sizing never bypasses existing hard caps.
+
+Acceptance for step 3:
+- Per-order notional shrinks in defensive regime and scales up only in healthier regimes.
+- Hard safety controls (caps/reserve/position limits) still dominate final sizing.
+
+4. Add Section 15 regression tests in `src/strategies/__tests__/volume-generation.strategy.test.ts`:
+- Buys blocked when executable depth is below configured minima.
+- Buys blocked when adverse fill ratio exceeds threshold.
+- Buys allowed only when spread, edge, depth, and adverse-flow gates all pass.
+- Defensive multiplier and normal multiplier paths both validated.
+- Sell maintenance remains active when buys are gated.
+
+Acceptance for step 4:
+- New focused tests pass and existing suite remains regression-clean.
+
+5. Update rollout template in `.env.example` with phase-2 keys and safe defaults.
+
+Suggested initial values for phase-2 rollout:
+- `BUY_REACTIVATION_MODE=auto`
+- `MIN_NET_EDGE_BPS=80`
+- `MAX_EXEC_SPREAD_PERCENT=8`
+- `MIN_EXEC_DEPTH_BUY_USD=20`
+- `MIN_EXEC_DEPTH_SELL_USD=20`
+- `ADVERSE_FILL_RATIO_MAX=1.5`
+- `RISK_SIZE_MULTIPLIER_DEFENSIVE=0.35`
+- `RISK_SIZE_MULTIPLIER_NORMAL=0.60`
+
+6. Validation and deployment sequence:
+- Run focused strategy tests first.
+- Run full Jest suite.
+- Run TypeScript check: `npx tsc -p tsconfig.json --noEmit`.
+- Deploy with `FORCE_BUY_PAUSE=true` to verify no accidental buy placements.
+- Switch to `FORCE_BUY_PAUSE=false` while keeping `BUY_REACTIVATION_MODE=auto`.
+
+Acceptance for step 6:
+- Phase 1 (`FORCE_BUY_PAUSE=true`): zero BUY placements, sell maintenance active.
+- Phase 2 (`FORCE_BUY_PAUSE=false`): BUYs appear only in cycles where all `auto` gates pass.
+- High drift/high spread windows still block BUYs deterministically.
+
+Go/No-Go production criteria for profit-mode continuation:
+- Go only if auto-gate pass cycles show non-negative realized PnL trend over meaningful real-fill sample size.
+- Go only if adverse-fill guard does not repeatedly trip after unlock.
+- Go only if inventory stays within configured risk bands without repeated emergency suppression.
+- No-Go if drawdown exceeds session tolerance or if gate behavior becomes inconsistent; revert immediately with `FORCE_BUY_PAUSE=true`.
 
 Ready-to-paste `.env` rollout profile (supported by current code):
 
@@ -565,12 +642,11 @@ Acceptance criteria:
 - Strategy can run in production with deterministic rollback to safe mode without manual intervention.
 
 Observed production outcomes:
-- Repeated sell placement rejects were observed in production windows while buy placements continued normally.
-- The exchange rejected sell orders with `The price must be between <?>% and <?>% of the latest price` even after the executable-book fallback moved placement decisions to the CEX ticker mid.
-- This failure leaves the book temporarily lopsided (`8 buys, 0 sells`) and is the next validation target.
+- Earlier production windows showed repeated sell placement rejects (`The price must be between <?>% and <?>% of the latest price`) during dislocated-book conditions.
+- That sell-band rejection path has now been addressed and validated through the guarded fallback sell pricing flow documented in Section 14 and Section 17 updates.
 
 ### 15. Add extreme clamp-reprice guard to prevent unsafe quote jumps
-Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+Status: Completed on 2026-07-24 (code + tests), production validated on 2026-07-25
 
 Objective:
 - Prevent orders from being executed when latest-price clamping forces a very large jump from the intended passive quote.
@@ -595,9 +671,10 @@ Acceptance criteria:
 Validation outcomes:
 - Focused strategy suite passed (`58/58`).
 - Full Jest suite passed (`112/112`).
+- Recent production cycles repeatedly logged extreme clamp fallback context (`...would clamp ... beyond the x1.50 safety ratio`) with no unsafe forced execution behavior observed.
 
 ### 16. Allow sell-side sparse-book recovery when reserve gating pauses buys
-Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+Status: Completed on 2026-07-24 (code + tests), production validated on 2026-07-25
 
 Objective:
 - Prevent a `0 buys / 0 sells` maintenance deadlock when reserve-constrained buy gating is active.
@@ -628,8 +705,11 @@ Post-deploy checks:
 - Confirm logs show buy pause warnings plus continuing sell seeding attempts rather than repeated `0 buys / 0 sells` stalling.
 - Confirm sparse-cycle sell-suppression logs no longer block all sell placement during reserve-paused windows.
 
+Post-deploy validation outcomes:
+- Latest production windows repeatedly showed reserve/gate-driven buy suppression with continued sell-side maintenance (`0 buys / 2 sells`), not `0 / 0` deadlock behavior.
+
 ### 17. Add guarded fallback sell pricing for extreme clamp conditions
-Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+Status: Completed on 2026-07-24 (code + tests), production validated on 2026-07-25
 
 Objective:
 - Prevent repeated sell placement attempts in a cycle when passive sell quotes would be extreme-clamped.
@@ -661,6 +741,9 @@ Post-deploy checks:
 - Confirm logs emit the cycle-level exchange-band fallback warning for sell pricing.
 - Confirm repeated same-cycle sell attempt/skip sequences are no longer present under the same abnormal-book conditions.
 - Confirm sell placements resume inside the latest-price band instead of going fully idle on the sell side.
+
+Post-deploy validation outcomes:
+- Latest logs consistently emitted fallback-sell cycle warnings and continued sell-depth maintenance without returning to prior sell-reject churn patterns.
 
 ### 18. Restore controlled activity with a three-step recovery plan
 Status: In progress (step 3 implemented in code; reserve tuning still pending)
@@ -762,7 +845,7 @@ Post-deploy checks:
 - DEX/CEX drift remains elevated, so wash trades stay paused and live quoting stays restricted to CEX-based prices.
 
 ### 21. Add FORCE_BUY_PAUSE policy switch for hard buy-side risk control
-Status: Completed on 2026-07-24 (code + tests), pending fresh production-log verification
+Status: Completed on 2026-07-24 (code + tests), production validated on 2026-07-25
 
 Objective:
 - Provide a deterministic policy switch to disable all BUY placements regardless of temporary spendable balance changes.
@@ -788,6 +871,8 @@ Acceptance criteria:
 
 Validation outcomes:
 - Focused strategy suite passed (`65/65`).
+- Phase-1 production run validated hard buy-side pause behavior with sells still maintained.
+- Phase-2 run (`FORCE_BUY_PAUSE=false`) confirmed policy removal while buy-side remained gated by reactivation checks, proving clean policy toggle behavior.
 
 ### 22. Decouple destructive order-cancel operations from normal build/test commands
 Status: Pending (paused for later by operator)
