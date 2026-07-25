@@ -404,7 +404,7 @@ Validation outcomes:
 - Sell-side maintenance remained active while buy-side gating stayed conservative.
 
 ### 15. Add profitability-gated buy reactivation mode (safety-first)
-Status: In progress on 2026-07-25 (phase-1 keys implemented + production validated)
+Status: In progress on 2026-07-25 (phase-2 code complete and deployed; production remains in safety-lock due to dislocated market conditions)
 
 Objective:
 - Allow the bot to pursue profit only when expected post-fee edge is positive and market-quality conditions are healthy.
@@ -436,6 +436,18 @@ Latest production validation outcomes:
 - Executable-book spread remained ~15.01% and DEX/CEX drift ~31%, so drift guard and wash-trade pauses behaved as expected.
 - Runtime maintained sell-side fallback maintenance while preventing unsafe buy reactivation.
 - Duplicate reserve env override issue was cleaned up; no new reserve-warning spam observed in latest validated log windows.
+
+Latest runtime re-validation (2026-07-25, post-redeploy):
+- Build marker / runtime SHA confirmed latest deployment (`d3a90e5`).
+- Auto gate diagnostics continuously report high drift lockout (`DEX/CEX drift ~31.0% > 3.0%`) and keep BUY side paused deterministically.
+- Executable-book spread remained ~14.42%, so fallback to CEX ticker mid remained active by design.
+- Book shape repeatedly stabilized at `0 buys / 2 sells`, with sell depth maintained to target and `Need to add $0.00 sell` once full.
+- Volume/PnL stayed near zero in this window (`Real fills: 0`), consistent with safety-first no-trade behavior under current market dislocation.
+- No evidence of accidental marketable BUY execution in this regime.
+
+Current operator decision point:
+- Keep current strict gates if priority is loss-avoidance while market quality is poor.
+- Only begin staged relaxation (drift threshold and minimal activity reintroduction) after sustained improvement in executable spread and DEX/CEX convergence.
 
 Config additions (proposed):
 - `BUY_REACTIVATION_MODE` (`off`, `auto`, `on`) default `off`
@@ -933,6 +945,7 @@ Implementation notes:
 Validation outcomes:
 - TypeScript compile check passed after patch (`npx tsc -p tsconfig.json --noEmit`).
 - Runtime no longer prints raw API keys in those request-parameter log lines.
+- Post-rotation and restart logs now consistently show masked values in open-orders params (`"api_key":"***"`, `"sign":"***"`).
 
 Operational follow-up:
 - Rotate the previously exposed Biconomy API key/secret because historical logs contained plaintext credentials.
