@@ -31,6 +31,7 @@ interface ProfitStats {
 }
 
 type PlacementPriceSource = 'EXECUTABLE_BOOK_MID' | 'CEX_TICKER_MID' | 'DEX_FALLBACK';
+type BuyReactivationMode = 'off' | 'auto' | 'on';
 
 /**
  * Volume Generation Strategy
@@ -235,6 +236,98 @@ export class VolumeGenerationStrategy {
 
   private getForceBuyPause(): boolean {
     return config.volumeStrategy.forceBuyPause;
+  }
+
+  private getBuyReactivationMode(): BuyReactivationMode {
+    return config.volumeStrategy.buyReactivationMode;
+  }
+
+  private getMinNetEdgeBps(): number {
+    return Math.max(config.volumeStrategy.minNetEdgeBps, 0);
+  }
+
+  private getMaxExecSpreadPercent(): number {
+    return Math.max(config.volumeStrategy.maxExecSpreadPercent, 0);
+  }
+
+  private evaluateBuyReactivationGate(
+    mode: BuyReactivationMode,
+    placementPriceSource: PlacementPriceSource,
+    executableSpreadPercent: number,
+    tickerSpreadPercent: number | undefined
+  ): {
+    allowBuys: boolean;
+    reason: string;
+    evaluatedSpreadPercent: number | null;
+    estimatedNetEdgeBps: number | null;
+  } {
+    if (mode === 'off') {
+      return {
+        allowBuys: false,
+        reason: 'BUY_REACTIVATION_MODE=off',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    if (mode === 'on') {
+      return {
+        allowBuys: true,
+        reason: 'BUY_REACTIVATION_MODE=on',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    if (placementPriceSource === 'DEX_FALLBACK') {
+      return {
+        allowBuys: false,
+        reason: 'BUY_REACTIVATION_MODE=auto requires CEX-based placement source',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    const evaluatedSpreadPercent = placementPriceSource === 'EXECUTABLE_BOOK_MID'
+      ? executableSpreadPercent
+      : tickerSpreadPercent;
+    if (!Number.isFinite(evaluatedSpreadPercent)) {
+      return {
+        allowBuys: false,
+        reason: 'BUY_REACTIVATION_MODE=auto could not determine a finite spread',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    const safeSpreadPercent = Math.max(evaluatedSpreadPercent ?? 0, 0);
+    const maxExecSpreadPercent = this.getMaxExecSpreadPercent();
+    if (safeSpreadPercent > maxExecSpreadPercent) {
+      return {
+        allowBuys: false,
+        reason: `BUY_REACTIVATION_MODE=auto blocked buys: spread ${safeSpreadPercent.toFixed(2)}% > ${maxExecSpreadPercent.toFixed(2)}%`,
+        evaluatedSpreadPercent: safeSpreadPercent,
+        estimatedNetEdgeBps: safeSpreadPercent * 100,
+      };
+    }
+
+    const estimatedNetEdgeBps = safeSpreadPercent * 100;
+    const minNetEdgeBps = this.getMinNetEdgeBps();
+    if (estimatedNetEdgeBps < minNetEdgeBps) {
+      return {
+        allowBuys: false,
+        reason: `BUY_REACTIVATION_MODE=auto blocked buys: estimated net edge ${estimatedNetEdgeBps.toFixed(1)} bps < ${minNetEdgeBps.toFixed(1)} bps`,
+        evaluatedSpreadPercent: safeSpreadPercent,
+        estimatedNetEdgeBps,
+      };
+    }
+
+    return {
+      allowBuys: true,
+      reason: `BUY_REACTIVATION_MODE=auto passed: spread ${safeSpreadPercent.toFixed(2)}%, estimated net edge ${estimatedNetEdgeBps.toFixed(1)} bps`,
+      evaluatedSpreadPercent: safeSpreadPercent,
+      estimatedNetEdgeBps,
+    };
   }
 
   private getAdaptiveOrderAmountCap(price?: number, availableUsd?: number): number {
@@ -839,6 +932,7 @@ export class VolumeGenerationStrategy {
       const executableMidPrice = executableBookSnapshot?.midPrice ?? 0;
       const executableBestBid = executableBookSnapshot?.bestBid ?? 0;
       const executableBestAsk = executableBookSnapshot?.bestAsk ?? 0;
+      const sanitizedTickerQuotes = this.getSanitizedTickerQuotes({ bid: biconomyBid, ask: biconomyAsk });
       const executableSpreadPercent =
         executableBestBid > 0 && executableBestAsk > 0
           ? ((executableBestAsk - executableBestBid) / executableBestBid) * 100
@@ -1046,8 +1140,18 @@ export class VolumeGenerationStrategy {
       const buyReserveUsd = this.getIdleBalanceReserveUsd();
       const spendableBuyUsd = Math.max(availableUSDT - buyReserveUsd, 0);
       const forceBuyPause = this.getForceBuyPause();
+      const buyReactivationMode = this.getBuyReactivationMode();
+      const buyReactivationGate = this.evaluateBuyReactivationGate(
+        buyReactivationMode,
+        placementPriceSource,
+        executableSpreadPercent,
+        sanitizedTickerQuotes?.spreadPercent
+      );
       const canPlaceReserveConstrainedBuys = spendableBuyUsd >= VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD;
-      const canPlaceBuysThisCycle = canPlaceReserveConstrainedBuys && !forceBuyPause;
+      const canPlaceBuysThisCycle =
+        canPlaceReserveConstrainedBuys &&
+        !forceBuyPause &&
+        buyReactivationGate.allowBuys;
       const availableSellUsd = availableEPWX * priceReference;
       const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
@@ -1097,6 +1201,21 @@ export class VolumeGenerationStrategy {
           logger.info('⏭️  Buy-side prioritization is disabled this cycle because FORCE_BUY_PAUSE=true.');
         }
         logger.warn('🧯 BUY placements paused by policy: FORCE_BUY_PAUSE=true.');
+      }
+
+      if (!buyReactivationGate.allowBuys) {
+        buyPlacementCap = 0;
+        if (sellPlacementCap === 0 && missingSellOrders > 0) {
+          sellPlacementCap = Math.max(1, bookPlacementBudget);
+          logger.info('⏭️  Restoring sell placement budget because buy reactivation gate is blocking BUY placements this cycle.');
+        }
+        if (shouldPrioritizeBuysForDepth) {
+          shouldPrioritizeBuysForDepth = false;
+          logger.info('⏭️  Buy-side prioritization is disabled this cycle because buy reactivation gate is blocking BUY placements.');
+        }
+        logger.warn(`🧯 BUY placements paused by reactivation gate: ${buyReactivationGate.reason}.`);
+      } else if (buyReactivationMode === 'auto') {
+        logger.info(`✅ ${buyReactivationGate.reason}.`);
       }
 
       if (!canPlaceReserveConstrainedBuys) {
@@ -1624,6 +1743,11 @@ export class VolumeGenerationStrategy {
     try {
       if (this.getForceBuyPause()) {
         logger.info('⏭️  Skipping buy order: FORCE_BUY_PAUSE=true.');
+        return;
+      }
+
+      if (this.getBuyReactivationMode() === 'off') {
+        logger.info('⏭️  Skipping buy order: BUY_REACTIVATION_MODE=off.');
         return;
       }
 

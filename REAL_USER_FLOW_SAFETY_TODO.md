@@ -398,6 +398,156 @@ Acceptance criteria:
 - Book maintenance can continue without repeated sell-side error spam.
 - The strategy remains passive and exchange-compliant under wide-book conditions.
 
+### 15. Add profitability-gated buy reactivation mode (safety-first)
+Status: Pending
+
+Objective:
+- Allow the bot to pursue profit only when expected post-fee edge is positive and market-quality conditions are healthy.
+- Keep all existing safety controls as first-class constraints, with automatic rollback to defensive mode when risk rises.
+
+Implementation notes:
+- Add a new mode (for example `BUY_REACTIVATION_MODE=off|auto|on`) and keep `FORCE_BUY_PAUSE` as the hard override.
+- In `auto` mode, permit buy placements only when all gates pass in the same cycle:
+	- expected net edge >= configured minimum edge threshold
+	- executable spread <= max spread threshold
+	- DEX/CEX drift <= drift threshold for two-sided quoting
+	- minimum executable depth exists on both sides
+	- adverse-fill guard is not active
+- If any gate fails, degrade automatically to defensive behavior (buy pause or size reduction) and log explicit reasons.
+- Keep wash-trade behavior unchanged (`SELF_TRADE_ENABLED=false` remains authoritative).
+
+Config additions (proposed):
+- `BUY_REACTIVATION_MODE` (`off`, `auto`, `on`) default `off`
+- `MIN_NET_EDGE_BPS` minimum expected post-fee edge required to place risk
+- `MAX_EXEC_SPREAD_PERCENT` maximum spread tolerated for normal two-sided quoting
+- `MIN_EXEC_DEPTH_BUY_USD` and `MIN_EXEC_DEPTH_SELL_USD` required executable depth near quote bands
+- `ADVERSE_FILL_RATIO_MAX` rolling cap before buy-side is throttled/paused
+- `RISK_SIZE_MULTIPLIER_DEFENSIVE` and `RISK_SIZE_MULTIPLIER_NORMAL` for dynamic sizing
+
+Recommended initial parameter values (first live rollout profile):
+
+| Parameter | Suggested initial value | Why this is safe for first rollout |
+| --- | --- | --- |
+| `FORCE_BUY_PAUSE` | `true` at deploy; move to `false` only after setting `BUY_REACTIVATION_MODE=auto` | Keeps emergency hard-stop active until gates are verified. |
+| `BUY_REACTIVATION_MODE` | `auto` | Prevents blind buy reactivation and requires all risk gates to pass. |
+| `MIN_NET_EDGE_BPS` | `80` | Requires clear post-fee edge before placing buy risk; avoids noise trading. |
+| `MAX_EXEC_SPREAD_PERCENT` | `8.0` | Blocks two-sided quoting in extreme dislocation while allowing moderate spreads. |
+| `DRIFT_THRESHOLD_PERCENT` | `3.0` (existing) | Keeps DEX/CEX divergence guard strict and unchanged from current safety baseline. |
+| `MIN_EXEC_DEPTH_BUY_USD` | `20` | Avoids quoting into thin bid conditions where fills are easier to pick off. |
+| `MIN_EXEC_DEPTH_SELL_USD` | `20` | Requires minimum sell-side liquidity symmetry before enabling buy risk. |
+| `ADVERSE_FILL_RATIO_MAX` | `1.5` | If real BUY fills outpace SELL fills too much, auto-throttle/auto-pause buy side. |
+| `RISK_SIZE_MULTIPLIER_DEFENSIVE` | `0.35` | Uses reduced notional during unstable regimes to cap loss velocity. |
+| `RISK_SIZE_MULTIPLIER_NORMAL` | `0.60` | Starts below full size even in healthy regimes; scale up only after evidence. |
+| `SESSION_STOP_LOSS_USD` | `-15` | Hard intra-session protection against prolonged adverse conditions. |
+| `DAILY_STOP_LOSS_USD` | `-40` | Daily brake to prevent repeated restarts from compounding loss. |
+| `CONSECUTIVE_ADVERSE_FILLS_MAX` | `3` | Fast guard against short streaks of toxic flow. |
+| `ADVERSE_FILL_COOLDOWN_MINUTES` | `30` | Forces time-based cooling before buy-side resumes. |
+| `MAX_LONG_INVENTORY_USD` | `120` | Caps one-sided long accumulation while buy side is being reintroduced. |
+| `MAX_SHORT_INVENTORY_USD` | `120` | Symmetric short-risk bound during early profit-mode rollout. |
+
+Rollout note:
+- Start with `BUY_REACTIVATION_MODE=auto` and defensive multipliers only.
+- Require a statistically meaningful sample of real fills with positive net realized PnL before increasing `RISK_SIZE_MULTIPLIER_NORMAL` toward `1.0`.
+- Keep `FORCE_BUY_PAUSE` available as immediate rollback if drawdown or adverse-fill breakers trigger.
+
+Ready-to-paste `.env` rollout profile (supported by current code):
+
+```env
+# Safety-first profit rollout (current code-compatible)
+# Keep this block near your runtime strategy settings.
+
+# Hard safety overrides
+FORCE_BUY_PAUSE=true
+SELF_TRADE_ENABLED=false
+
+# Core cadence and quoting
+ORDER_FREQUENCY=5000
+SPREAD_PERCENTAGE=0.10
+MAX_DEX_CEX_DRIFT_PERCENT=3
+PAUSE_WASH_ON_HIGH_DRIFT=true
+
+# Reserve and utilization
+IDLE_BALANCE_RESERVE_USD=140
+BALANCE_UTILIZATION_PERCENT=0.92
+
+# Order sizing and caps
+MIN_ORDER_SIZE=5
+MAX_ORDER_SIZE=20
+MAX_ORDER_AMOUNT_TOKENS=40000000000
+
+# Book shaping caps
+TARGET_ORDERS_PER_SIDE=2
+TARGET_BUY_DEPTH_USD=10
+TARGET_SELL_DEPTH_USD=25
+
+# Passive quote bands
+PASSIVE_BUY_BAND_OUTER_OFFSET_PERCENT=0.004
+PASSIVE_BUY_BAND_INNER_OFFSET_PERCENT=0
+PASSIVE_SELL_BAND_INNER_OFFSET_PERCENT=0
+PASSIVE_SELL_BAND_OUTER_OFFSET_PERCENT=0.004
+PASSIVE_SEED_BASE_OFFSET_PERCENT=0.001
+PASSIVE_SEED_STEP_OFFSET_PERCENT=0.0001
+
+# Rebalance protections
+REBALANCE_COOLDOWN_MS=45000
+REBALANCE_MAX_SPREAD_PERCENT=5
+REBALANCE_MAX_PRICE_DEVIATION_PERCENT=5
+
+# Risk baseline
+ENABLE_POSITION_LIMITS=true
+DAILY_LOSS_LIMIT=1000
+MAX_SLIPPAGE=0.5
+```
+
+Planned next-step keys (not yet implemented in code; documenting target only):
+
+```env
+# These are roadmap keys for Section 15 implementation work.
+# They will have no effect until parser + strategy logic are added.
+
+BUY_REACTIVATION_MODE=auto
+MIN_NET_EDGE_BPS=80
+MAX_EXEC_SPREAD_PERCENT=8
+MIN_EXEC_DEPTH_BUY_USD=20
+MIN_EXEC_DEPTH_SELL_USD=20
+ADVERSE_FILL_RATIO_MAX=1.5
+RISK_SIZE_MULTIPLIER_DEFENSIVE=0.35
+RISK_SIZE_MULTIPLIER_NORMAL=0.60
+SESSION_STOP_LOSS_USD=-15
+DAILY_STOP_LOSS_USD=-40
+CONSECUTIVE_ADVERSE_FILLS_MAX=3
+ADVERSE_FILL_COOLDOWN_MINUTES=30
+MAX_LONG_INVENTORY_USD=120
+MAX_SHORT_INVENTORY_USD=120
+```
+
+Sizing and inventory safety:
+- Enforce hard inventory bands (max long/max short) and block the side that worsens inventory at the band edge.
+- Use volatility/drift-aware notional scaling: smaller size in unstable regimes, larger size only after sustained healthy metrics.
+- Keep reserve protections and minimum-notional guards unchanged.
+
+Circuit breakers:
+- Add session and daily drawdown stops for new order placement.
+- Add consecutive adverse-fill stop with cooldown before reactivation.
+- On breaker trigger: disable buys first, then disable all new placements if deterioration continues.
+
+Fallback behavior:
+- Treat exchange-band fallback pricing as safety continuity mode, not primary profit mode.
+- During prolonged fallback-only windows, reduce size and require stricter edge thresholds.
+
+Tests:
+- Add a test proving buys remain paused in `auto` mode when any profitability or quality gate fails.
+- Add a test proving buys activate in `auto` mode only when all gates pass.
+- Add a test proving automatic degradation back to paused/defensive mode on drift/adverse-fill threshold breach.
+- Add a test proving inventory bands block risk-increasing placements at limits.
+- Add a test proving circuit breakers disable new risk after configured loss/adverse streak conditions.
+
+Acceptance criteria:
+- Buy-side is never re-enabled solely by a boolean toggle; it requires measurable positive edge and healthy market conditions.
+- Safety guards remain dominant over profit-seeking behavior at all times.
+- Logs clearly show gate pass/fail reasons and mode transitions.
+- Strategy can run in production with deterministic rollback to safe mode without manual intervention.
+
 Observed production outcomes:
 - Repeated sell placement rejects were observed in production windows while buy placements continued normally.
 - The exchange rejected sell orders with `The price must be between <?>% and <?>% of the latest price` even after the executable-book fallback moved placement decisions to the CEX ticker mid.
@@ -557,7 +707,7 @@ Verification goals:
 Operational checklist:
 - Use `pm2 logs epwx-bot --lines 50` to confirm the baseline is still safe-idle before changing reserve.
 - Set `IDLE_BALANCE_RESERVE_USD=175` first, then lower only in small steps if buys still do not resume.
-- After each reserve change, run `npm run build` and `pm2 restart epwx-bot`, then verify `Calculated balance-aware order sizes...` and at least one buy placement log.
+- After each reserve change, run `npx tsc -p tsconfig.json --noEmit` for a safe compile check, then `pm2 restart epwx-bot`, and verify `Calculated balance-aware order sizes...` plus at least one buy placement log.
 - Stop lowering reserve once buy placements resume and the logs remain stable.
 
 ### 20. Add adverse-fill protection and preserve sell budget during reserve-pause cycles
@@ -622,3 +772,24 @@ Acceptance criteria:
 
 Validation outcomes:
 - Focused strategy suite passed (`65/65`).
+
+### 22. Decouple destructive order-cancel operations from normal build/test commands
+Status: Pending (paused for later by operator)
+
+Objective:
+- Prevent unintended live order cancellations when running routine build and validation commands on a production server with real API credentials.
+
+Implementation notes:
+- Current `package.json` prebuild executes `src/scripts/cancel-all-orders.ts`, which is destructive when exchange keys are present.
+- Routine checks should remain non-destructive (`jest`, `npx tsc -p tsconfig.json --noEmit`, and read-only connection tests).
+- Move destructive actions behind explicit operator-only commands (for example: `cancel:orders`) and keep build/test paths safe by default.
+
+Tests and verification:
+- Verify `npm run build` no longer performs order cancellation by default.
+- Verify explicit cancel command still works when intentionally invoked.
+- Verify deployment docs distinguish safe validation commands from destructive maintenance commands.
+
+Acceptance criteria:
+- Routine CI/local/prod validation commands do not cancel live orders.
+- Destructive order cancellation remains available but requires explicit operator intent.
+- Deployment instructions clearly label command risk level.

@@ -930,6 +930,195 @@ describe('Order Placement Logic', () => {
         }
       });
 
+      it('should suppress all buy placements when BUY_REACTIVATION_MODE=off while keeping sell maintenance active', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.01, price: 1.005 }),
+          getOpenOrders: jest.fn().mockResolvedValue([
+            { orderId: 'existing-sell-1', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.01, amount: 1000000000, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }
+          ]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'sell-reactivation-off', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.01, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+        const originalBuyReactivationMode = config.volumeStrategy.buyReactivationMode;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 10;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+        config.volumeStrategy.forceBuyPause = false;
+        config.volumeStrategy.buyReactivationMode = 'off';
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
+          const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockResolvedValue('sell-seed');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).not.toHaveBeenCalled();
+          expect(sellSpy).toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('BUY_REACTIVATION_MODE=off'));
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
+          config.volumeStrategy.buyReactivationMode = originalBuyReactivationMode;
+          warnSpy.mockRestore();
+        }
+      });
+
+      it('should suppress buy placements in BUY_REACTIVATION_MODE=auto when spread exceeds MAX_EXEC_SPREAD_PERCENT', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.2, price: 1.1 }),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'sell-auto-guard', symbol: 'EPWXUSDT', side: 'SELL', type: 'LIMIT', price: 1.2, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const logger = require('../../utils/logger').logger;
+        const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+        const originalBuyReactivationMode = config.volumeStrategy.buyReactivationMode;
+        const originalMaxExecSpreadPercent = config.volumeStrategy.maxExecSpreadPercent;
+        const originalMinNetEdgeBps = config.volumeStrategy.minNetEdgeBps;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 10;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+        config.volumeStrategy.forceBuyPause = false;
+        config.volumeStrategy.buyReactivationMode = 'auto';
+        config.volumeStrategy.maxExecSpreadPercent = 8;
+        config.volumeStrategy.minNetEdgeBps = 80;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue(undefined);
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).not.toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('BUY_REACTIVATION_MODE=auto blocked buys: spread'));
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
+          config.volumeStrategy.buyReactivationMode = originalBuyReactivationMode;
+          config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
+          config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+          warnSpy.mockRestore();
+        }
+      });
+
+      it('should allow buy placements in BUY_REACTIVATION_MODE=auto when spread and edge gates pass', async () => {
+        const mockExchange = {
+          getBalances: jest.fn().mockResolvedValue([
+            { asset: 'USDT', free: 500, locked: 0, total: 500 },
+            { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+          ]),
+          getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.01, price: 1.005 }),
+          getOpenOrders: jest.fn().mockResolvedValue([]),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn().mockResolvedValue({ orderId: 'buy-auto-pass', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+          getRecentTrades: jest.fn().mockResolvedValue([]),
+        };
+
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        const config = require('../../config').config;
+        const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+        const originalPair = config.trading.pair;
+        const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+        const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+        const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+        const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+        const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+        const originalBuyReactivationMode = config.volumeStrategy.buyReactivationMode;
+        const originalMaxExecSpreadPercent = config.volumeStrategy.maxExecSpreadPercent;
+        const originalMinNetEdgeBps = config.volumeStrategy.minNetEdgeBps;
+
+        config.volumeStrategy.orderFrequency = 12000;
+        config.trading.pair = 'EPWXUSDT';
+        config.volumeStrategy.targetOrdersPerSide = 2;
+        config.volumeStrategy.targetBuyDepthUsd = 10;
+        config.volumeStrategy.targetSellDepthUsd = 25;
+        config.volumeStrategy.idleBalanceReserveUsd = 140;
+        config.volumeStrategy.forceBuyPause = false;
+        config.volumeStrategy.buyReactivationMode = 'auto';
+        config.volumeStrategy.maxExecSpreadPercent = 8;
+        config.volumeStrategy.minNetEdgeBps = 80;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          (strategy as any).isRunning = true;
+
+          const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockResolvedValue('buy-seed');
+
+          await (strategy as any).placeVolumeOrders();
+
+          expect(buySpy).toHaveBeenCalled();
+        } finally {
+          config.volumeStrategy.orderFrequency = originalOrderFrequency;
+          config.trading.pair = originalPair;
+          config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+          config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+          config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+          config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+          config.volumeStrategy.forceBuyPause = originalForceBuyPause;
+          config.volumeStrategy.buyReactivationMode = originalBuyReactivationMode;
+          config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
+          config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+        }
+      });
+
       it('should suppress buy placements when adverse real-fill imbalance guard is active', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([

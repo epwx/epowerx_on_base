@@ -27,6 +27,9 @@ interface Config {
     spreadPercentage: number;
     orderFrequency: number;
     forceBuyPause: boolean;
+    buyReactivationMode: 'off' | 'auto' | 'on';
+    minNetEdgeBps: number;
+    maxExecSpreadPercent: number;
     selfTradeEnabled: boolean;
     mirrorMarkupPercentage: number;
     balanceUtilizationPercent: number;
@@ -85,6 +88,20 @@ const getEnvBoolean = (key: string, defaultValue: boolean): boolean => {
   return value.toLowerCase() === 'true';
 };
 
+const getEnvBuyReactivationMode = (key: string, defaultValue: 'off' | 'auto' | 'on'): 'off' | 'auto' | 'on' => {
+  const value = process.env[key];
+  if (!value) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'off' || normalized === 'auto' || normalized === 'on') {
+    return normalized;
+  }
+
+  return defaultValue;
+};
+
 export const config: Config = {
   biconomyExchange: {
     apiKey: getEnvVariable('BICONOMY_EXCHANGE_API_KEY'),
@@ -110,6 +127,9 @@ export const config: Config = {
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     forceBuyPause: getEnvBoolean('FORCE_BUY_PAUSE', false),
+    buyReactivationMode: getEnvBuyReactivationMode('BUY_REACTIVATION_MODE', 'on'),
+    minNetEdgeBps: getEnvNumber('MIN_NET_EDGE_BPS', 0),
+    maxExecSpreadPercent: getEnvNumber('MAX_EXEC_SPREAD_PERCENT', 8),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
     balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),
