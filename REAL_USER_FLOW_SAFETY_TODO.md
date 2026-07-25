@@ -399,7 +399,7 @@ Acceptance criteria:
 - The strategy remains passive and exchange-compliant under wide-book conditions.
 
 ### 15. Add profitability-gated buy reactivation mode (safety-first)
-Status: Pending
+Status: In progress on 2026-07-25 (phase-1 keys implemented + production validated)
 
 Objective:
 - Allow the bot to pursue profit only when expected post-fee edge is positive and market-quality conditions are healthy.
@@ -415,6 +415,22 @@ Implementation notes:
 	- adverse-fill guard is not active
 - If any gate fails, degrade automatically to defensive behavior (buy pause or size reduction) and log explicit reasons.
 - Keep wash-trade behavior unchanged (`SELF_TRADE_ENABLED=false` remains authoritative).
+
+Latest implementation progress (now active in code):
+- Added config + strategy support for `BUY_REACTIVATION_MODE` (`off|auto|on`).
+- Added `MIN_NET_EDGE_BPS` gate wiring.
+- Added `MAX_EXEC_SPREAD_PERCENT` gate wiring.
+- Added strategy regression coverage for:
+- buys suppressed in `off` mode while sell maintenance continues.
+- buys suppressed in `auto` mode when spread exceeds threshold.
+- buys allowed in `auto` mode when spread/edge checks pass.
+
+Latest production validation outcomes:
+- With `FORCE_BUY_PAUSE=false`, buy policy pause was successfully removed (phase-2 unlock confirmed).
+- BUY placements remained safely blocked by reactivation gate in live dislocation windows: `spread 19.40% > 8.00%`.
+- Executable-book spread remained ~15.01% and DEX/CEX drift ~31%, so drift guard and wash-trade pauses behaved as expected.
+- Runtime maintained sell-side fallback maintenance while preventing unsafe buy reactivation.
+- Duplicate reserve env override issue was cleaned up; no new reserve-warning spam observed in latest validated log windows.
 
 Config additions (proposed):
 - `BUY_REACTIVATION_MODE` (`off`, `auto`, `on`) default `off`
@@ -816,3 +832,22 @@ Acceptance criteria:
 - `.env.example` remains readable, grouped, and duplicate-free.
 - New config keys are added to the template in the same release they are introduced in code.
 - Production `.env` updates can be applied from a clear diff against `.env.example`.
+
+### 24. Remove API-key exposure from runtime request-parameter logs
+Status: Completed on 2026-07-25
+
+Objective:
+- Prevent sensitive credentials from appearing in PM2/runtime logs during private API calls.
+
+Implementation notes:
+- Added private-param redaction in exchange-service logging for request payloads.
+- `api_key` and `sign` are now masked as `***` in logged parameter objects.
+- Updated `getBalances` and `getOpenOrders` parameter logs to use redacted payloads.
+- Commit pushed: `795aec0`.
+
+Validation outcomes:
+- TypeScript compile check passed after patch (`npx tsc -p tsconfig.json --noEmit`).
+- Runtime no longer prints raw API keys in those request-parameter log lines.
+
+Operational follow-up:
+- Rotate the previously exposed Biconomy API key/secret because historical logs contained plaintext credentials.
