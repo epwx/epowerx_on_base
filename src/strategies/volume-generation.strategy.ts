@@ -909,13 +909,17 @@ export class VolumeGenerationStrategy {
     this.isRunning = true;
 
     try {
-      // Cancel any existing orders (ignore errors if endpoint not available)
-      try {
-        logger.info('Attempting to cancel existing orders...');
-        const cancelled = await this.exchange.cancelAllOrders(this.symbol);
-        logger.info(`✅ Cancelled ${cancelled} existing orders`);
-      } catch (error: any) {
-        logger.warn('⚠️  Could not cancel existing orders (endpoint may not be available):', error.message);
+      // Cancel any existing orders only when startup cancellation is enabled.
+      if (config.operations.cancelOrdersOnStart) {
+        try {
+          logger.info('Attempting to cancel existing orders...');
+          const cancelled = await this.exchange.cancelAllOrders(this.symbol);
+          logger.info(`✅ Cancelled ${cancelled} existing orders`);
+        } catch (error: any) {
+          logger.warn('⚠️  Could not cancel existing orders (endpoint may not be available):', error.message);
+        }
+      } else {
+        logger.info('⏭️  Skipping startup order cancellation (CANCEL_ORDERS_ON_START=false).');
       }
 
       // Get initial balances
@@ -955,9 +959,13 @@ export class VolumeGenerationStrategy {
     }
 
     try {
-      await this.exchange.cancelAllOrders(this.symbol);
+      if (config.operations.cancelOrdersOnStop) {
+        await this.exchange.cancelAllOrders(this.symbol);
+      } else {
+        logger.info('⏭️  Skipping shutdown order cancellation (CANCEL_ORDERS_ON_STOP=false).');
+      }
       this.activeOrders.clear();
-      
+
       await this.logFinalStats();
       logger.info('✅ Volume generation bot stopped');
     } catch (error) {

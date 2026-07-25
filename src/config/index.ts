@@ -71,6 +71,11 @@ interface Config {
     enablePositionLimits: boolean;
   };
 
+  operations: {
+    cancelOrdersOnStart: boolean;
+    cancelOrdersOnStop: boolean;
+  };
+
   logLevel: string;
 }
 
@@ -105,6 +110,15 @@ const getEnvBuyReactivationMode = (key: string, defaultValue: 'off' | 'auto' | '
   }
 
   return defaultValue;
+};
+
+const getCancelOrdersDefault = (): boolean => {
+  const legacyValue = process.env.CANCEL_ORDERS_ON_DEPLOY;
+  if (!legacyValue) {
+    return true;
+  }
+
+  return legacyValue.trim().toLowerCase() === 'true';
 };
 
 export const config: Config = {
@@ -174,6 +188,11 @@ export const config: Config = {
     maxSlippage: getEnvNumber('MAX_SLIPPAGE', 0.5),
     dailyLossLimit: getEnvNumber('DAILY_LOSS_LIMIT', 1000),
     enablePositionLimits: getEnvBoolean('ENABLE_POSITION_LIMITS', true),
+  },
+
+  operations: {
+    cancelOrdersOnStart: getEnvBoolean('CANCEL_ORDERS_ON_START', getCancelOrdersDefault()),
+    cancelOrdersOnStop: getEnvBoolean('CANCEL_ORDERS_ON_STOP', getCancelOrdersDefault()),
   },
 
   logLevel: getEnvVariable('LOG_LEVEL', 'info'),
