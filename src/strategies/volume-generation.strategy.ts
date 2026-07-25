@@ -1409,14 +1409,16 @@ export class VolumeGenerationStrategy {
 
       let sellPlacementPriceReference = skewedPriceReference;
       let sellPlacementMode: 'PASSIVE' | 'EXCHANGE_BAND_FALLBACK' = 'PASSIVE';
-      const sellClampProbePrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', 0);
-      const sellClampProbeExecutablePrice = await this.clampPriceToLatestBand(sellClampProbePrice);
-      if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice) && !shouldFreezeSellPlacements) {
-        sellPlacementPriceReference = sellClampProbeExecutablePrice;
-        sellPlacementMode = 'EXCHANGE_BAND_FALLBACK';
-        logger.warn(
-          `⚠️  Sell placements using exchange-band fallback this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
-        );
+      if (!shouldFreezeSellPlacements) {
+        const sellClampProbePrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'SELL', 0);
+        const sellClampProbeExecutablePrice = await this.clampPriceToLatestBand(sellClampProbePrice);
+        if (this.isExtremeClampReprice(sellClampProbePrice, sellClampProbeExecutablePrice)) {
+          sellPlacementPriceReference = sellClampProbeExecutablePrice;
+          sellPlacementMode = 'EXCHANGE_BAND_FALLBACK';
+          logger.warn(
+            `⚠️  Sell placements using exchange-band fallback this cycle: passive sell anchor ${sellClampProbePrice.toExponential(4)} would clamp to ${sellClampProbeExecutablePrice.toExponential(4)} beyond the x${VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO.toFixed(2)} safety ratio.`
+          );
+        }
       }
       const allowSparseSellRecovery = !canPlaceBuysThisCycle;
 

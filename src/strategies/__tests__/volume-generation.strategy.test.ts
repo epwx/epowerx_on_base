@@ -1046,6 +1046,7 @@ describe('Order Placement Logic', () => {
           expect(sellSpy).not.toHaveBeenCalled();
           expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('BUY_REACTIVATION_MODE=auto blocked buys: spread'));
           expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Freezing new sell placements this cycle'));
+          expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Sell placements using exchange-band fallback this cycle'));
         } finally {
           config.volumeStrategy.orderFrequency = originalOrderFrequency;
           config.trading.pair = originalPair;
@@ -1113,6 +1114,7 @@ describe('Order Placement Logic', () => {
           expect(buySpy).not.toHaveBeenCalled();
           expect(sellSpy).not.toHaveBeenCalled();
           expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Freezing new sell placements this cycle'));
+          expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Sell placements using exchange-band fallback this cycle'));
         } finally {
           config.volumeStrategy.orderFrequency = originalOrderFrequency;
           config.trading.pair = originalPair;
