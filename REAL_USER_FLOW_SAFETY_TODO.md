@@ -441,9 +441,9 @@ Latest production validation outcomes:
 - Latest droplet cadence tuning set both `ORDER_FREQUENCY` and `UPDATE_INTERVAL` to `15000`, which removed the earlier overlap/noise pattern while keeping the bot in freeze-safe mode.
 
 Latest runtime re-validation (2026-07-25, post-redeploy):
-- Build marker / runtime SHA confirmed latest deployment (`d3a90e5`).
-- Auto gate diagnostics continuously report high drift lockout (`DEX/CEX drift ~31.0% > 3.0%`) and keep BUY side paused deterministically.
-- Executable-book spread remained ~14.42%, so fallback to CEX ticker mid remained active by design.
+- Runtime remained stable on the `15000ms` loop cadence over multi-hour observation windows.
+- Auto gate diagnostics continuously report high drift lockout (`DEX/CEX drift ~31.5% > 3.0%`) and keep BUY side paused deterministically.
+- Executable-book spread remained extreme (~690.53% in the latest sample), so fallback to CEX ticker mid remained active by design.
 - Book shape repeatedly stabilized at `0 buys / 0 sells` during the latest freeze-only window, with sell depth explicitly held at `0.00 / 0.00` because `TARGET_SELL_DEPTH_USD=0` and buys were gated.
 - Volume/PnL stayed near zero in this window (`Real fills: 0`), consistent with safety-first no-trade behavior under current market dislocation.
 - No evidence of accidental marketable BUY or SELL execution in this regime.
