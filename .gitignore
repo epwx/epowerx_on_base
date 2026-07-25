@@ -31,3 +31,5 @@ Thumbs.db
 # Testing
 coverage/
 .nyc_output/
+test-result.json
+test-result-full.json
