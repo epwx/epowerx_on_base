@@ -39,6 +39,7 @@ type BuyReactivationMode = 'off' | 'auto' | 'on';
  */
 export class VolumeGenerationStrategy {
   private static readonly MIN_ORDER_NOTIONAL_USD = 5.01;
+  private static readonly EXECUTABLE_DEPTH_BAND_PERCENT = 0.003;
   private static readonly SELL_IMBALANCE_GUARD_MIN_GAP = 3;
   private static readonly SELL_IMBALANCE_GUARD_MIN_RATIO = 1.8;
   private static readonly ADVERSE_BUY_FILL_GUARD_MIN_REAL_BUY_FILLS = 3;
@@ -250,11 +251,82 @@ export class VolumeGenerationStrategy {
     return Math.max(config.volumeStrategy.maxExecSpreadPercent, 0);
   }
 
+  private getMinExecDepthBuyUsd(): number {
+    return Math.max(config.volumeStrategy.minExecDepthBuyUsd, 0);
+  }
+
+  private getMinExecDepthSellUsd(): number {
+    return Math.max(config.volumeStrategy.minExecDepthSellUsd, 0);
+  }
+
+  private getAdverseFillRatioMax(): number {
+    return Math.max(config.volumeStrategy.adverseFillRatioMax, 1);
+  }
+
+  private getRiskSizeMultiplierDefensive(): number {
+    return Math.min(Math.max(config.volumeStrategy.riskSizeMultiplierDefensive, 0.1), 1);
+  }
+
+  private getRiskSizeMultiplierNormal(): number {
+    return Math.min(Math.max(config.volumeStrategy.riskSizeMultiplierNormal, 0.1), 1);
+  }
+
+  private resolveAutoBuySizingDecision(
+    mode: BuyReactivationMode,
+    gate: {
+      allowBuys: boolean;
+      evaluatedSpreadPercent: number | null;
+      estimatedNetEdgeBps: number | null;
+    },
+    executableDepth: { buyDepthUsd: number; sellDepthUsd: number }
+  ): { multiplier: number; regime: 'defensive' | 'normal' | 'neutral'; reason: string } {
+    if (mode !== 'auto' || !gate.allowBuys) {
+      return {
+        multiplier: 1,
+        regime: 'neutral',
+        reason: 'Auto-mode sizing not applied',
+      };
+    }
+
+    const defensiveMultiplier = this.getRiskSizeMultiplierDefensive();
+    const normalMultiplier = Math.max(this.getRiskSizeMultiplierNormal(), defensiveMultiplier);
+    const maxSpreadPercent = this.getMaxExecSpreadPercent();
+    const minNetEdgeBps = this.getMinNetEdgeBps();
+    const minBuyDepthUsd = this.getMinExecDepthBuyUsd();
+    const minSellDepthUsd = this.getMinExecDepthSellUsd();
+
+    const evaluatedSpreadPercent = Math.max(gate.evaluatedSpreadPercent ?? 0, 0);
+    const estimatedNetEdgeBps = Math.max(gate.estimatedNetEdgeBps ?? 0, 0);
+    const buyDepthRatio = minBuyDepthUsd > 0 ? executableDepth.buyDepthUsd / minBuyDepthUsd : Number.POSITIVE_INFINITY;
+    const sellDepthRatio = minSellDepthUsd > 0 ? executableDepth.sellDepthUsd / minSellDepthUsd : Number.POSITIVE_INFINITY;
+    const spreadHealthy = maxSpreadPercent > 0 ? evaluatedSpreadPercent <= maxSpreadPercent * 0.5 : true;
+    const edgeHealthy = estimatedNetEdgeBps >= (minNetEdgeBps + 40);
+    const depthHealthy = buyDepthRatio >= 1.5 && sellDepthRatio >= 1.5;
+
+    if (spreadHealthy && edgeHealthy && depthHealthy) {
+      return {
+        multiplier: normalMultiplier,
+        regime: 'normal',
+        reason: `Auto-mode normal risk sizing (${normalMultiplier.toFixed(2)}x)`
+      };
+    }
+
+    return {
+      multiplier: defensiveMultiplier,
+      regime: 'defensive',
+      reason: `Auto-mode defensive risk sizing (${defensiveMultiplier.toFixed(2)}x)`
+    };
+  }
+
   private evaluateBuyReactivationGate(
     mode: BuyReactivationMode,
     placementPriceSource: PlacementPriceSource,
     executableSpreadPercent: number,
-    tickerSpreadPercent: number | undefined
+    tickerSpreadPercent: number | undefined,
+    dexCexDriftPercent: number,
+    maxDexCexDriftPercent: number,
+    executableDepth: { buyDepthUsd: number; sellDepthUsd: number },
+    adverseBuyGuardActive: boolean
   ): {
     allowBuys: boolean;
     reason: string;
@@ -283,6 +355,35 @@ export class VolumeGenerationStrategy {
       return {
         allowBuys: false,
         reason: 'BUY_REACTIVATION_MODE=auto requires CEX-based placement source',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    if (dexCexDriftPercent > maxDexCexDriftPercent) {
+      return {
+        allowBuys: false,
+        reason: `BUY_REACTIVATION_MODE=auto blocked buys: DEX/CEX drift ${dexCexDriftPercent.toFixed(2)}% > ${maxDexCexDriftPercent.toFixed(2)}%`,
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    if (adverseBuyGuardActive) {
+      return {
+        allowBuys: false,
+        reason: 'BUY_REACTIVATION_MODE=auto blocked buys: adverse-fill guard active',
+        evaluatedSpreadPercent: null,
+        estimatedNetEdgeBps: null,
+      };
+    }
+
+    const minExecDepthBuyUsd = this.getMinExecDepthBuyUsd();
+    const minExecDepthSellUsd = this.getMinExecDepthSellUsd();
+    if (executableDepth.buyDepthUsd < minExecDepthBuyUsd || executableDepth.sellDepthUsd < minExecDepthSellUsd) {
+      return {
+        allowBuys: false,
+        reason: `BUY_REACTIVATION_MODE=auto blocked buys: executable depth buy=$${executableDepth.buyDepthUsd.toFixed(2)} / sell=$${executableDepth.sellDepthUsd.toFixed(2)} below minimum buy=$${minExecDepthBuyUsd.toFixed(2)} sell=$${minExecDepthSellUsd.toFixed(2)}`,
         evaluatedSpreadPercent: null,
         estimatedNetEdgeBps: null,
       };
@@ -410,7 +511,7 @@ export class VolumeGenerationStrategy {
       hasLongInventoryBias &&
       this.realBuyFills >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_REAL_BUY_FILLS &&
       buyFillGap >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_GAP &&
-      buySellRatio >= VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_RATIO;
+      buySellRatio >= this.getAdverseFillRatioMax();
     const hasExcessLongInventory = longInventoryUsd >= inventoryLimitUsd;
 
     return {
@@ -644,7 +745,7 @@ export class VolumeGenerationStrategy {
     referencePrice: number,
     tickerBid: number,
     tickerAsk: number
-  ): Promise<{ bestBid: number; bestAsk: number; midPrice: number } | null> {
+  ): Promise<{ bestBid: number; bestAsk: number; midPrice: number; bids: Array<[number, number]>; asks: Array<[number, number]> } | null> {
     const exchangeWithBook = this.exchange as any;
     if (typeof exchangeWithBook.getOrderBook !== 'function') {
       return null;
@@ -663,11 +764,40 @@ export class VolumeGenerationStrategy {
       logger.info(
         `📚 [EXEC BOOK] bids: ${this.formatTopBookLevels(orderBook.bids)} | asks: ${this.formatTopBookLevels(orderBook.asks)}`
       );
-      return { bestBid, bestAsk, midPrice };
+      return {
+        bestBid,
+        bestAsk,
+        midPrice,
+        bids: orderBook.bids,
+        asks: orderBook.asks,
+      };
     } catch (error) {
       logger.warn('⚠️  Failed to fetch executable order book snapshot for diagnostics:', error);
       return null;
     }
+  }
+
+  private calculateExecutableDepthUsd(
+    executableBookSnapshot: { bids: Array<[number, number]>; asks: Array<[number, number]> } | null,
+    priceReference: number
+  ): { buyDepthUsd: number; sellDepthUsd: number } {
+    if (!executableBookSnapshot || !Number.isFinite(priceReference) || priceReference <= 0) {
+      return { buyDepthUsd: 0, sellDepthUsd: 0 };
+    }
+
+    const buyDepthFloor = priceReference * (1 - VolumeGenerationStrategy.EXECUTABLE_DEPTH_BAND_PERCENT);
+    const sellDepthCeil = priceReference * (1 + VolumeGenerationStrategy.EXECUTABLE_DEPTH_BAND_PERCENT);
+    const buyDepthUsd = executableBookSnapshot.bids
+      .filter(([price]) => Number.isFinite(price) && price >= buyDepthFloor)
+      .reduce((sum, [price, amount]) => sum + (price * amount), 0);
+    const sellDepthUsd = executableBookSnapshot.asks
+      .filter(([price]) => Number.isFinite(price) && price <= sellDepthCeil)
+      .reduce((sum, [price, amount]) => sum + (price * amount), 0);
+
+    return {
+      buyDepthUsd,
+      sellDepthUsd,
+    };
   }
 
   private async logPostPlacementOrderState(orderId: string, side: 'BUY' | 'SELL', requestedPrice: number): Promise<void> {
@@ -1139,13 +1269,19 @@ export class VolumeGenerationStrategy {
       const availableEPWX = epwxBalance?.free || 0;
       const buyReserveUsd = this.getIdleBalanceReserveUsd();
       const spendableBuyUsd = Math.max(availableUSDT - buyReserveUsd, 0);
+      const executableDepth = this.calculateExecutableDepthUsd(executableBookSnapshot, priceReference);
+      const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
       const forceBuyPause = this.getForceBuyPause();
       const buyReactivationMode = this.getBuyReactivationMode();
       const buyReactivationGate = this.evaluateBuyReactivationGate(
         buyReactivationMode,
         placementPriceSource,
         executableSpreadPercent,
-        sanitizedTickerQuotes?.spreadPercent
+        sanitizedTickerQuotes?.spreadPercent,
+        dexCexDriftPercent,
+        maxDexCexDriftPercent,
+        executableDepth,
+        adverseBuyGuard.active
       );
       const canPlaceReserveConstrainedBuys = spendableBuyUsd >= VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD;
       const canPlaceBuysThisCycle =
@@ -1153,7 +1289,15 @@ export class VolumeGenerationStrategy {
         !forceBuyPause &&
         buyReactivationGate.allowBuys;
       const availableSellUsd = availableEPWX * priceReference;
-      const buySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
+      const baseBuySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
+      const buySizingDecision = this.resolveAutoBuySizingDecision(
+        buyReactivationMode,
+        buyReactivationGate,
+        executableDepth
+      );
+      const buySafeOrderSizeUSD = canPlaceBuysThisCycle
+        ? Math.max(this.getMinimumOrderUsdTarget(), baseBuySafeOrderSizeUSD * buySizingDecision.multiplier)
+        : baseBuySafeOrderSizeUSD;
       const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const washOrderSizeCapUsd = Math.max(config.volumeStrategy.washOrderSizeCapUsd, this.getMinimumOrderUsdTarget());
       const washSafeOrderSizeUSD = Math.min(
@@ -1172,11 +1316,15 @@ export class VolumeGenerationStrategy {
       logger.info(
         `🔧 Calculated balance-aware order sizes: BUY ~$${buySafeOrderSizeUSD.toFixed(2)} (USDT), SELL ~$${sellSafeOrderSizeUSD.toFixed(2)} (EPWX), WASH ~$${washSafeOrderSizeUSD.toFixed(2)} per order`
       );
+      if (buyReactivationMode === 'auto') {
+        logger.info(
+          `🧪 Auto buy gates: depth buy=$${executableDepth.buyDepthUsd.toFixed(2)} sell=$${executableDepth.sellDepthUsd.toFixed(2)} | drift=${dexCexDriftPercent.toFixed(2)}% | sizing=${buySizingDecision.regime} (${buySizingDecision.multiplier.toFixed(2)}x)`
+        );
+      }
       logger.info(
         `🧮 Placement budgets: max=${maxPlacementsPerCycle}, book=${bookPlacementBudget}, reservedWash=${washReservedPlacements}, targetWashPairs=${dynamicWashTradePairs}`
       );
 
-      const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
       if (adverseBuyGuard.active) {
         buyPlacementCap = 0;
         if (missingSellOrders > 0) {

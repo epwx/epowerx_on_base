@@ -30,6 +30,11 @@ interface Config {
     buyReactivationMode: 'off' | 'auto' | 'on';
     minNetEdgeBps: number;
     maxExecSpreadPercent: number;
+    minExecDepthBuyUsd: number;
+    minExecDepthSellUsd: number;
+    adverseFillRatioMax: number;
+    riskSizeMultiplierDefensive: number;
+    riskSizeMultiplierNormal: number;
     selfTradeEnabled: boolean;
     mirrorMarkupPercentage: number;
     balanceUtilizationPercent: number;
@@ -130,6 +135,11 @@ export const config: Config = {
     buyReactivationMode: getEnvBuyReactivationMode('BUY_REACTIVATION_MODE', 'on'),
     minNetEdgeBps: getEnvNumber('MIN_NET_EDGE_BPS', 0),
     maxExecSpreadPercent: getEnvNumber('MAX_EXEC_SPREAD_PERCENT', 8),
+    minExecDepthBuyUsd: getEnvNumber('MIN_EXEC_DEPTH_BUY_USD', 0),
+    minExecDepthSellUsd: getEnvNumber('MIN_EXEC_DEPTH_SELL_USD', 0),
+    adverseFillRatioMax: getEnvNumber('ADVERSE_FILL_RATIO_MAX', 1.6),
+    riskSizeMultiplierDefensive: getEnvNumber('RISK_SIZE_MULTIPLIER_DEFENSIVE', 1),
+    riskSizeMultiplierNormal: getEnvNumber('RISK_SIZE_MULTIPLIER_NORMAL', 1),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
     balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),

@@ -738,7 +738,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.170212766);
         const logger = require('../../utils/logger').logger;
         const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
         const config = require('../../config').config;
@@ -795,7 +795,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.069148936);
         const logger = require('../../utils/logger').logger;
         const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => undefined);
         const config = require('../../config').config;
@@ -855,7 +855,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.170212766);
         const logger = require('../../utils/logger').logger;
         const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
         const config = require('../../config').config;
@@ -945,7 +945,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.069148936);
         const logger = require('../../utils/logger').logger;
         const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
         const config = require('../../config').config;
@@ -1006,7 +1006,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.170212766);
         const logger = require('../../utils/logger').logger;
         const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
         const config = require('../../config').config;
@@ -1071,7 +1071,7 @@ describe('Order Placement Logic', () => {
           getRecentTrades: jest.fn().mockResolvedValue([]),
         };
 
-        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(2.0e-10);
+        jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.069148936);
         const config = require('../../config').config;
         const originalOrderFrequency = config.volumeStrategy.orderFrequency;
         const originalPair = config.trading.pair;
@@ -1116,6 +1116,148 @@ describe('Order Placement Logic', () => {
           config.volumeStrategy.buyReactivationMode = originalBuyReactivationMode;
           config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
           config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+        }
+      });
+
+      it('should block buys in auto mode when executable depth is below configured minimums', () => {
+        const mockExchange = {
+          getBalances: jest.fn(),
+          getTicker: jest.fn(),
+          getOpenOrders: jest.fn(),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn(),
+          cancelAllOrders: jest.fn(),
+          getRecentTrades: jest.fn()
+        };
+
+        const config = require('../../config').config;
+        const originalMinExecDepthBuyUsd = config.volumeStrategy.minExecDepthBuyUsd;
+        const originalMinExecDepthSellUsd = config.volumeStrategy.minExecDepthSellUsd;
+
+        config.volumeStrategy.minExecDepthBuyUsd = 20;
+        config.volumeStrategy.minExecDepthSellUsd = 20;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          const gate = (strategy as any).evaluateBuyReactivationGate(
+            'auto',
+            'CEX_TICKER_MID',
+            1,
+            1,
+            1,
+            3,
+            { buyDepthUsd: 5, sellDepthUsd: 8 },
+            false
+          );
+
+          expect(gate.allowBuys).toBe(false);
+          expect(gate.reason).toContain('executable depth');
+        } finally {
+          config.volumeStrategy.minExecDepthBuyUsd = originalMinExecDepthBuyUsd;
+          config.volumeStrategy.minExecDepthSellUsd = originalMinExecDepthSellUsd;
+        }
+      });
+
+      it('should choose defensive auto-mode buy sizing when conditions are marginal', () => {
+        const mockExchange = {
+          getBalances: jest.fn(),
+          getTicker: jest.fn(),
+          getOpenOrders: jest.fn(),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn(),
+          cancelAllOrders: jest.fn(),
+          getRecentTrades: jest.fn()
+        };
+
+        const config = require('../../config').config;
+        const originalMinNetEdgeBps = config.volumeStrategy.minNetEdgeBps;
+        const originalMaxExecSpreadPercent = config.volumeStrategy.maxExecSpreadPercent;
+        const originalMinExecDepthBuyUsd = config.volumeStrategy.minExecDepthBuyUsd;
+        const originalMinExecDepthSellUsd = config.volumeStrategy.minExecDepthSellUsd;
+        const originalRiskSizeMultiplierDefensive = config.volumeStrategy.riskSizeMultiplierDefensive;
+        const originalRiskSizeMultiplierNormal = config.volumeStrategy.riskSizeMultiplierNormal;
+
+        config.volumeStrategy.minNetEdgeBps = 80;
+        config.volumeStrategy.maxExecSpreadPercent = 8;
+        config.volumeStrategy.minExecDepthBuyUsd = 20;
+        config.volumeStrategy.minExecDepthSellUsd = 20;
+        config.volumeStrategy.riskSizeMultiplierDefensive = 0.35;
+        config.volumeStrategy.riskSizeMultiplierNormal = 0.6;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          const decision = (strategy as any).resolveAutoBuySizingDecision(
+            'auto',
+            {
+              allowBuys: true,
+              evaluatedSpreadPercent: 5,
+              estimatedNetEdgeBps: 120,
+            },
+            { buyDepthUsd: 25, sellDepthUsd: 24 }
+          );
+
+          expect(decision.regime).toBe('defensive');
+          expect(decision.multiplier).toBeCloseTo(0.35, 6);
+        } finally {
+          config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+          config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
+          config.volumeStrategy.minExecDepthBuyUsd = originalMinExecDepthBuyUsd;
+          config.volumeStrategy.minExecDepthSellUsd = originalMinExecDepthSellUsd;
+          config.volumeStrategy.riskSizeMultiplierDefensive = originalRiskSizeMultiplierDefensive;
+          config.volumeStrategy.riskSizeMultiplierNormal = originalRiskSizeMultiplierNormal;
+        }
+      });
+
+      it('should choose normal auto-mode buy sizing when spread, edge, and depth are strong', () => {
+        const mockExchange = {
+          getBalances: jest.fn(),
+          getTicker: jest.fn(),
+          getOpenOrders: jest.fn(),
+          cancelOrder: jest.fn(),
+          placeOrder: jest.fn(),
+          cancelAllOrders: jest.fn(),
+          getRecentTrades: jest.fn()
+        };
+
+        const config = require('../../config').config;
+        const originalMinNetEdgeBps = config.volumeStrategy.minNetEdgeBps;
+        const originalMaxExecSpreadPercent = config.volumeStrategy.maxExecSpreadPercent;
+        const originalMinExecDepthBuyUsd = config.volumeStrategy.minExecDepthBuyUsd;
+        const originalMinExecDepthSellUsd = config.volumeStrategy.minExecDepthSellUsd;
+        const originalRiskSizeMultiplierDefensive = config.volumeStrategy.riskSizeMultiplierDefensive;
+        const originalRiskSizeMultiplierNormal = config.volumeStrategy.riskSizeMultiplierNormal;
+
+        config.volumeStrategy.minNetEdgeBps = 80;
+        config.volumeStrategy.maxExecSpreadPercent = 8;
+        config.volumeStrategy.minExecDepthBuyUsd = 20;
+        config.volumeStrategy.minExecDepthSellUsd = 20;
+        config.volumeStrategy.riskSizeMultiplierDefensive = 0.35;
+        config.volumeStrategy.riskSizeMultiplierNormal = 0.6;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy(mockExchange);
+          const decision = (strategy as any).resolveAutoBuySizingDecision(
+            'auto',
+            {
+              allowBuys: true,
+              evaluatedSpreadPercent: 2,
+              estimatedNetEdgeBps: 180,
+            },
+            { buyDepthUsd: 50, sellDepthUsd: 50 }
+          );
+
+          expect(decision.regime).toBe('normal');
+          expect(decision.multiplier).toBeCloseTo(0.6, 6);
+        } finally {
+          config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+          config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
+          config.volumeStrategy.minExecDepthBuyUsd = originalMinExecDepthBuyUsd;
+          config.volumeStrategy.minExecDepthSellUsd = originalMinExecDepthSellUsd;
+          config.volumeStrategy.riskSizeMultiplierDefensive = originalRiskSizeMultiplierDefensive;
+          config.volumeStrategy.riskSizeMultiplierNormal = originalRiskSizeMultiplierNormal;
         }
       });
 
