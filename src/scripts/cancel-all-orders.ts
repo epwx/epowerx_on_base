@@ -1,8 +1,21 @@
-import { BiconomyExchangeService } from '../services/biconomy-exchange.service';
-import { config } from '../config';
-const symbol = config.trading.pair || 'EPWX/USDT';
+function isCancelConfirmed(): boolean {
+  return (process.env.CONFIRM_CANCEL_ALL_ORDERS || '').toLowerCase() === 'true';
+}
 
 async function main() {
+  if (!isCancelConfirmed()) {
+    console.error(
+      'Refusing to cancel orders: set CONFIRM_CANCEL_ALL_ORDERS=true to run this destructive operation intentionally.'
+    );
+    process.exit(1);
+  }
+
+  const [{ BiconomyExchangeService }, { config }] = await Promise.all([
+    import('../services/biconomy-exchange.service'),
+    import('../config'),
+  ]);
+  const symbol = config.trading.pair || 'EPWX/USDT';
+
   const exchange = new BiconomyExchangeService();
   try {
     let totalCancelled = 0;

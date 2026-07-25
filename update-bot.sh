@@ -35,6 +35,14 @@ rm -rf dist
 echo "🔨 Building TypeScript..."
 npm run build
 
+# Explicit destructive step for clean restarts
+if [ "${CANCEL_ORDERS_ON_DEPLOY:-true}" = "true" ]; then
+	echo "🧹 Cancelling existing orders before restart..."
+	CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders
+else
+	echo "⏭️  Skipping order cancellation (CANCEL_ORDERS_ON_DEPLOY=false)"
+fi
+
 echo "🧪 Verifying compiled build marker..."
 if ! grep -R "$BUILD_MARKER" dist >/dev/null 2>&1; then
 	echo "❌ Expected build marker '$BUILD_MARKER' not found in dist/. Aborting restart."

@@ -171,7 +171,16 @@ npm install
 npm run build
 ```
 
-### Step 9: Test Connection
+`npm run build` is non-destructive and does not cancel exchange orders.
+
+### Step 9: Cancel Existing Orders (Explicit Destructive Step)
+```bash
+CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders
+```
+
+Run this only when you intentionally want a clean book before restart.
+
+### Step 10: Test Connection
 ```bash
 npm run test:connection
 ```
@@ -182,20 +191,20 @@ Expected output:
 Biconomy Exchange connection is working!
 ```
 
-### Step 10: Start with PM2
+### Step 11: Start with PM2
 ```bash
 pm2 start dist/index.js --name epwx-bot
 pm2 save
 ```
 
-### Step 11: Configure Auto-Start
+### Step 12: Configure Auto-Start
 ```bash
 pm2 startup
 # Copy and run the command it outputs (starts with 'sudo env PATH=...')
 pm2 save
 ```
 
-### Step 12: Setup Firewall (Optional)
+### Step 13: Setup Firewall (Optional)
 ```bash
 sudo apt install -y ufw
 sudo ufw default deny incoming
@@ -263,6 +272,7 @@ cd ~/epowerx_on_base
 git pull origin main
 npm install                # If dependencies changed
 npm run build
+CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders   # Destructive: only for clean restart intent
 pm2 restart epwx-bot
 pm2 logs epwx-bot          # Verify it started correctly
 ```
@@ -282,6 +292,8 @@ echo "Installing dependencies..."
 npm install
 echo "Building project..."
 npm run build
+echo "Cancelling existing orders (explicit destructive step)..."
+CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders
 echo "Restarting bot..."
 pm2 restart epwx-bot
 echo "✓ Update complete!"

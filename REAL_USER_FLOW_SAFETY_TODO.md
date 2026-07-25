@@ -891,7 +891,7 @@ Validation outcomes:
 - Phase-2 run (`FORCE_BUY_PAUSE=false`) confirmed policy removal while buy-side remained gated by reactivation checks, proving clean policy toggle behavior.
 
 ### 22. Decouple destructive order-cancel operations from normal build/test commands
-Status: Pending (paused for later by operator)
+Status: Completed on 2026-07-25
 
 Objective:
 - Prevent unintended live order cancellations when running routine build and validation commands on a production server with real API credentials.
@@ -910,6 +910,17 @@ Acceptance criteria:
 - Routine CI/local/prod validation commands do not cancel live orders.
 - Destructive order cancellation remains available but requires explicit operator intent.
 - Deployment instructions clearly label command risk level.
+
+Implementation notes:
+- Removed automatic destructive hook from `npm run build` by deleting `prebuild` order-cancel execution in `package.json`.
+- Added explicit destructive command `npm run cancel:orders`.
+- Added confirmation guard to `src/scripts/cancel-all-orders.ts` requiring `CONFIRM_CANCEL_ALL_ORDERS=true`; otherwise the script exits without cancelling.
+- Updated deployment flows (`deploy.sh`, `update-bot.sh`) to call cancel explicitly before restart.
+- Updated docs (`README.md`, `DEPLOYMENT_GUIDE.md`) to separate safe commands from destructive commands.
+
+Validation outcomes:
+- `npm run build` now compiles only and is non-destructive.
+- Order cancellation still works when intentionally invoked with confirmation: `CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders`.
 
 ### 23. Normalize `.env.example` as the production-aligned source template
 Status: Completed on 2026-07-25

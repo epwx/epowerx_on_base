@@ -153,7 +153,18 @@ else
 fi
 echo ""
 
-echo "Step 10: Configure PM2"
+echo "Step 10: Cancel Existing Orders (Explicit Destructive Step)"
+echo "----------------------------------------"
+print_warning "Cancelling existing orders for a clean startup..."
+if CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders; then
+    print_success "Existing orders cancelled"
+else
+    print_error "Order cancellation failed. Aborting deployment."
+    exit 1
+fi
+echo ""
+
+echo "Step 11: Configure PM2"
 echo "----------------------------------------"
 print_info "Starting bot with PM2..."
 RUNTIME_GIT_SHA="$(git rev-parse --short HEAD)"
@@ -163,7 +174,7 @@ pm2 save
 print_success "Bot started with PM2"
 echo ""
 
-echo "Step 11: Setup PM2 Startup Script"
+echo "Step 12: Setup PM2 Startup Script"
 echo "----------------------------------------"
 print_info "Configuring PM2 to start on system boot..."
 sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME
@@ -171,7 +182,7 @@ pm2 save
 print_success "PM2 startup configured"
 echo ""
 
-echo "Step 12: Configure Firewall (Optional)"
+echo "Step 13: Configure Firewall (Optional)"
 echo "----------------------------------------"
 read -p "Do you want to configure UFW firewall? (y/n): " SETUP_FIREWALL
 if [ "$SETUP_FIREWALL" = "y" ]; then

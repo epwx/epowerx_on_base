@@ -117,6 +117,16 @@ This will test:
 npm run build
 ```
 
+This command is non-destructive and only compiles TypeScript.
+
+### Cancel Existing Orders (Destructive)
+
+Use this only with explicit operator intent before a clean restart:
+
+```bash
+CONFIRM_CANCEL_ALL_ORDERS=true npm run cancel:orders
+```
+
 ### Run in Development
 
 ```bash
