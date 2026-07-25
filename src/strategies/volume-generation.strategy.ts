@@ -1283,6 +1283,13 @@ export class VolumeGenerationStrategy {
         executableDepth,
         adverseBuyGuard.active
       );
+      const buyBlockedByMarketQualityGate =
+        !buyReactivationGate.allowBuys &&
+        buyReactivationMode === 'auto' &&
+        (
+          buyReactivationGate.reason.includes('DEX/CEX drift') ||
+          buyReactivationGate.reason.includes('spread')
+        );
       const canPlaceReserveConstrainedBuys = spendableBuyUsd >= VolumeGenerationStrategy.MIN_ORDER_NOTIONAL_USD;
       const canPlaceBuysThisCycle =
         canPlaceReserveConstrainedBuys &&
@@ -1380,6 +1387,24 @@ export class VolumeGenerationStrategy {
           shouldPrioritizeBuysForDepth = false;
           logger.info('⏭️  Buy-side prioritization is disabled this cycle because reserve-constrained buy placements are paused.');
         }
+      }
+
+      const shouldFreezeSellPlacementsBecauseNoSellTarget = targetSellDepthUsd <= 0 && !canPlaceBuysThisCycle;
+      const shouldFreezeSellPlacements =
+        shouldFreezeSellPlacementsBecauseNoSellTarget ||
+        buyBlockedByMarketQualityGate;
+
+      if (shouldFreezeSellPlacements) {
+        const sellFreezeReason = shouldFreezeSellPlacementsBecauseNoSellTarget
+          ? 'sell depth target is disabled while buys are gated'
+          : 'buy reactivation gate blocked buys due to market-quality conditions';
+
+        if (sellPlacementCap > 0) {
+          logger.warn(`🛑 Freezing new sell placements this cycle: ${sellFreezeReason}.`);
+        }
+
+        sellPlacementCap = 0;
+        shouldPrioritizeBuysForDepth = false;
       }
 
       let sellPlacementPriceReference = skewedPriceReference;
