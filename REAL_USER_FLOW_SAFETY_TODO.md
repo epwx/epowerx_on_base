@@ -793,3 +793,26 @@ Acceptance criteria:
 - Routine CI/local/prod validation commands do not cancel live orders.
 - Destructive order cancellation remains available but requires explicit operator intent.
 - Deployment instructions clearly label command risk level.
+
+### 23. Normalize `.env.example` as the production-aligned source template
+Status: Completed on 2026-07-25
+
+Objective:
+- Keep deployment configuration consistent by using a single organized template file that mirrors current production-safe settings.
+- Reduce rollout mistakes from duplicated/overlapping keys and scattered version blocks.
+
+Implementation notes:
+- Synced `.env.example` to the masked production baseline provided by operator.
+- Reorganized the file into grouped sections (Core API/Chain, Trading Pair, Strategy Baseline, Balance/Depth, Drift/Wash, Inventory Bands, Rebalance Safety, Risk Limits, Logging).
+- Consolidated duplicate keys to one effective entry per property.
+- Added newly supported buy-reactivation keys (`BUY_REACTIVATION_MODE`, `MIN_NET_EDGE_BPS`, `MAX_EXEC_SPREAD_PERCENT`) under a dedicated heading.
+
+Operational workflow (agreed):
+- Treat `.env.example` as the git-tracked source template.
+- For each release, update `.env.example` first, then copy only changed non-secret keys into production `.env` before deploy.
+- Keep secrets masked in git and maintain real credentials only on server-side `.env`.
+
+Acceptance criteria:
+- `.env.example` remains readable, grouped, and duplicate-free.
+- New config keys are added to the template in the same release they are introduced in code.
+- Production `.env` updates can be applied from a clear diff against `.env.example`.
