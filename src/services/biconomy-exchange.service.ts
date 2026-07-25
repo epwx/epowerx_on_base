@@ -114,6 +114,20 @@ export class BiconomyExchangeService {
       .toUpperCase();
   }
 
+  private redactPrivateParams(params: Record<string, any>): Record<string, any> {
+    const redacted = { ...params };
+
+    if (Object.prototype.hasOwnProperty.call(redacted, 'api_key')) {
+      redacted.api_key = '***';
+    }
+
+    if (Object.prototype.hasOwnProperty.call(redacted, 'sign')) {
+      redacted.sign = '***';
+    }
+
+    return redacted;
+  }
+
   private async getPairFormatting(symbol: string): Promise<PairInfo | undefined> {
     if (symbol.replace('/', '_').toUpperCase() !== 'EPWX_USDT') {
       return undefined;
@@ -233,7 +247,7 @@ export class BiconomyExchangeService {
       const signature = this.signRequest(params);
       params.sign = signature;
 
-      logger.debug('Getting balances with params:', params);
+      logger.debug('Getting balances with params:', this.redactPrivateParams(params));
 
       const urlParams = new URLSearchParams(params);
       const response = await this.client.post('/api/v1/private/user', urlParams.toString());
@@ -500,7 +514,7 @@ export class BiconomyExchangeService {
     // Signature: all params sorted alphabetically, joined as key=value, then &secret_key=... and MD5/uppercase
     const sign = this.signRequest(params);
     params.sign = sign;
-    logger.info(`[getOpenOrders] Params: ${JSON.stringify(params)}`);
+    logger.info(`[getOpenOrders] Params: ${JSON.stringify(this.redactPrivateParams(params))}`);
     try {
       const urlParams = new URLSearchParams(params);
       const response = await this.client.post('/api/v1/private/order/pending', urlParams.toString(), {
