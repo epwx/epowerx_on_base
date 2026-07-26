@@ -969,7 +969,7 @@ Operational follow-up:
 - Rotate the previously exposed Biconomy API key/secret because historical logs contained plaintext credentials.
 
 ### 25. Add idle-only auto wash mode with immediate real-fill cutover
-Status: Completed on 2026-07-25 (code + focused tests)
+Status: Completed on 2026-07-25 (code + focused tests), production-validated on 2026-07-26
 
 Objective:
 - Allow very limited wash activity only after prolonged real-user inactivity.
@@ -1011,6 +1011,28 @@ Validation outcomes:
 	- `npx jest src/strategies/__tests__/volume-generation.strategy.test.ts -t "idle auto wash|cooldown|drift guard|immediately disables"`
 - TypeScript compile check passed after patch:
 	- `npx tsc -p tsconfig.json --noEmit`
+- Production validation confirmed the idle auto-wash state machine is active in runtime logs when enabled through temporary validation settings.
+- Production validation confirmed real external fills immediately preempt wash behavior and start cooldown; observed runtime evidence included `Wash trades disabled this cycle: auto wash cooldown active (...)` immediately after real-fill detection.
+- During aggressive validation windows, real fills arrived before wash activation, so `Wash Trades` remained `0` while `Real Fills` increased; this matched the intended real-flow-first contract.
+- Temporary validation settings also showed that when market-quality gates were deliberately relaxed, the bot could re-enter active two-sided quoting and inventory changed materially; this confirmed the need to revert to the conservative profile after validation.
+- After validation, production `.env` was restored from the safe rollback template (`build-2720db1-marker`), returning runtime behavior to deterministic safety-lock mode:
+	- `BUY_REACTIVATION_MODE=auto`
+	- `TARGET_SELL_DEPTH_USD=0`
+	- `MAX_DEX_CEX_DRIFT_PERCENT=3`
+	- `MIN_EXEC_DEPTH_BUY_USD=20`
+	- `MIN_EXEC_DEPTH_SELL_USD=20`
+	- `IDLE_WASH_ENABLE_AFTER_MS=900000`
+	- `IDLE_WASH_REQUIRE_LOW_DRIFT=true`
+- Post-rollback production logs now consistently show:
+	- BUY side blocked by drift gate (`DEX/CEX drift ~32% > 3%`)
+	- SELL side frozen because buy gate is active and sell depth target is disabled
+	- Wash trades blocked by the same drift guard
+	- `0 buys / 0 sells` safe-idle book state
+
+Operational conclusion:
+- Item 25 is production-validated.
+- The critical requirement was confirmed: any real-user fill preempts wash activity immediately and pushes the strategy into cooldown.
+- Production is intentionally left in the conservative post-validation profile, with idle-only auto wash still present in code but inactive under current drift conditions.
 
 Acceptance criteria:
 - Idle periods can trigger tightly bounded wash activity without changing real-fill accounting.
