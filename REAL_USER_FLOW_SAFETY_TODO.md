@@ -1118,3 +1118,59 @@ Post-flight checklist (required before session close):
 - Final metrics recorded (fills, inventory, PnL, peak drift, peak spread).
 - Session result marked as Go/No-Go for future scaling.
 - Any anomaly captured with timestamp and log excerpt for follow-up.
+
+### 28. Validation session record template
+Status: Active logging template on 2026-07-26
+
+Use one block per validation session:
+
+```text
+Validation Session Record
+Date:
+Operator:
+Build/Commit:
+Start Time (UTC):
+End Time (UTC):
+Duration (minutes):
+
+Profile State
+- Baseline profile confirmed before start: Yes/No
+- Temporary validation profile enabled: Yes/No
+- Rollback profile prepared before start: Yes/No
+
+Entry Gates (Section 26)
+- Drift <= 1.5% for 15-30 minutes: Yes/No
+- Executable spread <= 1.2% for 15-30 minutes: Yes/No
+- Exchange/API health stable: Yes/No
+- Tiny notional and capped validation budget: Yes/No
+
+Session Limits
+- Validation budget (USDT):
+- Real-fill cap (max 3):
+- Inventory micro-limit (base units or USD):
+- Drawdown cap (max -0.25% of budget):
+
+Observed Metrics
+- Peak drift (%):
+- Peak executable spread (%):
+- Real fills total:
+- Real fill side split (BUY/SELL):
+- Max inventory deviation:
+- End inventory:
+- Realized PnL:
+- Unrealized PnL:
+- Total PnL:
+
+Stop Trigger Review
+- Any immediate stop trigger fired: Yes/No
+- If yes, trigger type and timestamp:
+
+Exit and Rollback
+- Validation disabled at close: Yes/No
+- Conservative profile restored: Yes/No
+- Runtime log evidence captured: Yes/No
+
+Outcome
+- Session verdict: Go / No-Go
+- Notes for next run:
+```
