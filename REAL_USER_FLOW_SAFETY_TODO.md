@@ -1038,3 +1038,83 @@ Acceptance criteria:
 - Idle periods can trigger tightly bounded wash activity without changing real-fill accounting.
 - Any real-user fill immediately preempts wash behavior and returns strategy to real-flow-first mode.
 - Logs and tests make mode transitions deterministic and auditable.
+
+### 26. Operator runbook for idle-wash validation (strict go/no-go)
+Status: Active operating policy on 2026-07-26
+
+Objective:
+- Define a single, strict procedure for when idle-wash validation is allowed and when it is prohibited.
+- Minimize USDT loss risk during short validation windows in unstable markets.
+
+Hard risk statement:
+- Enabling validation profile settings can lose USDT when real fills execute during dislocated spread/drift regimes.
+- Real-fill preemption and cooldown reduce risk velocity but do not eliminate fill-at-bad-price risk.
+
+Go criteria (all must pass for at least 15-30 continuous minutes):
+- Absolute DEX/CEX drift <= `1.5%` (preferred <= `1.0%`).
+- Executable spread <= `1.2%` (preferred <= `0.8%`).
+- Exchange/API health stable (no repeated service outages or order-state anomalies).
+- Validation notional set to minimum practical size and capped to a small disposable budget.
+- Operator actively monitoring live logs during the full window.
+
+No-go criteria (any one blocks validation start):
+- Drift > `1.5%` for 2-3 consecutive checks.
+- Executable spread > `1.2%` or rapidly oscillating.
+- Exchange reliability warnings recurring in the same observation window.
+- Existing inventory already near internal risk tolerance.
+
+Mandatory validation-session limits:
+- Session duration: `10-20` minutes maximum.
+- Real-fill cap: stop after `3` real fills total.
+- Inventory cap: stop if net base exposure exceeds predefined micro-limit.
+- Drawdown cap: stop if realized+unrealized PnL <= `-0.25%` of validation budget.
+
+Immediate stop triggers (exit validation now):
+- Two cooldown resets from real fills within `3` minutes.
+- Any drift spike > `2.0%`.
+- Sudden liquidity vacuum/book gap behavior.
+- Cancel/order-state inconsistencies or repeated exchange-band/availability failures.
+
+Execution procedure:
+1. Start from conservative baseline profile.
+2. Enable temporary validation profile with tiny size and strict timebox.
+3. Monitor drift, executable spread, real-fill cadence, inventory delta, and PnL continuously.
+4. If any stop trigger fires, disable validation immediately.
+5. At session end, always restore conservative profile even if results are positive.
+
+Rollback discipline:
+- Rollback plan must be prepared before any validation toggle is enabled.
+- Validation profile must never run unattended or overnight.
+- Conservative profile is the default post-session state.
+
+Post-session evidence to record:
+- Start/end timestamp of the validation window.
+- Peak drift and peak executable spread observed.
+- Real fills count and side split.
+- Max inventory deviation and end-of-session inventory.
+- End-of-session realized/unrealized/total PnL.
+- Explicit note that rollback was completed.
+
+### 27. Live validation pre-flight and post-flight checklist
+Status: Active operating checklist on 2026-07-26
+
+Pre-flight checklist (must all be yes):
+- Drift and spread are inside Section 26 go thresholds for at least 15-30 minutes.
+- Exchange/API health is stable with no recurring availability/order-state anomalies.
+- Validation budget, fill cap, inventory cap, and drawdown cap are written down.
+- Operator has active log monitoring and a hard session end time.
+- Conservative rollback profile is ready to apply immediately.
+
+In-flight checklist (monitor continuously):
+- Real-fill count and side split are tracked live.
+- Net inventory remains below micro-limit.
+- Realized/unrealized/total PnL stays above drawdown stop.
+- Drift and executable spread remain inside allowed range.
+- No immediate-stop trigger from Section 26 has fired.
+
+Post-flight checklist (required before session close):
+- Validation profile disabled.
+- Conservative profile restored and verified in runtime logs.
+- Final metrics recorded (fills, inventory, PnL, peak drift, peak spread).
+- Session result marked as Go/No-Go for future scaling.
+- Any anomaly captured with timestamp and log excerpt for follow-up.
