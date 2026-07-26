@@ -36,6 +36,13 @@ interface Config {
     riskSizeMultiplierDefensive: number;
     riskSizeMultiplierNormal: number;
     selfTradeEnabled: boolean;
+    selfTradeMode: 'off' | 'on' | 'auto';
+    idleWashEnableAfterMs: number;
+    idleWashCooldownAfterRealFillMs: number;
+    idleWashMaxPairsPerCycle: number;
+    idleWashRequireLowDrift: boolean;
+    idleWashMaxDriftPercent: number;
+    idleWashMaxExecSpreadPercent: number;
     mirrorMarkupPercentage: number;
     balanceUtilizationPercent: number;
     idleBalanceReserveUsd: number;
@@ -112,6 +119,20 @@ const getEnvBuyReactivationMode = (key: string, defaultValue: 'off' | 'auto' | '
   return defaultValue;
 };
 
+const getEnvSelfTradeMode = (key: string, defaultValue: 'off' | 'auto' | 'on'): 'off' | 'auto' | 'on' => {
+  const value = process.env[key];
+  if (!value) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'off' || normalized === 'auto' || normalized === 'on') {
+    return normalized;
+  }
+
+  return defaultValue;
+};
+
 const getCancelOrdersDefault = (): boolean => {
   const legacyValue = process.env.CANCEL_ORDERS_ON_DEPLOY;
   if (!legacyValue) {
@@ -155,6 +176,16 @@ export const config: Config = {
     riskSizeMultiplierDefensive: getEnvNumber('RISK_SIZE_MULTIPLIER_DEFENSIVE', 1),
     riskSizeMultiplierNormal: getEnvNumber('RISK_SIZE_MULTIPLIER_NORMAL', 1),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
+    selfTradeMode: getEnvSelfTradeMode(
+      'SELF_TRADE_MODE',
+      getEnvBoolean('SELF_TRADE_ENABLED', true) ? 'on' : 'off'
+    ),
+    idleWashEnableAfterMs: getEnvNumber('IDLE_WASH_ENABLE_AFTER_MS', 15 * 60 * 1000),
+    idleWashCooldownAfterRealFillMs: getEnvNumber('IDLE_WASH_COOLDOWN_AFTER_REAL_FILL_MS', 30 * 60 * 1000),
+    idleWashMaxPairsPerCycle: getEnvNumber('IDLE_WASH_MAX_PAIRS_PER_CYCLE', 1),
+    idleWashRequireLowDrift: getEnvBoolean('IDLE_WASH_REQUIRE_LOW_DRIFT', true),
+    idleWashMaxDriftPercent: getEnvNumber('IDLE_WASH_MAX_DRIFT_PERCENT', 3),
+    idleWashMaxExecSpreadPercent: getEnvNumber('IDLE_WASH_MAX_EXEC_SPREAD_PERCENT', 8),
     mirrorMarkupPercentage: getEnvNumber('MIRROR_MARKUP_PERCENTAGE', 2), // default 2%
     balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),
     idleBalanceReserveUsd: getEnvNumber('IDLE_BALANCE_RESERVE_USD', 25),

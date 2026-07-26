@@ -32,6 +32,7 @@ interface ProfitStats {
 
 type PlacementPriceSource = 'EXECUTABLE_BOOK_MID' | 'CEX_TICKER_MID' | 'DEX_FALLBACK';
 type BuyReactivationMode = 'off' | 'auto' | 'on';
+type SelfTradeMode = 'off' | 'on' | 'auto';
 
 /**
  * Volume Generation Strategy
@@ -83,6 +84,9 @@ export class VolumeGenerationStrategy {
   private lastRebalanceAt: number = 0;
   private realBuyFills: number = 0;
   private realSellFills: number = 0;
+  private lastRealFillAt: number = Date.now();
+  private washAutoCooldownUntil: number = 0;
+  private washAutoEnabled: boolean = false;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -261,6 +265,173 @@ export class VolumeGenerationStrategy {
 
   private getAdverseFillRatioMax(): number {
     return Math.max(config.volumeStrategy.adverseFillRatioMax, 1);
+  }
+
+  private getSelfTradeMode(): SelfTradeMode {
+    return config.volumeStrategy.selfTradeMode;
+  }
+
+  private getIdleWashEnableAfterMs(): number {
+    return Math.max(config.volumeStrategy.idleWashEnableAfterMs, 0);
+  }
+
+  private getIdleWashCooldownAfterRealFillMs(): number {
+    return Math.max(config.volumeStrategy.idleWashCooldownAfterRealFillMs, 0);
+  }
+
+  private getIdleWashMaxPairsPerCycle(): number {
+    return Math.max(0, Math.floor(config.volumeStrategy.idleWashMaxPairsPerCycle));
+  }
+
+  private getIdleWashRequireLowDrift(): boolean {
+    return config.volumeStrategy.idleWashRequireLowDrift;
+  }
+
+  private getIdleWashMaxDriftPercent(): number {
+    return Math.max(config.volumeStrategy.idleWashMaxDriftPercent, 0);
+  }
+
+  private getIdleWashMaxExecSpreadPercent(): number {
+    return Math.max(config.volumeStrategy.idleWashMaxExecSpreadPercent, 0);
+  }
+
+  private async cancelActiveWashOrders(reason: string): Promise<void> {
+    const washOrderIds = new Set<string>();
+    for (const pair of this.washTradePairsActive) {
+      washOrderIds.add(pair.buyOrderId);
+      washOrderIds.add(pair.sellOrderId);
+    }
+
+    if (!washOrderIds.size) {
+      return;
+    }
+
+    logger.warn(`🧹 Cancelling ${washOrderIds.size} active wash order(s): ${reason}`);
+
+    for (const orderId of washOrderIds) {
+      try {
+        await this.exchange.cancelOrder(this.symbol, orderId);
+      } catch (error: any) {
+        logger.warn(`⚠️  Failed to cancel wash order ${orderId}: ${error?.message || error}`);
+      }
+      this.activeOrders.delete(orderId);
+      this.orderPrices.delete(orderId);
+      this.settledWashOrderIds.add(orderId);
+    }
+
+    this.washTradePairsActive = [];
+  }
+
+  private noteRealFillDetected(reason: string): void {
+    const now = Date.now();
+    this.lastRealFillAt = now;
+
+    if (this.getSelfTradeMode() !== 'auto') {
+      return;
+    }
+
+    const cooldownMs = this.getIdleWashCooldownAfterRealFillMs();
+    this.washAutoCooldownUntil = now + cooldownMs;
+    const hadActiveWashOrders = this.washTradePairsActive.length > 0;
+    if (this.washAutoEnabled || hadActiveWashOrders) {
+      logger.warn(
+        `🛑 Auto wash disabled after real fill (${reason}); cooldown ${Math.ceil(cooldownMs / 1000)}s.`
+      );
+    }
+    this.washAutoEnabled = false;
+    if (hadActiveWashOrders) {
+      void this.cancelActiveWashOrders('real external fill detected while auto wash was active');
+    }
+  }
+
+  private resolveWashTradeDecision(params: {
+    canRunWashTradesByDrift: boolean;
+    dexCexDriftPercent: number;
+    executableSpreadPercent: number;
+    adverseBuyGuardActive: boolean;
+    forceBuyPause: boolean;
+    dynamicWashTradePairs: number;
+  }): { enabled: boolean; maxPairs: number; reason: string } {
+    const mode = this.getSelfTradeMode();
+    const now = Date.now();
+
+    if (mode === 'off') {
+      this.washAutoEnabled = false;
+      return { enabled: false, maxPairs: 0, reason: 'SELF_TRADE_MODE=off' };
+    }
+
+    if (params.forceBuyPause) {
+      this.washAutoEnabled = false;
+      return { enabled: false, maxPairs: 0, reason: 'FORCE_BUY_PAUSE=true' };
+    }
+
+    if (params.adverseBuyGuardActive) {
+      this.washAutoEnabled = false;
+      return { enabled: false, maxPairs: 0, reason: 'adverse-fill buy guard active' };
+    }
+
+    if (!params.canRunWashTradesByDrift) {
+      this.washAutoEnabled = false;
+      return { enabled: false, maxPairs: 0, reason: 'DEX/CEX drift guard blocked wash trades' };
+    }
+
+    if (mode === 'on') {
+      this.washAutoEnabled = false;
+      return {
+        enabled: true,
+        maxPairs: Math.max(params.dynamicWashTradePairs, 0),
+        reason: 'SELF_TRADE_MODE=on',
+      };
+    }
+
+    if (now < this.washAutoCooldownUntil) {
+      this.washAutoEnabled = false;
+      return {
+        enabled: false,
+        maxPairs: 0,
+        reason: `auto wash cooldown active (${Math.ceil((this.washAutoCooldownUntil - now) / 1000)}s remaining)`,
+      };
+    }
+
+    const idleMs = now - this.lastRealFillAt;
+    const idleThresholdMs = this.getIdleWashEnableAfterMs();
+    if (idleMs < idleThresholdMs) {
+      this.washAutoEnabled = false;
+      return {
+        enabled: false,
+        maxPairs: 0,
+        reason: `waiting for idle window (${Math.ceil((idleThresholdMs - idleMs) / 1000)}s remaining)`,
+      };
+    }
+
+    if (this.getIdleWashRequireLowDrift()) {
+      const maxIdleDriftPercent = this.getIdleWashMaxDriftPercent();
+      if (params.dexCexDriftPercent > maxIdleDriftPercent) {
+        this.washAutoEnabled = false;
+        return {
+          enabled: false,
+          maxPairs: 0,
+          reason: `idle wash drift guard blocked (${params.dexCexDriftPercent.toFixed(2)}% > ${maxIdleDriftPercent.toFixed(2)}%)`,
+        };
+      }
+
+      const maxIdleExecSpreadPercent = this.getIdleWashMaxExecSpreadPercent();
+      if (!Number.isFinite(params.executableSpreadPercent) || params.executableSpreadPercent > maxIdleExecSpreadPercent) {
+        this.washAutoEnabled = false;
+        return {
+          enabled: false,
+          maxPairs: 0,
+          reason: `idle wash spread guard blocked (${params.executableSpreadPercent.toFixed(2)}% > ${maxIdleExecSpreadPercent.toFixed(2)}%)`,
+        };
+      }
+    }
+
+    this.washAutoEnabled = true;
+    return {
+      enabled: true,
+      maxPairs: Math.min(Math.max(params.dynamicWashTradePairs, 0), this.getIdleWashMaxPairsPerCycle()),
+      reason: 'SELF_TRADE_MODE=auto enabled after idle window',
+    };
   }
 
   private getRiskSizeMultiplierDefensive(): number {
@@ -1692,14 +1863,18 @@ export class VolumeGenerationStrategy {
       const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
       const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
       const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washFeatureEnabled =
-        config.volumeStrategy.selfTradeEnabled &&
-        canRunWashTradesByDrift &&
-        !adverseBuyGuard.active &&
-        !forceBuyPause;
+      const washDecision = this.resolveWashTradeDecision({
+        canRunWashTradesByDrift,
+        dexCexDriftPercent,
+        executableSpreadPercent,
+        adverseBuyGuardActive: adverseBuyGuard.active,
+        forceBuyPause,
+        dynamicWashTradePairs,
+      });
+      const washFeatureEnabled = washDecision.enabled;
       const washTradePairs = washFeatureEnabled
         ? Math.min(
-            dynamicWashTradePairs,
+            washDecision.maxPairs,
             Math.max(washPairsByRemainingSlots, 0),
             Math.max(washPairsByReservedBudget, 0)
           )
@@ -1707,14 +1882,8 @@ export class VolumeGenerationStrategy {
       this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
         !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
       );
-      if (!config.volumeStrategy.selfTradeEnabled) {
-        logger.info('⏭️  Wash trades disabled via SELF_TRADE_ENABLED=false');
-      }
-      if (forceBuyPause) {
-        logger.info('⏭️  Wash trades paused because FORCE_BUY_PAUSE=true.');
-      }
-      if (adverseBuyGuard.active) {
-        logger.info('⏭️  Wash trades paused while adverse-fill buy guard is active.');
+      if (!washFeatureEnabled) {
+        logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
       if (!bookSeeded) {
         logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
@@ -2174,6 +2343,7 @@ export class VolumeGenerationStrategy {
             const realizedPnl = this.applyEconomicFill(order.side, order.filled, order.price, !isRealFill);
             this.pnlSettledOrderIds.add(orderId);
             if (isRealFill) {
+              this.noteRealFillDetected(`order status FILLED ${orderId}`);
               logger.info(`💰 REAL FILL: ${order.side} ${order.filled.toFixed(0)} @ $${order.price.toExponential(4)} | RealizedPnL: $${realizedPnl.toFixed(4)} | TotalPnL: $${this.profitStats.totalPnl.toFixed(4)}`);
             }
           } else if (!isRealFill) {
@@ -2253,6 +2423,7 @@ export class VolumeGenerationStrategy {
         this.profitStats.washTrades++;
         logger.info(`🔄 WASH TRADE FILL: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
       } else {
+        this.noteRealFillDetected(`trade ${trade.tradeId}`);
         const realizedPnl = this.applyEconomicFill(effectiveSide, trade.amount, trade.price, false);
         logger.info(
           `💰 REAL TRADE PNL: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId}) | RealizedPnL: $${realizedPnl.toFixed(4)} | UnrealizedPnL: $${this.profitStats.unrealizedPnl.toFixed(4)}`

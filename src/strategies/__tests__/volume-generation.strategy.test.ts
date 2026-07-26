@@ -281,6 +281,164 @@ it('should suppress rebalance when ticker spread exceeds configured guard', asyn
   }
 });
 
+it('enables idle auto wash once no real fills occur for the configured idle window', () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  const originalIdleMs = config.volumeStrategy.idleWashEnableAfterMs;
+  const originalCooldownMs = config.volumeStrategy.idleWashCooldownAfterRealFillMs;
+  const originalMaxPairs = config.volumeStrategy.idleWashMaxPairsPerCycle;
+  const originalRequireLowDrift = config.volumeStrategy.idleWashRequireLowDrift;
+  const originalMaxDrift = config.volumeStrategy.idleWashMaxDriftPercent;
+  const originalMaxSpread = config.volumeStrategy.idleWashMaxExecSpreadPercent;
+
+  try {
+    config.volumeStrategy.selfTradeMode = 'auto';
+    config.volumeStrategy.idleWashEnableAfterMs = 1000;
+    config.volumeStrategy.idleWashCooldownAfterRealFillMs = 30_000;
+    config.volumeStrategy.idleWashMaxPairsPerCycle = 2;
+    config.volumeStrategy.idleWashRequireLowDrift = true;
+    config.volumeStrategy.idleWashMaxDriftPercent = 3;
+    config.volumeStrategy.idleWashMaxExecSpreadPercent = 5;
+
+    (strategy as any).lastRealFillAt = Date.now() - 5_000;
+    const decision = (strategy as any).resolveWashTradeDecision({
+      canRunWashTradesByDrift: true,
+      dexCexDriftPercent: 1,
+      executableSpreadPercent: 1,
+      adverseBuyGuardActive: false,
+      forceBuyPause: false,
+      dynamicWashTradePairs: 6,
+    });
+
+    expect(decision.enabled).toBe(true);
+    expect(decision.maxPairs).toBe(2);
+    expect(decision.reason).toContain('SELF_TRADE_MODE=auto');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+    config.volumeStrategy.idleWashEnableAfterMs = originalIdleMs;
+    config.volumeStrategy.idleWashCooldownAfterRealFillMs = originalCooldownMs;
+    config.volumeStrategy.idleWashMaxPairsPerCycle = originalMaxPairs;
+    config.volumeStrategy.idleWashRequireLowDrift = originalRequireLowDrift;
+    config.volumeStrategy.idleWashMaxDriftPercent = originalMaxDrift;
+    config.volumeStrategy.idleWashMaxExecSpreadPercent = originalMaxSpread;
+  }
+});
+
+it('blocks idle auto wash during cooldown after a real fill', () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  config.volumeStrategy.selfTradeMode = 'auto';
+
+  try {
+    (strategy as any).lastRealFillAt = Date.now() - 50_000;
+    (strategy as any).washAutoCooldownUntil = Date.now() + 10_000;
+
+    const decision = (strategy as any).resolveWashTradeDecision({
+      canRunWashTradesByDrift: true,
+      dexCexDriftPercent: 1,
+      executableSpreadPercent: 1,
+      adverseBuyGuardActive: false,
+      forceBuyPause: false,
+      dynamicWashTradePairs: 3,
+    });
+
+    expect(decision.enabled).toBe(false);
+    expect(decision.maxPairs).toBe(0);
+    expect(decision.reason).toContain('cooldown');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+  }
+});
+
+it('blocks idle auto wash when drift guard fails even after idle window elapsed', () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  const originalRequireLowDrift = config.volumeStrategy.idleWashRequireLowDrift;
+  const originalMaxDrift = config.volumeStrategy.idleWashMaxDriftPercent;
+  const originalIdleMs = config.volumeStrategy.idleWashEnableAfterMs;
+
+  try {
+    config.volumeStrategy.selfTradeMode = 'auto';
+    config.volumeStrategy.idleWashRequireLowDrift = true;
+    config.volumeStrategy.idleWashMaxDriftPercent = 1.5;
+    config.volumeStrategy.idleWashEnableAfterMs = 1000;
+
+    (strategy as any).lastRealFillAt = Date.now() - 10_000;
+
+    const decision = (strategy as any).resolveWashTradeDecision({
+      canRunWashTradesByDrift: true,
+      dexCexDriftPercent: 2.2,
+      executableSpreadPercent: 1,
+      adverseBuyGuardActive: false,
+      forceBuyPause: false,
+      dynamicWashTradePairs: 3,
+    });
+
+    expect(decision.enabled).toBe(false);
+    expect(decision.maxPairs).toBe(0);
+    expect(decision.reason).toContain('drift guard blocked');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+    config.volumeStrategy.idleWashRequireLowDrift = originalRequireLowDrift;
+    config.volumeStrategy.idleWashMaxDriftPercent = originalMaxDrift;
+    config.volumeStrategy.idleWashEnableAfterMs = originalIdleMs;
+  }
+});
+
+it('immediately disables idle auto wash and starts cooldown when a real fill is detected', async () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  const originalCooldownMs = config.volumeStrategy.idleWashCooldownAfterRealFillMs;
+
+  try {
+    config.volumeStrategy.selfTradeMode = 'auto';
+    config.volumeStrategy.idleWashCooldownAfterRealFillMs = 60_000;
+
+    (strategy as any).washAutoEnabled = true;
+    (strategy as any).washTradePairsActive = [
+      { buyOrderId: 'wash-buy-1', sellOrderId: 'wash-sell-1', price: 1, amount: 10 }
+    ];
+    const cancelActiveWashOrdersSpy = jest
+      .spyOn(strategy as any, 'cancelActiveWashOrders')
+      .mockResolvedValue(undefined);
+
+    const before = Date.now();
+    (strategy as any).noteRealFillDetected('test-real-fill');
+
+    expect((strategy as any).washAutoEnabled).toBe(false);
+    expect((strategy as any).lastRealFillAt).toBeGreaterThanOrEqual(before);
+    expect((strategy as any).washAutoCooldownUntil).toBeGreaterThan((strategy as any).lastRealFillAt);
+    expect(cancelActiveWashOrdersSpy).toHaveBeenCalledWith('real external fill detected while auto wash was active');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+    config.volumeStrategy.idleWashCooldownAfterRealFillMs = originalCooldownMs;
+  }
+});
+
 it('should execute rebalance when ticker spread and quote deviation are within guard limits', async () => {
   const mockExchange = {
     getBalances: jest.fn(),

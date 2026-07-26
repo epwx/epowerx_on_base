@@ -969,7 +969,7 @@ Operational follow-up:
 - Rotate the previously exposed Biconomy API key/secret because historical logs contained plaintext credentials.
 
 ### 25. Add idle-only auto wash mode with immediate real-fill cutover
-Status: Pending
+Status: Completed on 2026-07-25 (code + focused tests)
 
 Objective:
 - Allow very limited wash activity only after prolonged real-user inactivity.
@@ -999,6 +999,18 @@ Tests:
 - Add a test proving a real fill disables wash immediately and cancels pending wash orders.
 - Add a test proving cooldown blocks wash re-enable even if idle timer passes.
 - Add a test proving drift or spread failure keeps auto wash disabled during idle windows.
+
+Implementation notes:
+- Added strategy mode control `SELF_TRADE_MODE` with `off|on|auto` behavior; legacy `SELF_TRADE_ENABLED` remains as fallback default wiring.
+- Added idle-wash controls for enable window, cooldown after real fill, per-cycle pair cap, and drift/spread gating.
+- Added immediate real-fill cutover hook that disables auto-wash, starts cooldown, and cancels tracked open wash orders.
+- Wired the new wash decision path into the existing wash placement budget logic so all prior depth/budget guards remain authoritative.
+
+Validation outcomes:
+- Focused regression tests passed for Item 25 behavior gates and real-fill cutover:
+	- `npx jest src/strategies/__tests__/volume-generation.strategy.test.ts -t "idle auto wash|cooldown|drift guard|immediately disables"`
+- TypeScript compile check passed after patch:
+	- `npx tsc -p tsconfig.json --noEmit`
 
 Acceptance criteria:
 - Idle periods can trigger tightly bounded wash activity without changing real-fill accounting.
