@@ -1174,3 +1174,17 @@ Outcome
 - Session verdict: Go / No-Go
 - Notes for next run:
 ```
+
+### 29. Ultra-fast quick log (5-line variant)
+Status: Active rapid logging helper on 2026-07-26
+
+Use this during high-activity windows, then backfill Section 28 after the session:
+
+```text
+Quick Log
+1) Window: <start UTC> -> <end UTC> | Build: <commit>
+2) Gates pass at entry: Drift <1.5%=Y/N, Spread <1.2%=Y/N, API stable=Y/N
+3) Fills/Inventory: Real fills=<n> (B=<n>/S=<n>), Max inv dev=<value>, End inv=<value>
+4) Risk/PnL: Peak drift=<%>, Peak spread=<%>, Total PnL=<value>, Stop trigger fired=Y/N
+5) Exit: Validation off=Y/N, Safe profile restored=Y/N, Verdict=Go/No-Go
+```
