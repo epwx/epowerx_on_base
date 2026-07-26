@@ -967,3 +967,40 @@ Validation outcomes:
 
 Operational follow-up:
 - Rotate the previously exposed Biconomy API key/secret because historical logs contained plaintext credentials.
+
+### 25. Add idle-only auto wash mode with immediate real-fill cutover
+Status: Pending
+
+Objective:
+- Allow very limited wash activity only after prolonged real-user inactivity.
+- Immediately disable wash activity when any real external fill is detected.
+- Keep real-user flow handling dominant over wash behavior at all times.
+
+Behavior contract:
+- Wash mode is enabled only in auto mode after a configurable idle window with no real fills.
+- On first detected real fill, wash mode is disabled in the same cycle.
+- Any open wash orders are cancelled immediately after real-fill detection.
+- A cooldown window starts after real fills; wash mode cannot re-enable until cooldown expires.
+
+Expected handling for user interaction with resting wash order:
+- If a real user sells into a resting wash-side order, it is treated as a normal real fill.
+- Inventory and PnL accounting update through existing real-fill paths.
+- Wash mode is turned off immediately and remaining wash orders are cleared.
+- Subsequent cycles run with wash disabled until cooldown and market-quality gates both pass.
+
+Safety guardrails:
+- Do not enable idle wash when drift or executable spread gates are failing.
+- Keep idle-wash notional and pairs-per-cycle lower than normal wash configuration.
+- Keep adverse-fill and inventory safety guards authoritative over idle-wash activation.
+- Emit explicit mode-transition logs for enable, disable, and cooldown states.
+
+Tests:
+- Add a test proving auto wash enables only after the configured idle period.
+- Add a test proving a real fill disables wash immediately and cancels pending wash orders.
+- Add a test proving cooldown blocks wash re-enable even if idle timer passes.
+- Add a test proving drift or spread failure keeps auto wash disabled during idle windows.
+
+Acceptance criteria:
+- Idle periods can trigger tightly bounded wash activity without changing real-fill accounting.
+- Any real-user fill immediately preempts wash behavior and returns strategy to real-flow-first mode.
+- Logs and tests make mode transitions deterministic and auditable.
