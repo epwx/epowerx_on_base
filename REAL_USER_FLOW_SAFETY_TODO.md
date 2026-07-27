@@ -1188,3 +1188,28 @@ Quick Log
 4) Risk/PnL: Peak drift=<%>, Peak spread=<%>, Total PnL=<value>, Stop trigger fired=Y/N
 5) Exit: Validation off=Y/N, Safe profile restored=Y/N, Verdict=Go/No-Go
 ```
+
+### 30. 30-second go-live trigger checklist
+Status: Active rapid decision checklist on 2026-07-26
+
+Use this as a fast decision gate before enabling any validation window:
+
+Go only if all are true right now:
+- Drift <= 1.5% (preferred <= 1.0%) and stable for 15-30 minutes.
+- Executable spread <= 1.2% (preferred <= 0.8%) and stable for 15-30 minutes.
+- No repeating exchange/API reliability errors in the same window.
+- Real-fill flow is balanced (no early one-sided accumulation pattern).
+- Operator has active stop caps set (time, fill count, drawdown, inventory).
+
+No-go immediately if any are true:
+- Drift > 1.5% (hard stop > 2.0% even once).
+- Executable spread > 1.2% or rapidly widening.
+- Repeated `Service is not available`, order-state anomalies, or cancel inconsistencies.
+- Cooldown resets repeatedly due to real fills.
+- Inventory or PnL risk caps are already near limits.
+
+Session control (mandatory when Go):
+- Timebox: 10-20 minutes max.
+- Fill cap: 3 real fills max.
+- Drawdown stop: -0.25% of validation budget.
+- End-of-session action: disable validation and restore conservative profile.
