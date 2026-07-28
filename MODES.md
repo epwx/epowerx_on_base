@@ -257,6 +257,10 @@ Use these prebuilt templates directly:
   - Use when buy side should remain disabled by policy, but sell-side maintenance should continue.
   - Typical use: inventory-heavy windows where buy risk should stay off.
 
+- .env.example.mode-buy-off-conservative
+  - Use when buy side must stay off and sell-side activity should be minimal.
+  - Typical use: highly dislocated windows where you want only light sell-side presence.
+
 - .env.example.mode-aggressive-lite-v2
   - Use as the default controlled-activity profile under dislocated conditions.
   - Typical use: first reactivation step from idle.
@@ -293,6 +297,11 @@ cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-safe-idle .env &&
 - Switch to buy-off mode:
 ```bash
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-buy-off .env && pm2 restart epwx-bot --update-env
+```
+
+- Switch to buy-off conservative mode:
+```bash
+cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-buy-off-conservative .env && pm2 restart epwx-bot --update-env
 ```
 
 - Switch to aggressive-lite v2:
@@ -361,6 +370,7 @@ pm2 restart epwx-bot --update-env
 Common profile names:
 - safe-idle
 - buy-off
+- buy-off-conservative
 - aggressive-lite-v2
 - aggressive-lite-v2-inventory-aware
 - aggressive-lite-step2
