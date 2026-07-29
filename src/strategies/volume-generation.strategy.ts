@@ -2433,8 +2433,8 @@ export class VolumeGenerationStrategy {
 
   private async getConfirmedFilledAmount(orderId: string): Promise<number> {
     try {
-      // Allow a short delay so exchange trade records include immediate fills.
-      await new Promise(resolve => setTimeout(resolve, 250));
+      // Allow enough delay so exchange trade records include near-immediate fills.
+      await new Promise(resolve => setTimeout(resolve, 1000));
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (!trades || trades.length === 0) {
         return 0;
