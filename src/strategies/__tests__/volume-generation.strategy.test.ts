@@ -2769,4 +2769,80 @@ describe('Confirmed wash fill polling', () => {
 
     expect(confirmed).toBe(0);
   });
+
+  it('falls back to pending order filled amount when trade feed is empty', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockResolvedValue({
+        orderId: 'buy-order-3',
+        symbol: 'EPWXUSDT',
+        side: 'BUY',
+        type: 'LIMIT',
+        price: 1,
+        amount: 10,
+        filled: 4,
+        status: 'NEW',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    const confirmed = await (strategy as any).getConfirmedFilledAmount('buy-order-3');
+
+    expect(mockExchange.getRecentTrades).toHaveBeenCalledWith((strategy as any).symbol, 10, 'buy-order-3');
+    expect(mockExchange.getOrder).toHaveBeenCalledWith((strategy as any).symbol, 'buy-order-3');
+    expect(confirmed).toBe(4);
+  });
+
+  it('does not emit no-fill diagnostics when pending snapshot already shows fills', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockResolvedValue({
+        orderId: 'buy-order-4',
+        symbol: 'EPWXUSDT',
+        side: 'BUY',
+        type: 'LIMIT',
+        price: 1,
+        amount: 10,
+        filled: 3,
+        status: 'NEW',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    (strategy as any).activeOrders.set('buy-order-4', {
+      orderId: 'buy-order-4',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    const diagnosticsSpy = jest.spyOn(strategy as any, 'logNoFillDiagnostics').mockResolvedValue(undefined);
+
+    await (strategy as any).pollOrderFills('buy-order-4', 'BUY', false);
+
+    expect(diagnosticsSpy).not.toHaveBeenCalled();
+    expect((strategy as any).currentPosition).toBe(3);
+  });
 });

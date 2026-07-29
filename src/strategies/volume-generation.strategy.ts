@@ -2432,18 +2432,61 @@ export class VolumeGenerationStrategy {
   }
 
   private async getConfirmedFilledAmount(orderId: string): Promise<number> {
+    // Allow enough delay so exchange trade records include near-immediate fills.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    let tradesError: unknown = null;
     try {
-      // Allow enough delay so exchange trade records include near-immediate fills.
-      await new Promise(resolve => setTimeout(resolve, 1000));
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
-      if (!trades || trades.length === 0) {
-        return 0;
+      if (trades && trades.length > 0) {
+        return trades.reduce((sum, trade) => sum + trade.amount, 0);
       }
-      return trades.reduce((sum, trade) => sum + trade.amount, 0);
     } catch (error) {
-      logger.warn(`⚠️  Unable to confirm fills for order ${orderId} before wash sell placement.`);
-      return 0;
+      tradesError = error;
     }
+
+    const filledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
+    if (filledFromOrderState > 0) {
+      logger.info(
+        `ℹ️  Using order-state fill fallback for ${orderId}: ${Math.floor(filledFromOrderState).toLocaleString()} EPWX confirmed before paired wash SELL.`
+      );
+      return filledFromOrderState;
+    }
+
+    if (tradesError) {
+      logger.warn(`⚠️  Unable to confirm fills for order ${orderId} before wash sell placement.`);
+    }
+
+    return 0;
+  }
+
+  private async getFilledAmountFromOrderState(orderId: string): Promise<number> {
+    const exchangeAny = this.exchange as any;
+
+    if (typeof exchangeAny.getOrder === 'function') {
+      try {
+        const pendingOrder = await exchangeAny.getOrder(this.symbol, orderId);
+        if (pendingOrder && Number.isFinite(pendingOrder.filled) && pendingOrder.filled > 0) {
+          return pendingOrder.filled;
+        }
+      } catch {
+        // Ignore and try open-order snapshot fallback.
+      }
+    }
+
+    if (typeof exchangeAny.getOpenOrders === 'function') {
+      try {
+        const openOrders: Order[] = await exchangeAny.getOpenOrders(this.symbol);
+        const pendingOrder = openOrders.find((order: Order) => order.orderId === orderId);
+        if (pendingOrder && Number.isFinite(pendingOrder.filled) && pendingOrder.filled > 0) {
+          return pendingOrder.filled;
+        }
+      } catch {
+        // Diagnostics only; keep main flow non-fatal.
+      }
+    }
+
+    return 0;
   }
 
   // Poll for fills after placing an order
@@ -2461,6 +2504,15 @@ export class VolumeGenerationStrategy {
           this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
         }
       } else {
+        const filledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
+        if (filledFromOrderState > 0) {
+          logger.info(
+            `ℹ️  Pending-order snapshot shows ${side} ${orderId} has ${Math.floor(filledFromOrderState).toLocaleString()} filled even though recent trades are not yet visible.`
+          );
+          this.applyPositionForFilledOrder(orderId, side, filledFromOrderState);
+          return;
+        }
+
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
         await this.logNoFillDiagnostics(orderId, side);
       }
