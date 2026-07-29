@@ -2052,7 +2052,10 @@ export class VolumeGenerationStrategy {
           ? this.creditConfirmedWashBuyFills(buyOrderId, confirmedBuyFillCappedAmount)
           : 0;
         const carrySellableAmount = quantizeToStepSize(Math.max(this.washConfirmedBuyCarryAmount, 0), this.stepSize);
-        const pairedSellAmount = Math.min(pairedSellAmountFromPlacement, carrySellableAmount);
+        const immediatePairingEnabled = this.getSelfTradeMode() === 'on';
+        const pairedSellAmount = immediatePairingEnabled
+          ? pairedSellAmountFromPlacement
+          : Math.min(pairedSellAmountFromPlacement, carrySellableAmount);
 
         if (!this.isValidOrderAmount(pairedSellAmount, matchPrice)) {
           logger.info(
@@ -2065,7 +2068,9 @@ export class VolumeGenerationStrategy {
         const sellOrderId = await this.placeSellOrder(matchPrice, pairedSellAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
-          this.washConfirmedBuyCarryAmount = Math.max(this.washConfirmedBuyCarryAmount - pairedSellAmount, 0);
+          if (!immediatePairingEnabled) {
+            this.washConfirmedBuyCarryAmount = Math.max(this.washConfirmedBuyCarryAmount - pairedSellAmount, 0);
+          }
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount: pairedSellAmount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${pairedSellAmount.toFixed(2)} EPWX)`);
         }
