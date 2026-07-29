@@ -265,6 +265,10 @@ Use these prebuilt templates directly:
   - Use when you want real-user profitability first, with idle wash fallback for volume continuity.
   - Typical use: mixed market windows where real flow is intermittent and idle periods need controlled volume support.
 
+- .env.example.mode-hybrid-profit-idle-wash-dislocated
+  - Use when you want the same hybrid behavior but current DEX/CEX drift is persistently high.
+  - Typical use: dislocated markets where strict hybrid gates overly suppress both quoting and wash fallback.
+
 - profiles/idle-wash.env
   - Use when market is quiet and you want automatic wash trading to seed volume.
   - Wash trading activates after 1 minute of no real fills (if drift < 3% and spread < 8%).
@@ -330,6 +334,11 @@ cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-aggressive-lite-v
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idle-wash .env && pm2 restart epwx-bot --update-env
 ```
 
+- Switch to hybrid profit + idle wash (dislocated market variant):
+```bash
+cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idle-wash-dislocated .env && pm2 restart epwx-bot --update-env
+```
+
 - Switch to aggressive-lite step2:
 ```bash
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-aggressive-lite-step2 .env && pm2 restart epwx-bot --update-env
@@ -390,6 +399,7 @@ Common profile names:
 - aggressive-lite-v2
 - aggressive-lite-v2-inventory-aware
 - hybrid-profit-idle-wash
+- hybrid-profit-idle-wash-dislocated
 - aggressive-lite-step2
 - aggressive-lite-step3
 - aggressive-on
