@@ -2011,10 +2011,25 @@ export class VolumeGenerationStrategy {
         logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
         const placedBuyAmount = buyOrderId ? this.activeOrders.get(buyOrderId)?.amount : undefined;
-        const pairedSellAmount =
+        const pairedSellAmountFromPlacement =
           typeof placedBuyAmount === 'number' && Number.isFinite(placedBuyAmount) && placedBuyAmount > 0
             ? placedBuyAmount
             : washAmount;
+
+        const confirmedBuyFillAmount = buyOrderId
+          ? await this.getConfirmedFilledAmount(buyOrderId)
+          : 0;
+        const confirmedBuyFillCappedAmount = quantizeToStepSize(Math.max(confirmedBuyFillAmount, 0), this.stepSize);
+        const pairedSellAmount = Math.min(pairedSellAmountFromPlacement, confirmedBuyFillCappedAmount);
+
+        if (!this.isValidOrderAmount(pairedSellAmount, matchPrice)) {
+          logger.info(
+            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX are below executable minimum.`
+          );
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+
         const sellOrderId = await this.placeSellOrder(matchPrice, pairedSellAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
@@ -2390,6 +2405,21 @@ export class VolumeGenerationStrategy {
       return order.orderId;
     } catch (error) {
       logger.error('Error placing sell order:', error);
+    }
+  }
+
+  private async getConfirmedFilledAmount(orderId: string): Promise<number> {
+    try {
+      // Allow a short delay so exchange trade records include immediate fills.
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
+      if (!trades || trades.length === 0) {
+        return 0;
+      }
+      return trades.reduce((sum, trade) => sum + trade.amount, 0);
+    } catch (error) {
+      logger.warn(`⚠️  Unable to confirm fills for order ${orderId} before wash sell placement.`);
+      return 0;
     }
   }
 
