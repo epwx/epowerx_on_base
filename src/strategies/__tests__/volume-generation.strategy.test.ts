@@ -3138,6 +3138,51 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).washConfirmedBuyCreditedByOrder.get('wash-buy-late-2')).toBe(5);
   });
 
+  it('skips immediate no-fill diagnostics for wash orders while reconciliation handles disappearance', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockResolvedValue({
+        orderId: 'wash-no-fill-1',
+        symbol: 'EPWXUSDT',
+        side: 'BUY',
+        type: 'LIMIT',
+        price: 1,
+        amount: 10,
+        filled: 0,
+        status: 'NEW',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    (strategy as any).activeOrders.set('wash-no-fill-1', {
+      orderId: 'wash-no-fill-1',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    (strategy as any).washSubmittedOrderIds.add('wash-no-fill-1');
+
+    const diagnosticsSpy = jest.spyOn(strategy as any, 'logNoFillDiagnostics').mockResolvedValue(undefined);
+
+    await (strategy as any).pollOrderFills('wash-no-fill-1', 'BUY', true);
+
+    expect(diagnosticsSpy).not.toHaveBeenCalled();
+  });
+
   it('credits only incremental confirmed wash BUY fills into carry buffer', () => {
     const mockExchange = {
       getBalances: jest.fn(),

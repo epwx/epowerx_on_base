@@ -2613,7 +2613,13 @@ export class VolumeGenerationStrategy {
         }
 
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
-        await this.logNoFillDiagnostics(orderId, side);
+        if (isWashTrade) {
+          logger.info(
+            `ℹ️  Skipping immediate no-fill diagnostics for wash order ${orderId}; awaiting disappeared-order reconciliation.`
+          );
+        } else {
+          await this.logNoFillDiagnostics(orderId, side);
+        }
       }
     } catch (error) {
       logger.error(`Error polling fills for order ${orderId}:`, error);
