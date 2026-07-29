@@ -2326,9 +2326,13 @@ export class VolumeGenerationStrategy {
       }
 
       if (executableAmount !== normalizedAmount) {
-        logger.warn(
-          `⚠️  Reducing buy amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the reserve and executable notional`
-        );
+        const reduceBuyAmountMessage =
+          `⚠️  Reducing buy amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the reserve and executable notional`;
+        if (isWashTrade) {
+          logger.info(reduceBuyAmountMessage);
+        } else {
+          logger.warn(reduceBuyAmountMessage);
+        }
       }
 
       amount = executableAmount;
@@ -2416,9 +2420,13 @@ export class VolumeGenerationStrategy {
       }
 
       if (executableAmount !== normalizedAmount) {
-        logger.warn(
-          `⚠️  Reducing sell amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the executable notional`
-        );
+        const reduceSellAmountMessage =
+          `⚠️  Reducing sell amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the executable notional`;
+        if (isWashTrade) {
+          logger.info(reduceSellAmountMessage);
+        } else {
+          logger.warn(reduceSellAmountMessage);
+        }
       }
 
       amount = executableAmount;

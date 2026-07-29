@@ -514,7 +514,7 @@ export class BiconomyExchangeService {
     // Signature: all params sorted alphabetically, joined as key=value, then &secret_key=... and MD5/uppercase
     const sign = this.signRequest(params);
     params.sign = sign;
-    logger.info(`[getOpenOrders] Params: ${JSON.stringify(this.redactPrivateParams(params))}`);
+    logger.debug(`[getOpenOrders] Params: ${JSON.stringify(this.redactPrivateParams(params))}`);
     try {
       const urlParams = new URLSearchParams(params);
       const response = await this.client.post('/api/v1/private/order/pending', urlParams.toString(), {
