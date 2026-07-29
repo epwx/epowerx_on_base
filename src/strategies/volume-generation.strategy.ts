@@ -2012,9 +2012,6 @@ export class VolumeGenerationStrategy {
       if (!washFeatureEnabled) {
         logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
-      if (!washFeatureEnabled) {
-        logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
-      }
       if (washFeatureEnabled && washTradePairs === 0) {
         logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
       }
