@@ -372,7 +372,12 @@ it('prioritizes idle wash pairs over passive top-touch orders when wash trades a
     getOpenOrders: jest.fn().mockResolvedValue([]),
     cancelOrder: jest.fn(),
     placeOrder: jest.fn().mockResolvedValue({ orderId: 'wash-priority', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
-    getRecentTrades: jest.fn().mockResolvedValue([]),
+    getRecentTrades: jest.fn().mockImplementation(async (_symbol: string, _limit: number, orderId?: string) => {
+      if (orderId === 'wash-buy') {
+        return [{ orderId: 'wash-buy', side: 'BUY', amount: 10, price: 1.005, tradeId: 'wash-fill-1', timestamp: Date.now(), fee: 0 }];
+      }
+      return [];
+    }),
   };
 
   jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.005);
