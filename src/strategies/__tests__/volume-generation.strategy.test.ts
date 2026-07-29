@@ -2868,4 +2868,77 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).washConfirmedBuyCarryAmount).toBe(150);
     expect((strategy as any).washConfirmedBuyCreditedByOrder.get('buy-order-5')).toBe(150);
   });
+
+  it('keeps disappeared orders active during retry window when trades are still unavailable', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockRejectedValue(new Error('Order not found or already completed')),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    (strategy as any).activeOrders.set('retry-order-1', {
+      orderId: 'retry-order-1',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    await (strategy as any).updateOrderStatus();
+
+    expect((strategy as any).activeOrders.has('retry-order-1')).toBe(true);
+    const retryState = (strategy as any).disappearedOrderRetryState.get('retry-order-1');
+    expect(retryState?.attempts).toBe(1);
+  });
+
+  it('removes disappeared orders after retry attempts are exhausted', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockRejectedValue(new Error('Order not found or already completed')),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    (strategy as any).activeOrders.set('retry-order-2', {
+      orderId: 'retry-order-2',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    const maxAttempts = (VolumeGenerationStrategy as any).DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS;
+
+    for (let i = 0; i < maxAttempts + 1; i++) {
+      (strategy as any).disappearedOrderRetryState.set('retry-order-2', { attempts: i, nextRetryAt: 0 });
+      await (strategy as any).updateOrderStatus();
+      if (!(strategy as any).activeOrders.has('retry-order-2')) {
+        break;
+      }
+    }
+
+    expect((strategy as any).activeOrders.has('retry-order-2')).toBe(false);
+    expect((strategy as any).disappearedOrderRetryState.has('retry-order-2')).toBe(false);
+  });
 });

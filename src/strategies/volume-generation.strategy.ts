@@ -51,6 +51,8 @@ export class VolumeGenerationStrategy {
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
+  private static readonly DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS = 4;
+  private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 10000;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -89,6 +91,7 @@ export class VolumeGenerationStrategy {
   private washAutoEnabled: boolean = false;
   private washConfirmedBuyCarryAmount: number = 0;
   private washConfirmedBuyCreditedByOrder: Map<string, number> = new Map();
+  private disappearedOrderRetryState: Map<string, { attempts: number; nextRetryAt: number }> = new Map();
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -2542,6 +2545,11 @@ export class VolumeGenerationStrategy {
           return;
         }
 
+        const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
+        if (capturedAnyTrade) {
+          return;
+        }
+
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
         await this.logNoFillDiagnostics(orderId, side);
       }
@@ -2567,8 +2575,14 @@ export class VolumeGenerationStrategy {
     this.orderStatusIndex = end >= orderIds.length ? 0 : end;
     let backoff = 1000; // Start with 1s
     for (const orderId of batch) {
+      const retryState = this.disappearedOrderRetryState.get(orderId);
+      if (retryState && Date.now() < retryState.nextRetryAt) {
+        continue;
+      }
+
       try {
         const order = await this.exchange.getOrder(this.symbol, orderId);
+        this.disappearedOrderRetryState.delete(orderId);
 
         if (order.status === 'FILLED') {
           // Update volume stats
@@ -2613,10 +2627,12 @@ export class VolumeGenerationStrategy {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.disappearedOrderRetryState.delete(orderId);
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.disappearedOrderRetryState.delete(orderId);
         }
       } catch (error: any) {
         if (error.message && error.message.includes('Service is not available')) {
@@ -2633,13 +2649,34 @@ export class VolumeGenerationStrategy {
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
           const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
-          if (!capturedAnyTrade) {
-            await this.logOrderDisappearance(orderId);
+          if (capturedAnyTrade) {
+            this.activeOrders.delete(orderId);
+            this.orderPrices.delete(orderId);
+            this.washConfirmedBuyCreditedByOrder.delete(orderId);
+            this.disappearedOrderRetryState.delete(orderId);
+            continue;
           }
-          logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
+
+          const previousState = this.disappearedOrderRetryState.get(orderId);
+          const nextAttempt = (previousState?.attempts ?? 0) + 1;
+
+          if (nextAttempt <= VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS) {
+            this.disappearedOrderRetryState.set(orderId, {
+              attempts: nextAttempt,
+              nextRetryAt: Date.now() + VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_DELAY_MS,
+            });
+            logger.info(
+              `⏳ [ORDER-DISAPPEARED-RETRY] ${orderId} missing from pending/detail and trades feed; retry ${nextAttempt}/${VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS} in ${Math.round(VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_DELAY_MS / 1000)}s before finalizing.`
+            );
+            continue;
+          }
+
+          await this.logOrderDisappearance(orderId);
+          logger.info(`Order ${orderId} not found or already completed after retry window. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.disappearedOrderRetryState.delete(orderId);
           continue;
         }
         logger.error('Error updating order status:', error);
