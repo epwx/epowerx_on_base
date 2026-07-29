@@ -362,6 +362,90 @@ it('blocks idle auto wash during cooldown after a real fill', () => {
   }
 });
 
+it('allows relaxed wash-trade gating to bypass drift and spread blocking for same-price self-matching', () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  const originalIdleMs = config.volumeStrategy.idleWashEnableAfterMs;
+  const originalMaxPairs = config.volumeStrategy.idleWashMaxPairsPerCycle;
+  const originalRequireLowDrift = config.volumeStrategy.idleWashRequireLowDrift;
+  const originalMaxDrift = config.volumeStrategy.idleWashMaxDriftPercent;
+  const originalMaxSpread = config.volumeStrategy.idleWashMaxExecSpreadPercent;
+
+  try {
+    config.volumeStrategy.selfTradeMode = 'auto';
+    config.volumeStrategy.idleWashEnableAfterMs = 1000;
+    config.volumeStrategy.idleWashMaxPairsPerCycle = 2;
+    config.volumeStrategy.idleWashRequireLowDrift = true;
+    config.volumeStrategy.idleWashMaxDriftPercent = 1.5;
+    config.volumeStrategy.idleWashMaxExecSpreadPercent = 5;
+
+    (strategy as any).lastRealFillAt = Date.now() - 10_000;
+
+    const decision = (strategy as any).resolveWashTradeDecision({
+      canRunWashTradesByDrift: false,
+      dexCexDriftPercent: 20,
+      executableSpreadPercent: 20,
+      adverseBuyGuardActive: false,
+      forceBuyPause: false,
+      dynamicWashTradePairs: 2,
+      relaxedWashGates: true,
+    });
+
+    expect(decision.enabled).toBe(true);
+    expect(decision.maxPairs).toBe(2);
+    expect(decision.reason).toContain('SELF_TRADE_MODE=auto');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+    config.volumeStrategy.idleWashEnableAfterMs = originalIdleMs;
+    config.volumeStrategy.idleWashMaxPairsPerCycle = originalMaxPairs;
+    config.volumeStrategy.idleWashRequireLowDrift = originalRequireLowDrift;
+    config.volumeStrategy.idleWashMaxDriftPercent = originalMaxDrift;
+    config.volumeStrategy.idleWashMaxExecSpreadPercent = originalMaxSpread;
+  }
+});
+
+it('keeps relaxed wash-trade gating blocked by force pause and adverse-fill safeguards', () => {
+  const mockExchange = {
+    cancelOrder: jest.fn().mockResolvedValue(undefined),
+  };
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const config = require('../../config').config;
+
+  const originalMode = config.volumeStrategy.selfTradeMode;
+  const originalIdleMs = config.volumeStrategy.idleWashEnableAfterMs;
+
+  try {
+    config.volumeStrategy.selfTradeMode = 'auto';
+    config.volumeStrategy.idleWashEnableAfterMs = 1000;
+
+    (strategy as any).lastRealFillAt = Date.now() - 10_000;
+
+    const decision = (strategy as any).resolveWashTradeDecision({
+      canRunWashTradesByDrift: false,
+      dexCexDriftPercent: 20,
+      executableSpreadPercent: 20,
+      adverseBuyGuardActive: true,
+      forceBuyPause: true,
+      dynamicWashTradePairs: 2,
+      relaxedWashGates: true,
+    });
+
+    expect(decision.enabled).toBe(false);
+    expect(decision.maxPairs).toBe(0);
+    expect(decision.reason).toContain('FORCE_BUY_PAUSE=true');
+  } finally {
+    config.volumeStrategy.selfTradeMode = originalMode;
+    config.volumeStrategy.idleWashEnableAfterMs = originalIdleMs;
+  }
+});
+
 it('blocks idle auto wash when drift guard fails even after idle window elapsed', () => {
   const mockExchange = {
     cancelOrder: jest.fn().mockResolvedValue(undefined),

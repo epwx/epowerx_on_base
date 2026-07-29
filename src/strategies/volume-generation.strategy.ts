@@ -351,6 +351,7 @@ export class VolumeGenerationStrategy {
     adverseBuyGuardActive: boolean;
     forceBuyPause: boolean;
     dynamicWashTradePairs: number;
+    relaxedWashGates?: boolean;
   }): { enabled: boolean; maxPairs: number; reason: string } {
     const mode = this.getSelfTradeMode();
     const now = Date.now();
@@ -368,6 +369,26 @@ export class VolumeGenerationStrategy {
     if (params.adverseBuyGuardActive) {
       this.washAutoEnabled = false;
       return { enabled: false, maxPairs: 0, reason: 'adverse-fill buy guard active' };
+    }
+
+    if (params.relaxedWashGates) {
+      const idleMs = now - this.lastRealFillAt;
+      const idleThresholdMs = this.getIdleWashEnableAfterMs();
+      if (idleMs < idleThresholdMs) {
+        this.washAutoEnabled = false;
+        return {
+          enabled: false,
+          maxPairs: 0,
+          reason: `waiting for idle window (${Math.ceil((idleThresholdMs - idleMs) / 1000)}s remaining)`,
+        };
+      }
+
+      this.washAutoEnabled = true;
+      return {
+        enabled: true,
+        maxPairs: Math.min(Math.max(params.dynamicWashTradePairs, 0), this.getIdleWashMaxPairsPerCycle()),
+        reason: 'SELF_TRADE_MODE=auto enabled after idle window (relaxed wash gates)',
+      };
     }
 
     if (!params.canRunWashTradesByDrift) {
@@ -486,6 +507,56 @@ export class VolumeGenerationStrategy {
       multiplier: defensiveMultiplier,
       regime: 'defensive',
       reason: `Auto-mode defensive risk sizing (${defensiveMultiplier.toFixed(2)}x)`
+    };
+  }
+
+  /**
+   * Evaluate gate for wash-trade-only buy orders (same-price self-matching).
+   * Wash trades have relaxed requirements:
+   * - No executable depth requirement (they self-match, don't need external liquidity)
+   * - No drift/spread gates (both orders at same price, zero external price risk)
+   * Only checks: idle window, adverse fill guard, force pause, mode enabled
+   */
+  private evaluateWashTradeBuyGate(
+    selfTradeMode: SelfTradeMode,
+    forceBuyPause: boolean,
+    adverseBuyGuardActive: boolean,
+    isIdleWindowActive: boolean
+  ): {
+    allowWashBuys: boolean;
+    reason: string;
+  } {
+    if (selfTradeMode === 'off') {
+      return {
+        allowWashBuys: false,
+        reason: 'SELF_TRADE_MODE=off',
+      };
+    }
+
+    if (forceBuyPause) {
+      return {
+        allowWashBuys: false,
+        reason: 'FORCE_BUY_PAUSE=true',
+      };
+    }
+
+    if (adverseBuyGuardActive) {
+      return {
+        allowWashBuys: false,
+        reason: 'adverse-fill guard active',
+      };
+    }
+
+    if (!isIdleWindowActive && selfTradeMode === 'auto') {
+      return {
+        allowWashBuys: false,
+        reason: 'waiting for idle window',
+      };
+    }
+
+    return {
+      allowWashBuys: true,
+      reason: 'Wash-trade buy gate passed (relaxed: no depth/drift/spread gates)',
     };
   }
 
@@ -1452,6 +1523,12 @@ export class VolumeGenerationStrategy {
       const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
       const forceBuyPause = this.getForceBuyPause();
       const buyReactivationMode = this.getBuyReactivationMode();
+      const washTradeBuyGate = this.evaluateWashTradeBuyGate(
+        this.getSelfTradeMode(),
+        forceBuyPause,
+        adverseBuyGuard.active,
+        Date.now() - this.lastRealFillAt >= this.getIdleWashEnableAfterMs()
+      );
       const buyReactivationGate = this.evaluateBuyReactivationGate(
         buyReactivationMode,
         placementPriceSource,
@@ -1870,6 +1947,7 @@ export class VolumeGenerationStrategy {
         adverseBuyGuardActive: adverseBuyGuard.active,
         forceBuyPause,
         dynamicWashTradePairs,
+        relaxedWashGates: this.getSelfTradeMode() === 'auto' && washTradeBuyGate.allowWashBuys,
       });
       const washFeatureEnabled = washDecision.enabled;
       const washTradePairs = washFeatureEnabled
@@ -2093,13 +2171,27 @@ export class VolumeGenerationStrategy {
 
   protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
+      const washTradeBuyGate = isWashTrade
+        ? this.evaluateWashTradeBuyGate(
+            this.getSelfTradeMode(),
+            this.getForceBuyPause(),
+            false,
+            Number.isFinite(this.lastRealFillAt) && Date.now() - this.lastRealFillAt >= this.getIdleWashEnableAfterMs()
+          )
+        : null;
+
       if (this.getForceBuyPause()) {
         logger.info('⏭️  Skipping buy order: FORCE_BUY_PAUSE=true.');
         return;
       }
 
-      if (this.getBuyReactivationMode() === 'off') {
+      if (this.getBuyReactivationMode() === 'off' && !isWashTrade) {
         logger.info('⏭️  Skipping buy order: BUY_REACTIVATION_MODE=off.');
+        return;
+      }
+
+      if (isWashTrade && washTradeBuyGate && !washTradeBuyGate.allowWashBuys) {
+        logger.info(`⏭️  Skipping wash-trade buy order: ${washTradeBuyGate.reason}`);
         return;
       }
 
