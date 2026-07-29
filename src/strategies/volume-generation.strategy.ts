@@ -1065,7 +1065,18 @@ export class VolumeGenerationStrategy {
       );
     } catch (error: any) {
       const message = error?.message || 'unknown';
-      logger.warn(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
+      const isOrderAlreadyGone = message.includes('Order not found or already completed');
+      const isExpectedWashVanish = isOrderAlreadyGone && this.isTrackedWashOrder(orderId) && this.getSelfTradeMode() === 'on';
+
+      if (isExpectedWashVanish) {
+        logger.info(
+          `ℹ️  [POST-PLACE] ${side} ${orderId} already disappeared from pending in SELF_TRADE_MODE=on; reconciliation will attribute this wash leg.`
+        );
+      } else if (isOrderAlreadyGone) {
+        logger.info(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
+      } else {
+        logger.warn(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
+      }
     }
   }
 
@@ -2612,12 +2623,12 @@ export class VolumeGenerationStrategy {
           }
         }
 
-        logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
         if (isWashTrade) {
           logger.info(
-            `ℹ️  Skipping immediate no-fill diagnostics for wash order ${orderId}; awaiting disappeared-order reconciliation.`
+            `ℹ️  No immediate fill visible for wash order ${orderId} (${side}) after 1s; deferring attribution to disappeared-order reconciliation.`
           );
         } else {
+          logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
           await this.logNoFillDiagnostics(orderId, side);
         }
       }

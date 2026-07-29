@@ -492,7 +492,7 @@ export class BiconomyExchangeService {
       const message = error?.message || 'Failed to get order';
 
       if (message.includes('Order not found or already completed')) {
-        logger.info(`Order ${orderId} is no longer pending on the exchange.`);
+        logger.debug(`Order ${orderId} is no longer pending on the exchange.`);
       } else {
         logger.error(`Failed to get order ${orderId}:`, error);
       }
