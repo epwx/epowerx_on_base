@@ -3164,4 +3164,74 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).activeOrders.has('retry-order-2')).toBe(false);
     expect((strategy as any).disappearedOrderRetryState.has('retry-order-2')).toBe(false);
   });
+
+  it('settles disappeared wash pair as synthetic fill in SELF_TRADE_MODE=on', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockRejectedValue(new Error('Order not found or already completed')),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    jest.spyOn(strategy as any, 'getSelfTradeMode').mockReturnValue('on');
+
+    const buyOrderId = 'wash-disappear-buy-1';
+    const sellOrderId = 'wash-disappear-sell-1';
+    const pairAmount = 10;
+    const pairPrice = 1;
+    const maxAttempts = (VolumeGenerationStrategy as any).DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS;
+
+    (strategy as any).activeOrders.set(buyOrderId, {
+      orderId: buyOrderId,
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: pairPrice,
+      amount: pairAmount,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    (strategy as any).activeOrders.set(sellOrderId, {
+      orderId: sellOrderId,
+      symbol: 'EPWXUSDT',
+      side: 'SELL',
+      type: 'LIMIT',
+      price: pairPrice,
+      amount: pairAmount,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    (strategy as any).washTradePairsActive.push({
+      buyOrderId,
+      sellOrderId,
+      amount: pairAmount,
+      price: pairPrice,
+    });
+    (strategy as any).washSubmittedOrderIds.add(buyOrderId);
+    (strategy as any).washSubmittedOrderIds.add(sellOrderId);
+    (strategy as any).disappearedOrderRetryState.set(buyOrderId, { attempts: maxAttempts, nextRetryAt: 0 });
+    (strategy as any).disappearedOrderRetryState.set(sellOrderId, { attempts: maxAttempts, nextRetryAt: 0 });
+
+    await (strategy as any).updateOrderStatus();
+
+    expect((strategy as any).activeOrders.has(buyOrderId)).toBe(false);
+    expect((strategy as any).activeOrders.has(sellOrderId)).toBe(false);
+    expect((strategy as any).washTradePairsActive.length).toBe(0);
+    expect((strategy as any).volumeStats.totalVolume).toBe(20);
+    expect((strategy as any).volumeStats.buyVolume).toBe(10);
+    expect((strategy as any).volumeStats.sellVolume).toBe(10);
+    expect((strategy as any).profitStats.washTrades).toBe(2);
+    expect((strategy as any).currentPosition).toBe(0);
+  });
 });

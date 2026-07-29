@@ -2721,6 +2721,10 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
+          if (this.trySettleDisappearedWashPair(orderId)) {
+            continue;
+          }
+
           await this.logOrderDisappearance(orderId);
           logger.info(`Order ${orderId} not found or already completed after retry window. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
@@ -2844,6 +2848,66 @@ export class VolumeGenerationStrategy {
     this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
 
     logger.info(`🔁 Settled paired wash ${counterpartSide} leg for ${counterpartOrderId} after ${side} fill on ${orderId}.`);
+  }
+
+  private trySettleDisappearedWashPair(orderId: string): boolean {
+    if (this.getSelfTradeMode() !== 'on') {
+      return false;
+    }
+
+    const pair = this.washTradePairsActive.find(candidate =>
+      candidate.buyOrderId === orderId || candidate.sellOrderId === orderId
+    );
+
+    if (!pair) {
+      return false;
+    }
+
+    if (this.settledWashOrderIds.has(pair.buyOrderId) || this.settledWashOrderIds.has(pair.sellOrderId)) {
+      return false;
+    }
+
+    const buyRetryAttempts = this.disappearedOrderRetryState.get(pair.buyOrderId)?.attempts ?? 0;
+    const sellRetryAttempts = this.disappearedOrderRetryState.get(pair.sellOrderId)?.attempts ?? 0;
+    const buyMissingSignal = !this.activeOrders.has(pair.buyOrderId) || buyRetryAttempts > 0;
+    const sellMissingSignal = !this.activeOrders.has(pair.sellOrderId) || sellRetryAttempts > 0;
+
+    if (!buyMissingSignal || !sellMissingSignal) {
+      return false;
+    }
+
+    const settledAmount = quantizeToStepSize(Math.max(pair.amount, 0), this.stepSize);
+    const settledPrice = pair.price;
+    if (!Number.isFinite(settledAmount) || settledAmount <= 0 || !Number.isFinite(settledPrice) || settledPrice <= 0) {
+      return false;
+    }
+
+    const settledVolumePerLegUsd = settledAmount * settledPrice;
+    this.volumeStats.totalVolume += settledVolumePerLegUsd * 2;
+    this.volumeStats.buyVolume += settledVolumePerLegUsd;
+    this.volumeStats.sellVolume += settledVolumePerLegUsd;
+    this.profitStats.washTrades += 2;
+
+    this.applyPositionForFilledOrder(pair.buyOrderId, 'BUY', settledAmount);
+    this.applyPositionForFilledOrder(pair.sellOrderId, 'SELL', settledAmount);
+    this.settledWashOrderIds.add(pair.buyOrderId);
+    this.settledWashOrderIds.add(pair.sellOrderId);
+
+    for (const settledOrderId of [pair.buyOrderId, pair.sellOrderId]) {
+      this.activeOrders.delete(settledOrderId);
+      this.orderPrices.delete(settledOrderId);
+      this.washSubmittedOrderIds.delete(settledOrderId);
+      this.washConfirmedBuyCreditedByOrder.delete(settledOrderId);
+      this.disappearedOrderRetryState.delete(settledOrderId);
+    }
+
+    this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
+
+    logger.warn(
+      `🧩 [WASH-RECON] Settled disappeared wash pair BUY ${pair.buyOrderId} / SELL ${pair.sellOrderId} as synthetic matched fill in SELF_TRADE_MODE=on: ${Math.floor(settledAmount).toLocaleString()} EPWX @ ${settledPrice.toExponential(4)}.`
+    );
+
+    return true;
   }
 
   private async captureTradesForCompletedOrder(orderId: string): Promise<boolean> {
