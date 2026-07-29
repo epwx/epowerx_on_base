@@ -2010,11 +2010,16 @@ export class VolumeGenerationStrategy {
         }
         logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
-        const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
+        const placedBuyAmount = buyOrderId ? this.activeOrders.get(buyOrderId)?.amount : undefined;
+        const pairedSellAmount =
+          typeof placedBuyAmount === 'number' && Number.isFinite(placedBuyAmount) && placedBuyAmount > 0
+            ? placedBuyAmount
+            : washAmount;
+        const sellOrderId = await this.placeSellOrder(matchPrice, pairedSellAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
-          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
-          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${amount.toFixed(2)} EPWX)`);
+          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount: pairedSellAmount });
+          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${pairedSellAmount.toFixed(2)} EPWX)`);
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
