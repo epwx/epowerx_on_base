@@ -1435,7 +1435,8 @@ export class VolumeGenerationStrategy {
       sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
 
-      const bookAlreadyFull = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+      let bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+      const bookAlreadyFull = bookSeeded;
       if (bookAlreadyFull && cleanupCancelledCount === 0) {
         const refreshPerSide = Math.min(
           VolumeGenerationStrategy.QUOTE_CHURN_REFRESH_PER_SIDE,
@@ -1678,8 +1679,45 @@ export class VolumeGenerationStrategy {
       }
       const allowSparseSellRecovery = !canPlaceBuysThisCycle;
 
+      const remainingPlacementSlots = Math.max(maxPlacementsPerCycle - placementsThisCycle, 0);
+      const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
+      const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
+      const washPairsByReservedBudget = washReservedPlacements > 0
+        ? Math.floor(reservedWashSlotsLeft / 2)
+        : Number.POSITIVE_INFINITY;
+      const washDecision = this.resolveWashTradeDecision({
+        canRunWashTradesByDrift,
+        dexCexDriftPercent,
+        executableSpreadPercent,
+        adverseBuyGuardActive: adverseBuyGuard.active,
+        forceBuyPause,
+        dynamicWashTradePairs,
+        relaxedWashGates: this.getSelfTradeMode() === 'auto' && washTradeBuyGate.allowWashBuys,
+      });
+      const washFeatureEnabled = washDecision.enabled;
+      const washTradePairs = washFeatureEnabled
+        ? Math.min(
+            washDecision.maxPairs,
+            Math.max(washPairsByRemainingSlots, 0),
+            Number.isFinite(washPairsByReservedBudget) ? Math.max(washPairsByReservedBudget, 0) : Number.POSITIVE_INFINITY
+          )
+        : 0;
+      const canAttemptWashTradesThisCycle =
+        washFeatureEnabled &&
+        washTradePairs > 0 &&
+        canPlaceBuysThisCycle &&
+        buyReactivationGate.allowBuys &&
+        washTradeBuyGate.allowWashBuys;
+      const shouldPrioritizeWashPairsOverTopTouch = canAttemptWashTradesThisCycle;
+
+      if (shouldPrioritizeWashPairsOverTopTouch) {
+        logger.info(`🧼 Prioritizing ${washTradePairs} wash pair(s) over regular placements this cycle.`);
+      } else if (washFeatureEnabled && washTradePairs > 0) {
+        logger.info(`⏭️  Wash trades are enabled but skipped this cycle because buy placements are gated: ${buyReactivationGate.reason}`);
+      }
+
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
-      if (hasExecutableTouchLevels) {
+      if (hasExecutableTouchLevels && !shouldPrioritizeWashPairsOverTopTouch) {
         const passiveTopTouchPrices = this.selectPassiveTopTouchPrices(executableBestBid, executableBestAsk);
         const topTouchBaseUsd = Math.max(
           this.getMinimumOrderUsdTarget(),
@@ -1776,7 +1814,7 @@ export class VolumeGenerationStrategy {
         logger.info('⏭️  Skipping buy-depth additions this cycle: FORCE_BUY_PAUSE=true.');
       }
 
-      if (buyDepthShortfall > 0 && canPlaceBuysThisCycle) {
+      if (!shouldPrioritizeWashPairsOverTopTouch && buyDepthShortfall > 0 && canPlaceBuysThisCycle) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in ${buyBandLabel} of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
@@ -1818,7 +1856,7 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
+      if (!shouldPrioritizeWashPairsOverTopTouch && sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
         if (sellPlacementMode === 'EXCHANGE_BAND_FALLBACK') {
           logger.info(
             `🔁 Using exchange-band fallback sell pricing this cycle to keep sell depth building inside the latest-price band.`
@@ -1868,10 +1906,14 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
-      const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+      bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+
+      if (shouldPrioritizeWashPairsOverTopTouch) {
+        logger.info('⏭️  Skipping regular book-depth placements while wash pairs are prioritized this cycle.');
+      }
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
+      if (!shouldPrioritizeWashPairsOverTopTouch && buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'BUY', i);
@@ -1898,7 +1940,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
+      if (!shouldPrioritizeWashPairsOverTopTouch && sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
@@ -1936,40 +1978,22 @@ export class VolumeGenerationStrategy {
       }
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
-      const remainingPlacementSlots = Math.max(maxPlacementsPerCycle - placementsThisCycle, 0);
-      const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
-      const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
-      const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
-      const washDecision = this.resolveWashTradeDecision({
-        canRunWashTradesByDrift,
-        dexCexDriftPercent,
-        executableSpreadPercent,
-        adverseBuyGuardActive: adverseBuyGuard.active,
-        forceBuyPause,
-        dynamicWashTradePairs,
-        relaxedWashGates: this.getSelfTradeMode() === 'auto' && washTradeBuyGate.allowWashBuys,
-      });
-      const washFeatureEnabled = washDecision.enabled;
-      const washTradePairs = washFeatureEnabled
-        ? Math.min(
-            washDecision.maxPairs,
-            Math.max(washPairsByRemainingSlots, 0),
-            Math.max(washPairsByReservedBudget, 0)
-          )
-        : 0;
       this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
         !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
       );
       if (!washFeatureEnabled) {
         logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
-      if (!bookSeeded) {
-        logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
+      if (!washFeatureEnabled) {
+        logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
-      if (bookSeeded && washTradePairs === 0) {
+      if (washFeatureEnabled && washTradePairs === 0) {
         logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
       }
-      for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
+      if (washFeatureEnabled && washTradePairs > 0 && !canAttemptWashTradesThisCycle) {
+        logger.info(`⏭️  Wash trades are enabled but skipped this cycle because buy-side placement is gated: ${buyReactivationGate.reason}`);
+      }
+      for (let i = 0; i < washTradePairs && placementsThisCycle <= maxPlacementsPerCycle - 2 && canAttemptWashTradesThisCycle; i++) {
         const matchPrice = washPriceReference;
         const washOrderUsdTarget = this.getDynamicOrderUsdTarget(washSafeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
