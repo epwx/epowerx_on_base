@@ -277,6 +277,10 @@ Use these prebuilt templates directly:
   - Use when executable depth remains near zero and auto reactivation keeps stalling both buy recovery and wash fallback.
   - Typical use: continuity-first dislocated runs where BUY_REACTIVATION_MODE=on is needed to avoid auto-gate deadlock.
 
+- .env.example.mode-hybrid-profit-idle-wash-dislocated-v4
+  - Use when v3 still under-delivers wash completions because matched SELL legs keep failing executable minimum checks.
+  - Typical use: dislocated venue behavior where forced SELF_TRADE_MODE=on provides more reliable same-cycle wash pairing.
+
 - profiles/idle-wash.env
   - Use when market is quiet and you want automatic wash trading to seed volume.
   - Wash trading activates after 1 minute of no real fills (if drift < 3% and spread < 8%).
@@ -357,6 +361,11 @@ cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idl
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idle-wash-dislocated-v3 .env && pm2 restart epwx-bot --update-env
 ```
 
+- Switch to hybrid profit + idle wash (dislocated market variant v4, forced self-trade pairing):
+```bash
+cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idle-wash-dislocated-v4 .env && pm2 restart epwx-bot --update-env
+```
+
 - Switch to aggressive-lite step2:
 ```bash
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-aggressive-lite-step2 .env && pm2 restart epwx-bot --update-env
@@ -420,6 +429,7 @@ Common profile names:
 - hybrid-profit-idle-wash-dislocated
 - hybrid-profit-idle-wash-dislocated-v2
 - hybrid-profit-idle-wash-dislocated-v3
+- hybrid-profit-idle-wash-dislocated-v4
 - aggressive-lite-step2
 - aggressive-lite-step3
 - aggressive-on
