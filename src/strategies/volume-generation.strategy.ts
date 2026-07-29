@@ -2575,6 +2575,33 @@ export class VolumeGenerationStrategy {
           return;
         }
 
+        if (isWashTrade) {
+          const maxLateAttempts = 3;
+          for (let attempt = 1; attempt <= maxLateAttempts; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const lateCapturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
+            if (lateCapturedAnyTrade) {
+              logger.info(
+                `ℹ️  Captured delayed ${side} wash fill for ${orderId} on reconciliation attempt ${attempt}/${maxLateAttempts}.`
+              );
+              return;
+            }
+
+            const lateFilledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
+            if (lateFilledFromOrderState > 0) {
+              logger.info(
+                `ℹ️  Delayed pending-order snapshot shows ${side} ${orderId} has ${Math.floor(lateFilledFromOrderState).toLocaleString()} filled on reconciliation attempt ${attempt}/${maxLateAttempts}.`
+              );
+              if (side === 'BUY') {
+                this.creditConfirmedWashBuyFills(orderId, lateFilledFromOrderState);
+              }
+              this.applyPositionForFilledOrder(orderId, side, lateFilledFromOrderState);
+              return;
+            }
+          }
+        }
+
         logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
         await this.logNoFillDiagnostics(orderId, side);
       }

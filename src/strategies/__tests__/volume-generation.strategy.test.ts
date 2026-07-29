@@ -3008,6 +3008,67 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).washConfirmedBuyCreditedByOrder.get('wash-buy-late-1')).toBe(7);
   });
 
+  it('reconciles delayed wash BUY fills before emitting no-fill diagnostics', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest
+        .fn()
+        .mockResolvedValueOnce({
+          orderId: 'wash-buy-late-2',
+          symbol: 'EPWXUSDT',
+          side: 'BUY',
+          type: 'LIMIT',
+          price: 1,
+          amount: 10,
+          filled: 0,
+          status: 'NEW',
+          timestamp: Date.now(),
+          fee: 0,
+        })
+        .mockResolvedValueOnce({
+          orderId: 'wash-buy-late-2',
+          symbol: 'EPWXUSDT',
+          side: 'BUY',
+          type: 'LIMIT',
+          price: 1,
+          amount: 10,
+          filled: 5,
+          status: 'NEW',
+          timestamp: Date.now(),
+          fee: 0,
+        }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    (strategy as any).activeOrders.set('wash-buy-late-2', {
+      orderId: 'wash-buy-late-2',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    (strategy as any).washSubmittedOrderIds.add('wash-buy-late-2');
+
+    const diagnosticsSpy = jest.spyOn(strategy as any, 'logNoFillDiagnostics').mockResolvedValue(undefined);
+
+    await (strategy as any).pollOrderFills('wash-buy-late-2', 'BUY', true);
+
+    expect(diagnosticsSpy).not.toHaveBeenCalled();
+    expect((strategy as any).washConfirmedBuyCarryAmount).toBe(5);
+    expect((strategy as any).washConfirmedBuyCreditedByOrder.get('wash-buy-late-2')).toBe(5);
+  });
+
   it('credits only incremental confirmed wash BUY fills into carry buffer', () => {
     const mockExchange = {
       getBalances: jest.fn(),
