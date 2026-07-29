@@ -91,6 +91,7 @@ export class VolumeGenerationStrategy {
   private washAutoEnabled: boolean = false;
   private washConfirmedBuyCarryAmount: number = 0;
   private washConfirmedBuyCreditedByOrder: Map<string, number> = new Map();
+  private washSubmittedOrderIds: Set<string> = new Set();
   private disappearedOrderRetryState: Map<string, { attempts: number; nextRetryAt: number }> = new Map();
 
   constructor(exchange?: BiconomyExchangeService) {
@@ -321,6 +322,8 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.delete(orderId);
       this.orderPrices.delete(orderId);
+      this.washSubmittedOrderIds.delete(orderId);
+      this.washConfirmedBuyCreditedByOrder.delete(orderId);
       this.settledWashOrderIds.add(orderId);
     }
 
@@ -2341,6 +2344,9 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
+      if (isWashTrade) {
+        this.washSubmittedOrderIds.add(order.orderId);
+      }
       this.volumeStats.orderCount++;
       logger.info(`✅ Buy order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'BUY', price);
@@ -2426,6 +2432,9 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
+      if (isWashTrade) {
+        this.washSubmittedOrderIds.add(order.orderId);
+      }
       this.volumeStats.orderCount++;
       logger.info(`✅ Sell order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'SELL', price);
@@ -2489,6 +2498,14 @@ export class VolumeGenerationStrategy {
     return incrementalConfirmed;
   }
 
+  private isTrackedWashOrder(orderId: string): boolean {
+    if (this.washSubmittedOrderIds.has(orderId)) {
+      return true;
+    }
+
+    return this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
+  }
+
   private async getFilledAmountFromOrderState(orderId: string): Promise<number> {
     const exchangeAny = this.exchange as any;
 
@@ -2528,6 +2545,9 @@ export class VolumeGenerationStrategy {
         this.recordTrades(trades, orderId, isWashTrade, side);
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
         const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
+        if (isWashTrade && side === 'BUY') {
+          this.creditConfirmedWashBuyFills(orderId, filledAmount);
+        }
         this.applyPositionForFilledOrder(orderId, side, filledAmount);
         if (isWashTrade) {
           this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
@@ -2538,6 +2558,9 @@ export class VolumeGenerationStrategy {
           logger.info(
             `ℹ️  Pending-order snapshot shows ${side} ${orderId} has ${Math.floor(filledFromOrderState).toLocaleString()} filled even though recent trades are not yet visible.`
           );
+          if (isWashTrade && side === 'BUY') {
+            this.creditConfirmedWashBuyFills(orderId, filledFromOrderState);
+          }
           this.applyPositionForFilledOrder(orderId, side, filledFromOrderState);
           return;
         }
@@ -2594,16 +2617,11 @@ export class VolumeGenerationStrategy {
             this.currentPosition -= order.filled;
           }
 
-          const trackedAsWashPair = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
-          let isRealFill = true;
-
-          if (!config.volumeStrategy.selfTradeEnabled) {
-            isRealFill = true;
-          } else if (trackedAsWashPair) {
-            isRealFill = false;
-          } else {
-            isRealFill = true;
+          const trackedAsWashOrder = this.isTrackedWashOrder(orderId);
+          if (trackedAsWashOrder && order.side === 'BUY' && order.filled > 0) {
+            this.creditConfirmedWashBuyFills(orderId, order.filled);
           }
+          const isRealFill = !trackedAsWashOrder;
 
           if (order.filled > 0 && !this.pnlSettledOrderIds.has(orderId)) {
             const realizedPnl = this.applyEconomicFill(order.side, order.filled, order.price, !isRealFill);
@@ -2624,11 +2642,13 @@ export class VolumeGenerationStrategy {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.washSubmittedOrderIds.delete(orderId);
           this.disappearedOrderRetryState.delete(orderId);
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.washSubmittedOrderIds.delete(orderId);
           this.disappearedOrderRetryState.delete(orderId);
         }
       } catch (error: any) {
@@ -2650,6 +2670,7 @@ export class VolumeGenerationStrategy {
             this.activeOrders.delete(orderId);
             this.orderPrices.delete(orderId);
             this.washConfirmedBuyCreditedByOrder.delete(orderId);
+            this.washSubmittedOrderIds.delete(orderId);
             this.disappearedOrderRetryState.delete(orderId);
             continue;
           }
@@ -2673,6 +2694,7 @@ export class VolumeGenerationStrategy {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
           this.washConfirmedBuyCreditedByOrder.delete(orderId);
+          this.washSubmittedOrderIds.delete(orderId);
           this.disappearedOrderRetryState.delete(orderId);
           continue;
         }
@@ -2783,6 +2805,8 @@ export class VolumeGenerationStrategy {
     this.applyPositionForFilledOrder(counterpartOrderId, counterpartSide, filledAmount);
     this.settledWashOrderIds.add(orderId);
     this.settledWashOrderIds.add(counterpartOrderId);
+    this.washSubmittedOrderIds.delete(orderId);
+    this.washSubmittedOrderIds.delete(counterpartOrderId);
     this.activeOrders.delete(counterpartOrderId);
     this.orderPrices.delete(counterpartOrderId);
     this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
@@ -2798,13 +2822,16 @@ export class VolumeGenerationStrategy {
       }
 
       const trackedOrder = this.activeOrders.get(orderId);
-      const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
+      const isWashTrade = this.isTrackedWashOrder(orderId);
       const trackedOrderSide = trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined);
       this.recordTrades(trades, orderId, isWashTrade, trackedOrderSide);
 
       if (trackedOrderSide) {
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
         const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
+        if (isWashTrade && trackedOrderSide === 'BUY') {
+          this.creditConfirmedWashBuyFills(orderId, filledAmount);
+        }
         this.applyPositionForFilledOrder(orderId, trackedOrderSide, filledAmount);
         if (isWashTrade) {
           this.settlePairedWashOrder(orderId, trackedOrderSide, filledAmount, filledVolumeUSD);

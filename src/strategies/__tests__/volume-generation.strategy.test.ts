@@ -2846,6 +2846,50 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).currentPosition).toBe(3);
   });
 
+  it('credits wash carry when pending snapshot reports delayed BUY fills', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockResolvedValue({
+        orderId: 'wash-buy-late-1',
+        symbol: 'EPWXUSDT',
+        side: 'BUY',
+        type: 'LIMIT',
+        price: 1,
+        amount: 10,
+        filled: 7,
+        status: 'NEW',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    (strategy as any).activeOrders.set('wash-buy-late-1', {
+      orderId: 'wash-buy-late-1',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    (strategy as any).washSubmittedOrderIds.add('wash-buy-late-1');
+
+    await (strategy as any).pollOrderFills('wash-buy-late-1', 'BUY', true);
+
+    expect((strategy as any).washConfirmedBuyCarryAmount).toBe(7);
+    expect((strategy as any).washConfirmedBuyCreditedByOrder.get('wash-buy-late-1')).toBe(7);
+  });
+
   it('credits only incremental confirmed wash BUY fills into carry buffer', () => {
     const mockExchange = {
       getBalances: jest.fn(),
