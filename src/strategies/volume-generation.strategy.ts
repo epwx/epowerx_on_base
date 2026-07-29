@@ -87,6 +87,8 @@ export class VolumeGenerationStrategy {
   private lastRealFillAt: number = Date.now();
   private washAutoCooldownUntil: number = 0;
   private washAutoEnabled: boolean = false;
+  private washConfirmedBuyCarryAmount: number = 0;
+  private washConfirmedBuyCreditedByOrder: Map<string, number> = new Map();
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -2043,11 +2045,15 @@ export class VolumeGenerationStrategy {
           ? await this.getConfirmedFilledAmount(buyOrderId)
           : 0;
         const confirmedBuyFillCappedAmount = quantizeToStepSize(Math.max(confirmedBuyFillAmount, 0), this.stepSize);
-        const pairedSellAmount = Math.min(pairedSellAmountFromPlacement, confirmedBuyFillCappedAmount);
+        const newlyConfirmedBuyFillAmount = buyOrderId
+          ? this.creditConfirmedWashBuyFills(buyOrderId, confirmedBuyFillCappedAmount)
+          : 0;
+        const carrySellableAmount = quantizeToStepSize(Math.max(this.washConfirmedBuyCarryAmount, 0), this.stepSize);
+        const pairedSellAmount = Math.min(pairedSellAmountFromPlacement, carrySellableAmount);
 
         if (!this.isValidOrderAmount(pairedSellAmount, matchPrice)) {
           logger.info(
-            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX are below executable minimum.`
+            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX (new +${newlyConfirmedBuyFillAmount.toLocaleString()}, carry ${carrySellableAmount.toLocaleString()}) are below executable minimum.`
           );
           await new Promise(resolve => setTimeout(resolve, 100));
           continue;
@@ -2056,6 +2062,7 @@ export class VolumeGenerationStrategy {
         const sellOrderId = await this.placeSellOrder(matchPrice, pairedSellAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
+          this.washConfirmedBuyCarryAmount = Math.max(this.washConfirmedBuyCarryAmount - pairedSellAmount, 0);
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount: pairedSellAmount });
           logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${pairedSellAmount.toFixed(2)} EPWX)`);
         }
@@ -2460,6 +2467,28 @@ export class VolumeGenerationStrategy {
     return 0;
   }
 
+  private creditConfirmedWashBuyFills(orderId: string, confirmedFilledAmount: number): number {
+    if (!orderId) {
+      return 0;
+    }
+
+    const quantizedConfirmed = quantizeToStepSize(Math.max(confirmedFilledAmount, 0), this.stepSize);
+    if (!Number.isFinite(quantizedConfirmed) || quantizedConfirmed <= 0) {
+      return 0;
+    }
+
+    const previouslyCredited = this.washConfirmedBuyCreditedByOrder.get(orderId) ?? 0;
+    const incrementalConfirmed = quantizeToStepSize(Math.max(quantizedConfirmed - previouslyCredited, 0), this.stepSize);
+
+    if (!Number.isFinite(incrementalConfirmed) || incrementalConfirmed <= 0) {
+      return 0;
+    }
+
+    this.washConfirmedBuyCreditedByOrder.set(orderId, previouslyCredited + incrementalConfirmed);
+    this.washConfirmedBuyCarryAmount += incrementalConfirmed;
+    return incrementalConfirmed;
+  }
+
   private async getFilledAmountFromOrderState(orderId: string): Promise<number> {
     const exchangeAny = this.exchange as any;
 
@@ -2583,9 +2612,11 @@ export class VolumeGenerationStrategy {
           
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
+          this.washConfirmedBuyCreditedByOrder.delete(orderId);
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
+          this.washConfirmedBuyCreditedByOrder.delete(orderId);
         }
       } catch (error: any) {
         if (error.message && error.message.includes('Service is not available')) {
@@ -2608,6 +2639,7 @@ export class VolumeGenerationStrategy {
           logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
+          this.washConfirmedBuyCreditedByOrder.delete(orderId);
           continue;
         }
         logger.error('Error updating order status:', error);

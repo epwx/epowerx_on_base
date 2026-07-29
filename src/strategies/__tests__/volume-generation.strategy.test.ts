@@ -2845,4 +2845,27 @@ describe('Confirmed wash fill polling', () => {
     expect(diagnosticsSpy).not.toHaveBeenCalled();
     expect((strategy as any).currentPosition).toBe(3);
   });
+
+  it('credits only incremental confirmed wash BUY fills into carry buffer', () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn(),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    const firstCredit = (strategy as any).creditConfirmedWashBuyFills('buy-order-5', 100);
+    const secondCredit = (strategy as any).creditConfirmedWashBuyFills('buy-order-5', 100);
+    const thirdCredit = (strategy as any).creditConfirmedWashBuyFills('buy-order-5', 150);
+
+    expect(firstCredit).toBe(100);
+    expect(secondCredit).toBe(0);
+    expect(thirdCredit).toBe(50);
+    expect((strategy as any).washConfirmedBuyCarryAmount).toBe(150);
+    expect((strategy as any).washConfirmedBuyCreditedByOrder.get('buy-order-5')).toBe(150);
+  });
 });
