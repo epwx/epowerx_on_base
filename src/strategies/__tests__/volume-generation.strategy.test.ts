@@ -3234,4 +3234,65 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).profitStats.washTrades).toBe(2);
     expect((strategy as any).currentPosition).toBe(0);
   });
+
+  it('settles disappeared wash pair early after both legs register first missing signal', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockRejectedValue(new Error('Order not found or already completed')),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    jest.spyOn(strategy as any, 'getSelfTradeMode').mockReturnValue('on');
+
+    const buyOrderId = 'wash-disappear-buy-early';
+    const sellOrderId = 'wash-disappear-sell-early';
+
+    (strategy as any).activeOrders.set(buyOrderId, {
+      orderId: buyOrderId,
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 12,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    (strategy as any).activeOrders.set(sellOrderId, {
+      orderId: sellOrderId,
+      symbol: 'EPWXUSDT',
+      side: 'SELL',
+      type: 'LIMIT',
+      price: 1,
+      amount: 12,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    (strategy as any).washTradePairsActive.push({
+      buyOrderId,
+      sellOrderId,
+      amount: 12,
+      price: 1,
+    });
+    (strategy as any).washSubmittedOrderIds.add(buyOrderId);
+    (strategy as any).washSubmittedOrderIds.add(sellOrderId);
+
+    await (strategy as any).updateOrderStatus();
+
+    expect((strategy as any).activeOrders.has(buyOrderId)).toBe(false);
+    expect((strategy as any).activeOrders.has(sellOrderId)).toBe(false);
+    expect((strategy as any).washTradePairsActive.length).toBe(0);
+    expect((strategy as any).volumeStats.totalVolume).toBe(24);
+    expect((strategy as any).profitStats.washTrades).toBe(2);
+  });
 });

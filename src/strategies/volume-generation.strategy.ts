@@ -53,6 +53,7 @@ export class VolumeGenerationStrategy {
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
   private static readonly DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS = 4;
   private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 10000;
+  private static readonly DISAPPEARED_CAPTURE_TRADES_SOFT_TIMEOUT_MS = 2500;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -2697,16 +2698,6 @@ export class VolumeGenerationStrategy {
           continue;
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
-          const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
-          if (capturedAnyTrade) {
-            this.activeOrders.delete(orderId);
-            this.orderPrices.delete(orderId);
-            this.washConfirmedBuyCreditedByOrder.delete(orderId);
-            this.washSubmittedOrderIds.delete(orderId);
-            this.disappearedOrderRetryState.delete(orderId);
-            continue;
-          }
-
           const previousState = this.disappearedOrderRetryState.get(orderId);
           const nextAttempt = (previousState?.attempts ?? 0) + 1;
 
@@ -2718,6 +2709,21 @@ export class VolumeGenerationStrategy {
             logger.info(
               `⏳ [ORDER-DISAPPEARED-RETRY] ${orderId} missing from pending/detail and trades feed; retry ${nextAttempt}/${VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS} in ${Math.round(VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_DELAY_MS / 1000)}s before finalizing.`
             );
+
+            if (this.trySettleDisappearedWashPair(orderId, 1)) {
+              continue;
+            }
+
+            continue;
+          }
+
+          const capturedAnyTrade = await this.captureTradesForCompletedOrderWithSoftTimeout(orderId);
+          if (capturedAnyTrade) {
+            this.activeOrders.delete(orderId);
+            this.orderPrices.delete(orderId);
+            this.washConfirmedBuyCreditedByOrder.delete(orderId);
+            this.washSubmittedOrderIds.delete(orderId);
+            this.disappearedOrderRetryState.delete(orderId);
             continue;
           }
 
@@ -2850,7 +2856,10 @@ export class VolumeGenerationStrategy {
     logger.info(`🔁 Settled paired wash ${counterpartSide} leg for ${counterpartOrderId} after ${side} fill on ${orderId}.`);
   }
 
-  private trySettleDisappearedWashPair(orderId: string): boolean {
+  private trySettleDisappearedWashPair(
+    orderId: string,
+    minDisappearanceAttemptsPerLeg: number = VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS
+  ): boolean {
     if (this.getSelfTradeMode() !== 'on') {
       return false;
     }
@@ -2869,8 +2878,8 @@ export class VolumeGenerationStrategy {
 
     const buyRetryAttempts = this.disappearedOrderRetryState.get(pair.buyOrderId)?.attempts ?? 0;
     const sellRetryAttempts = this.disappearedOrderRetryState.get(pair.sellOrderId)?.attempts ?? 0;
-    const buyMissingSignal = !this.activeOrders.has(pair.buyOrderId) || buyRetryAttempts > 0;
-    const sellMissingSignal = !this.activeOrders.has(pair.sellOrderId) || sellRetryAttempts > 0;
+    const buyMissingSignal = buyRetryAttempts >= minDisappearanceAttemptsPerLeg;
+    const sellMissingSignal = sellRetryAttempts >= minDisappearanceAttemptsPerLeg;
 
     if (!buyMissingSignal || !sellMissingSignal) {
       return false;
@@ -2908,6 +2917,25 @@ export class VolumeGenerationStrategy {
     );
 
     return true;
+  }
+
+  private async captureTradesForCompletedOrderWithSoftTimeout(orderId: string): Promise<boolean> {
+    const timeoutMs = VolumeGenerationStrategy.DISAPPEARED_CAPTURE_TRADES_SOFT_TIMEOUT_MS;
+    const timeoutToken = Symbol('capture-timeout');
+
+    const result = await Promise.race<boolean | symbol>([
+      this.captureTradesForCompletedOrder(orderId),
+      new Promise<symbol>(resolve => setTimeout(() => resolve(timeoutToken), timeoutMs)),
+    ]);
+
+    if (result === timeoutToken) {
+      logger.warn(
+        `⏱️  [ORDER-DISAPPEARED] Skipping delayed trade capture for ${orderId} after ${timeoutMs}ms soft timeout; will continue retry/finalization flow.`
+      );
+      return false;
+    }
+
+    return result === true;
   }
 
   private async captureTradesForCompletedOrder(orderId: string): Promise<boolean> {
