@@ -2722,3 +2722,46 @@ describe('True trading PnL tracking', () => {
     expect(profitStats.inventoryQuantity).toBeCloseTo(0, 6);
   });
 });
+
+describe('Confirmed wash fill polling', () => {
+  it('waits 1s before querying trades for confirmed BUY fills', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn(),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([
+        { amount: 2, price: 1 },
+        { amount: 3, price: 1 }
+      ])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    setTimeoutSpy.mockClear();
+    const confirmed = await (strategy as any).getConfirmedFilledAmount('buy-order-1');
+
+    const delayCall = setTimeoutSpy.mock.calls.find((call: any[]) => call[1] === 1000);
+    expect(delayCall).toBeDefined();
+    expect(mockExchange.getRecentTrades).toHaveBeenCalledWith((strategy as any).symbol, 10, 'buy-order-1');
+    expect(confirmed).toBe(5);
+  });
+
+  it('returns 0 confirmed amount when trade lookup throws', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn(),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockRejectedValue(new Error('temporary exchange error'))
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    const confirmed = await (strategy as any).getConfirmedFilledAmount('buy-order-2');
+
+    expect(confirmed).toBe(0);
+  });
+});
