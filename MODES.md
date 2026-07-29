@@ -261,6 +261,13 @@ Use these prebuilt templates directly:
   - Use when buy side must stay off and sell-side activity should be minimal.
   - Typical use: highly dislocated windows where you want only light sell-side presence.
 
+- profiles/idle-wash.env
+  - Use when market is quiet and you want automatic wash trading to seed volume.
+  - Wash trading activates after 15 minutes of no real fills (if drift < 3% and spread < 8%).
+  - Wash trading stops immediately when a real user order fills.
+  - Buy-side disabled (sell-only footprint).
+  - Typical use: liquidity-seeding when market is inactive but clean.
+
 - .env.example.mode-aggressive-lite-v2
   - Use as the default controlled-activity profile under dislocated conditions.
   - Typical use: first reactivation step from idle.
