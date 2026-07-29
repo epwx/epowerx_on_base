@@ -52,8 +52,9 @@ export class VolumeGenerationStrategy {
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
   private static readonly DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS = 4;
-  private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 10000;
+  private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 3000;
   private static readonly DISAPPEARED_CAPTURE_TRADES_SOFT_TIMEOUT_MS = 2500;
+  private static readonly ORDER_STATUS_CHECK_DELAY_MS = 700;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -2619,7 +2620,7 @@ export class VolumeGenerationStrategy {
 
   private async updateOrderStatus(): Promise<void> {
     const orderIds = Array.from(this.activeOrders.keys());
-    const batchSize = 5; // Only check 5 orders per cycle
+    const batchSize = Math.min(10, Math.max(5, Math.ceil(orderIds.length / 3)));
     if (orderIds.length === 0) return;
     // Rotate through the list
     const start = this.orderStatusIndex;
@@ -2743,7 +2744,7 @@ export class VolumeGenerationStrategy {
         logger.error('Error updating order status:', error);
       }
       // Add a delay between each order status check to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, VolumeGenerationStrategy.ORDER_STATUS_CHECK_DELAY_MS));
     }
   }
 
