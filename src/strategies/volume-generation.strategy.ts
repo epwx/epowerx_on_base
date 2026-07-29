@@ -1664,6 +1664,29 @@ export class VolumeGenerationStrategy {
         shouldPrioritizeBuysForDepth = false;
       }
 
+      const autoSellCooldownActive =
+        this.getSelfTradeMode() === 'auto' && Date.now() < this.washAutoCooldownUntil;
+      const shortInventorySellGuardThreshold = Math.max(config.marketMaking.positionRebalanceThreshold, 1);
+      const shortInventorySellGuardActive = this.currentPosition <= -shortInventorySellGuardThreshold;
+
+      if (autoSellCooldownActive || shortInventorySellGuardActive) {
+        const guardReasons: string[] = [];
+        if (autoSellCooldownActive) {
+          guardReasons.push(`auto wash cooldown active (${Math.ceil((this.washAutoCooldownUntil - Date.now()) / 1000)}s remaining)`);
+        }
+        if (shortInventorySellGuardActive) {
+          guardReasons.push(
+            `net short inventory ${this.currentPosition.toFixed(2)} exceeds threshold ${(-shortInventorySellGuardThreshold).toFixed(2)}`
+          );
+        }
+
+        if (sellPlacementCap > 0) {
+          logger.warn(`🛑 Freezing new non-wash sell placements this cycle: ${guardReasons.join('; ')}.`);
+        }
+
+        sellPlacementCap = 0;
+      }
+
       let sellPlacementPriceReference = skewedPriceReference;
       let sellPlacementMode: 'PASSIVE' | 'EXCHANGE_BAND_FALLBACK' = 'PASSIVE';
       if (!shouldFreezeSellPlacements) {
