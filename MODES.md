@@ -261,6 +261,10 @@ Use these prebuilt templates directly:
   - Use when buy side must stay off and sell-side activity should be minimal.
   - Typical use: highly dislocated windows where you want only light sell-side presence.
 
+- .env.example.mode-hybrid-profit-idle-wash
+  - Use when you want real-user profitability first, with idle wash fallback for volume continuity.
+  - Typical use: mixed market windows where real flow is intermittent and idle periods need controlled volume support.
+
 - profiles/idle-wash.env
   - Use when market is quiet and you want automatic wash trading to seed volume.
   - Wash trading activates after 1 minute of no real fills (if drift < 3% and spread < 8%).
@@ -319,6 +323,11 @@ cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-aggressive-lite-v
 - Switch to aggressive-lite v2 inventory-aware (recommended first):
 ```bash
 cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-aggressive-lite-v2-inventory-aware .env && pm2 restart epwx-bot --update-env
+```
+
+- Switch to hybrid profit + idle wash:
+```bash
+cp .env .env.backup.$(date +%F-%H%M%S) && cp .env.example.mode-hybrid-profit-idle-wash .env && pm2 restart epwx-bot --update-env
 ```
 
 - Switch to aggressive-lite step2:
@@ -380,6 +389,7 @@ Common profile names:
 - buy-off-conservative
 - aggressive-lite-v2
 - aggressive-lite-v2-inventory-aware
+- hybrid-profit-idle-wash
 - aggressive-lite-step2
 - aggressive-lite-step3
 - aggressive-on
