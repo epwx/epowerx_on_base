@@ -387,3 +387,65 @@ Common profile names:
 Notes:
 - The script auto-backs up existing .env as .env.backup.<timestamp> before each switch.
 - Keep .env.production.base on the server only; it is git-ignored.
+
+## 11) Idle Wash Same-Price (Latest Production State)
+
+Purpose:
+- Continuous wash-volume generation at the same price in SELF_TRADE_MODE=on.
+- Designed for vanish-first exchange behavior where orders can disappear from pending before trade feed visibility.
+
+Mode files:
+- .env.example.mode-idle-wash-same-price
+- profiles/idle-wash-same-price.env
+
+Current key settings (validated in production):
+- BUY_REACTIVATION_MODE=on
+- SELF_TRADE_MODE=on
+- ORDER_FREQUENCY=20000
+- TARGET_ORDERS_PER_SIDE=1
+- TARGET_BUY_DEPTH_USD=0
+- TARGET_SELL_DEPTH_USD=0
+- IDLE_BALANCE_RESERVE_USD=317.0
+- MAX_DEX_CEX_DRIFT_PERCENT=35
+- MAX_EXEC_SPREAD_PERCENT=8
+- MIN_EXEC_DEPTH_BUY_USD=20
+- MIN_EXEC_DEPTH_SELL_USD=20
+- WASH_ORDER_SIZE_CAP_USD=5.05
+- IDLE_WASH_ENABLE_AFTER_MS=0
+- IDLE_WASH_COOLDOWN_AFTER_REAL_FILL_MS=0
+- IDLE_WASH_MAX_PAIRS_PER_CYCLE=1
+
+Why reserve was changed:
+- Reserve at 319.4 repeatedly gated buys (spendable USDT below minimum notional 5.01), causing wash skips.
+- Reserve at 317.0 restored wash flow with current balance shape (free USDT near 322.39).
+
+Expected healthy runtime pattern:
+- Wash pair placement each cycle: BUY then SELL at same reference price.
+- SELL leg may disappear from pending immediately after placement.
+- No immediate fill visible messages can appear for both legs.
+- Disappeared-order retry messages appear.
+- WASH-RECON settles pair as synthetic matched fill in SELF_TRADE_MODE=on.
+- Volume stats rise with near-symmetric buy/sell and near-flat position.
+
+Build/commit checkpoints applied in this cycle:
+- be4f237: skip immediate wash no-fill diagnostics while reconciliation is pending.
+- c8b668b: reduce expected wash-path pending/no-fill warning noise.
+- 7cc5ff9: lower idle-wash reserve to keep min-notional buy path active.
+- 2b61777: demote expected open-order and wash-clamp log noise.
+
+Deployment verification checklist:
+- Confirm startup marker and runtime SHA in pm2 logs.
+- Confirm no repeated reserve-gated buy pauses for this mode.
+- Confirm recurring WASH-RECON settlements every cycle window.
+- Confirm Total Volume and Wash Trades trend upward.
+- Confirm Current Position remains bounded near zero.
+
+Latest observed soak snapshots (2026-07-29, build 2b61777):
+- 19:56:57: Total Volume=$171.97, Buy=$85.99, Sell=$85.99, Wash Trades=32, Current Position=0.00, Projected 24h=$43,161.15 (86.3%).
+- 19:58:17: Total Volume=$182.75, Buy=$91.37, Sell=$91.37, Wash Trades=34, Current Position=0.00, Projected 24h=$37,208.39 (74.4%).
+- Runtime behavior remained consistent: same-price BUY/SELL wash pairs, pending disappearance, deferred attribution, and repeated WASH-RECON settlement.
+- Book conditions were still dislocated, but improved from prior windows: executable spread logs around 11.52% (still above fallback threshold), DEX/CEX drift around 32.1%-32.3% (below 35% cap).
+- Intermittent orphan cleanup is expected on this venue: occasional ORDER-DISAPPEARED finalization for stale IDs while active wash flow continues.
+
+Operational note:
+- If free USDT changes materially, retune IDLE_BALANCE_RESERVE_USD to keep spendable USDT at least 0.3-0.5 above minimum notional threshold.
