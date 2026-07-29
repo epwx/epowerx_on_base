@@ -3008,6 +3008,75 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).washConfirmedBuyCreditedByOrder.get('wash-buy-late-1')).toBe(7);
   });
 
+  it('settles paired wash SELL when BUY is confirmed via pending snapshot fallback', async () => {
+    const mockExchange = {
+      getBalances: jest.fn(),
+      getTicker: jest.fn(),
+      getOpenOrders: jest.fn().mockResolvedValue([]),
+      getOrder: jest.fn().mockResolvedValue({
+        orderId: 'wash-buy-snapshot-1',
+        symbol: 'EPWXUSDT',
+        side: 'BUY',
+        type: 'LIMIT',
+        price: 1,
+        amount: 10,
+        filled: 7,
+        status: 'NEW',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+      cancelOrder: jest.fn(),
+      placeOrder: jest.fn(),
+      cancelAllOrders: jest.fn(),
+      getRecentTrades: jest.fn().mockResolvedValue([])
+    };
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+
+    (strategy as any).activeOrders.set('wash-buy-snapshot-1', {
+      orderId: 'wash-buy-snapshot-1',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    (strategy as any).activeOrders.set('wash-sell-snapshot-1', {
+      orderId: 'wash-sell-snapshot-1',
+      symbol: 'EPWXUSDT',
+      side: 'SELL',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+
+    (strategy as any).washTradePairsActive.push({
+      buyOrderId: 'wash-buy-snapshot-1',
+      sellOrderId: 'wash-sell-snapshot-1',
+      price: 1,
+      amount: 7,
+    });
+    (strategy as any).washSubmittedOrderIds.add('wash-buy-snapshot-1');
+    (strategy as any).washSubmittedOrderIds.add('wash-sell-snapshot-1');
+
+    await (strategy as any).pollOrderFills('wash-buy-snapshot-1', 'BUY', true);
+
+    expect((strategy as any).currentPosition).toBe(0);
+    expect((strategy as any).activeOrders.has('wash-sell-snapshot-1')).toBe(false);
+    expect((strategy as any).washTradePairsActive.length).toBe(0);
+    expect((strategy as any).volumeStats.totalVolume).toBe(14);
+    expect((strategy as any).volumeStats.buyVolume).toBe(7);
+    expect((strategy as any).volumeStats.sellVolume).toBe(7);
+    expect((strategy as any).profitStats.washTrades).toBe(2);
+  });
+
   it('reconciles delayed wash BUY fills before emitting no-fill diagnostics', async () => {
     const mockExchange = {
       getBalances: jest.fn(),

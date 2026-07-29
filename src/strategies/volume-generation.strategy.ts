@@ -2568,7 +2568,12 @@ export class VolumeGenerationStrategy {
           if (isWashTrade && side === 'BUY') {
             this.creditConfirmedWashBuyFills(orderId, filledFromOrderState);
           }
+          const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
+          const filledVolumeUSD = trackedOrderPrice > 0 ? filledFromOrderState * trackedOrderPrice : 0;
           this.applyPositionForFilledOrder(orderId, side, filledFromOrderState);
+          if (isWashTrade) {
+            this.settlePairedWashOrder(orderId, side, filledFromOrderState, filledVolumeUSD, true);
+          }
           return;
         }
 
@@ -2598,7 +2603,10 @@ export class VolumeGenerationStrategy {
               if (side === 'BUY') {
                 this.creditConfirmedWashBuyFills(orderId, lateFilledFromOrderState);
               }
+              const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
+              const filledVolumeUSD = trackedOrderPrice > 0 ? lateFilledFromOrderState * trackedOrderPrice : 0;
               this.applyPositionForFilledOrder(orderId, side, lateFilledFromOrderState);
+              this.settlePairedWashOrder(orderId, side, lateFilledFromOrderState, filledVolumeUSD, true);
               return;
             }
           }
@@ -2803,6 +2811,20 @@ export class VolumeGenerationStrategy {
     this.positionAdjustedOrderIds.add(orderId);
   }
 
+  private getTrackedOrderPrice(orderId: string): number {
+    const activeOrderPrice = this.activeOrders.get(orderId)?.price;
+    if (Number.isFinite(activeOrderPrice) && (activeOrderPrice ?? 0) > 0) {
+      return activeOrderPrice as number;
+    }
+
+    const trackedPrice = this.orderPrices.get(orderId)?.price;
+    if (Number.isFinite(trackedPrice) && (trackedPrice ?? 0) > 0) {
+      return trackedPrice as number;
+    }
+
+    return 0;
+  }
+
   private async syncCurrentPositionWithBalances(): Promise<void> {
     const balances = await this.exchange.getBalances();
     const epwxBalance = balances.find(balance => balance.asset === 'EPWX');
@@ -2822,7 +2844,13 @@ export class VolumeGenerationStrategy {
     this.currentPosition = totalEpwx - this.initialEpwxBalance;
   }
 
-  private settlePairedWashOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number, filledVolumeUSD: number): void {
+  private settlePairedWashOrder(
+    orderId: string,
+    side: 'BUY' | 'SELL',
+    filledAmount: number,
+    filledVolumeUSD: number,
+    includeObservedLegAccounting: boolean = false
+  ): void {
     const pair = this.washTradePairsActive.find(candidate =>
       candidate.buyOrderId === orderId || candidate.sellOrderId === orderId
     );
@@ -2838,12 +2866,28 @@ export class VolumeGenerationStrategy {
       return;
     }
 
-    this.volumeStats.totalVolume += filledVolumeUSD;
-    if (counterpartSide === 'BUY') {
-      this.volumeStats.buyVolume += filledVolumeUSD;
-    } else {
-      this.volumeStats.sellVolume += filledVolumeUSD;
+    const observedLegVolumeUSD =
+      Number.isFinite(filledVolumeUSD) && filledVolumeUSD > 0
+        ? filledVolumeUSD
+        : Math.max(filledAmount, 0) * Math.max(pair.price, 0);
+
+    if (includeObservedLegAccounting && observedLegVolumeUSD > 0) {
+      this.volumeStats.totalVolume += observedLegVolumeUSD;
+      if (side === 'BUY') {
+        this.volumeStats.buyVolume += observedLegVolumeUSD;
+      } else {
+        this.volumeStats.sellVolume += observedLegVolumeUSD;
+      }
     }
+
+    this.volumeStats.totalVolume += observedLegVolumeUSD;
+    if (counterpartSide === 'BUY') {
+      this.volumeStats.buyVolume += observedLegVolumeUSD;
+    } else {
+      this.volumeStats.sellVolume += observedLegVolumeUSD;
+    }
+
+    this.profitStats.washTrades += includeObservedLegAccounting ? 2 : 1;
 
     this.applyPositionForFilledOrder(counterpartOrderId, counterpartSide, filledAmount);
     this.settledWashOrderIds.add(orderId);
