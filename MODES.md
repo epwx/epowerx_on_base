@@ -263,7 +263,7 @@ Use these prebuilt templates directly:
 
 - profiles/idle-wash.env
   - Use when market is quiet and you want automatic wash trading to seed volume.
-  - Wash trading activates after 15 minutes of no real fills (if drift < 3% and spread < 8%).
+  - Wash trading activates after 1 minute of no real fills (if drift < 3% and spread < 8%).
   - Wash trading stops immediately when a real user order fills.
   - Buy-side disabled (sell-only footprint).
   - Typical use: liquidity-seeding when market is inactive but clean.
