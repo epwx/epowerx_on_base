@@ -2056,6 +2056,11 @@ export class VolumeGenerationStrategy {
         }
         logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
+        if (!buyOrderId) {
+          logger.warn('⏭️  Skipping paired wash SELL because wash BUY placement did not complete.');
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
         const placedBuyAmount = buyOrderId ? this.activeOrders.get(buyOrderId)?.amount : undefined;
         const pairedSellAmountFromPlacement =
           typeof placedBuyAmount === 'number' && Number.isFinite(placedBuyAmount) && placedBuyAmount > 0
@@ -2389,7 +2394,7 @@ export class VolumeGenerationStrategy {
     } catch (error: any) {
       const message = String(error?.message || '').toLowerCase();
       if (message.includes('service is not available')) {
-        logger.warn('Error placing buy order: Service is not available');
+        logger.debug('Error placing buy order: Service is not available');
       } else {
         logger.error('Error placing buy order:', error);
       }
@@ -2486,7 +2491,7 @@ export class VolumeGenerationStrategy {
     } catch (error: any) {
       const message = String(error?.message || '').toLowerCase();
       if (message.includes('service is not available')) {
-        logger.warn('Error placing sell order: Service is not available');
+        logger.debug('Error placing sell order: Service is not available');
       } else {
         logger.error('Error placing sell order:', error);
       }
