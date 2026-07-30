@@ -2870,8 +2870,28 @@ export class VolumeGenerationStrategy {
     return 0;
   }
 
+  private isTransientServiceUnavailableError(error: any): boolean {
+    const message = String(error?.message || '').toLowerCase();
+    return (
+      message.includes('service is not available') ||
+      message.includes('timeout') ||
+      message.includes('econnreset') ||
+      message.includes('socket hang up')
+    );
+  }
+
   private async syncCurrentPositionWithBalances(): Promise<void> {
-    const balances = await this.exchange.getBalances();
+    let balances;
+    try {
+      balances = await this.exchange.getBalances();
+    } catch (error: any) {
+      if (this.isTransientServiceUnavailableError(error)) {
+        logger.warn('Position sync skipped: exchange service temporarily unavailable. Retrying on next cycle.');
+        return;
+      }
+      throw error;
+    }
+
     const epwxBalance = balances.find(balance => balance.asset === 'EPWX');
     const totalEpwx = epwxBalance?.total ?? ((epwxBalance?.free || 0) + (epwxBalance?.locked || 0));
 
@@ -3223,8 +3243,12 @@ export class VolumeGenerationStrategy {
         .forEach(b => {
           logger.info(`  ${b.asset}: ${b.total.toFixed(8)} (Free: ${b.free.toFixed(8)}, Locked: ${b.locked.toFixed(8)})`);
         });
-    } catch (error) {
-      logger.error('Error fetching balances:', error);
+    } catch (error: any) {
+      if (this.isTransientServiceUnavailableError(error)) {
+        logger.warn('Account balance snapshot skipped: Service is not available');
+      } else {
+        logger.error('Error fetching balances:', error);
+      }
     }
   }
 
