@@ -2061,7 +2061,9 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 100));
           continue;
         }
-        const placedBuyAmount = buyOrderId ? this.activeOrders.get(buyOrderId)?.amount : undefined;
+        const placedBuyOrder = this.activeOrders.get(buyOrderId);
+        const placedBuyAmount = placedBuyOrder?.amount;
+        const placedBuyPrice = placedBuyOrder?.price;
         const pairedSellAmountFromPlacement =
           typeof placedBuyAmount === 'number' && Number.isFinite(placedBuyAmount) && placedBuyAmount > 0
             ? placedBuyAmount
@@ -2076,26 +2078,30 @@ export class VolumeGenerationStrategy {
           : 0;
         const carrySellableAmount = quantizeToStepSize(Math.max(this.washConfirmedBuyCarryAmount, 0), this.stepSize);
         const immediatePairingEnabled = this.getSelfTradeMode() === 'on';
+        const pairedSellPrice =
+          immediatePairingEnabled && typeof placedBuyPrice === 'number' && Number.isFinite(placedBuyPrice) && placedBuyPrice > 0
+            ? placedBuyPrice
+            : matchPrice;
         const pairedSellAmount = immediatePairingEnabled
           ? pairedSellAmountFromPlacement
           : Math.min(pairedSellAmountFromPlacement, carrySellableAmount);
 
-        if (!this.isValidOrderAmount(pairedSellAmount, matchPrice)) {
+        if (!this.isValidOrderAmount(pairedSellAmount, pairedSellPrice)) {
           logger.info(
-            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX (new +${newlyConfirmedBuyFillAmount.toLocaleString()}, carry ${carrySellableAmount.toLocaleString()}) are below executable minimum.`
+            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX (new +${newlyConfirmedBuyFillAmount.toLocaleString()}, carry ${carrySellableAmount.toLocaleString()}) are below executable minimum at ${pairedSellPrice.toExponential(4)}.`
           );
           await new Promise(resolve => setTimeout(resolve, 100));
           continue;
         }
 
-        const sellOrderId = await this.placeSellOrder(matchPrice, pairedSellAmount, true);
+        const sellOrderId = await this.placeSellOrder(pairedSellPrice, pairedSellAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
           if (!immediatePairingEnabled) {
             this.washConfirmedBuyCarryAmount = Math.max(this.washConfirmedBuyCarryAmount - pairedSellAmount, 0);
           }
-          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount: pairedSellAmount });
-          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${pairedSellAmount.toFixed(2)} EPWX)`);
+          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: pairedSellPrice, amount: pairedSellAmount });
+          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${pairedSellPrice.toExponential(4)} (${pairedSellAmount.toFixed(2)} EPWX)`);
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
