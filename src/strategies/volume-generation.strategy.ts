@@ -2386,8 +2386,13 @@ export class VolumeGenerationStrategy {
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
       return order.orderId;
-    } catch (error) {
-      logger.error('Error placing buy order:', error);
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('service is not available')) {
+        logger.warn('Error placing buy order: Service is not available');
+      } else {
+        logger.error('Error placing buy order:', error);
+      }
     }
   }
 
@@ -2478,8 +2483,13 @@ export class VolumeGenerationStrategy {
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
       return order.orderId;
-    } catch (error) {
-      logger.error('Error placing sell order:', error);
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('service is not available')) {
+        logger.warn('Error placing sell order: Service is not available');
+      } else {
+        logger.error('Error placing sell order:', error);
+      }
     }
   }
 
