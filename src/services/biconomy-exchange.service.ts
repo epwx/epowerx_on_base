@@ -329,7 +329,7 @@ export class BiconomyExchangeService {
       return balances;
     } catch (error: any) {
       if (this.isTransientServiceUnavailable(error)) {
-        logger.warn('Failed to get balances: Service is not available');
+        logger.debug('Failed to get balances: Service is not available');
       } else {
         logger.error('Failed to get balances:', error);
       }
@@ -617,7 +617,7 @@ export class BiconomyExchangeService {
       }));
     } catch (error: any) {
       if (this.isTransientServiceUnavailable(error)) {
-        logger.warn(`[getOpenOrders] Error: Service is not available`);
+        logger.debug(`[getOpenOrders] Error: Service is not available`);
       } else {
         logger.error(`[getOpenOrders] Error:`, error);
       }
