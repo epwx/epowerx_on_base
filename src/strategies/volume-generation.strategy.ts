@@ -1268,8 +1268,13 @@ export class VolumeGenerationStrategy {
         await this.syncCurrentPositionWithBalances();
         await this.checkAndRebalancePosition();
         this.logPerformance();
-      } catch (error) {
-        logger.error('Error in monitoring loop:', error);
+      } catch (error: any) {
+        const message = String(error?.message || '').toLowerCase();
+        if (message.includes('service is not available')) {
+          logger.warn('Exchange service temporarily unavailable in monitoring loop. Retrying on next cycle.');
+        } else {
+          logger.error('Error in monitoring loop:', error);
+        }
       }
     }, config.marketMaking.updateInterval);
   }
@@ -2115,8 +2120,13 @@ export class VolumeGenerationStrategy {
       }
 
       this.volumeStats.lastOrderTime = Date.now();
-    } catch (error) {
-      logger.error('💥 Unexpected error in placeVolumeOrders:', error);
+    } catch (error: any) {
+      const message = String(error?.message || '').toLowerCase();
+      if (message.includes('service is not available')) {
+        logger.warn('⚠️  Exchange service temporarily unavailable in placeVolumeOrders; skipping this cycle.');
+      } else {
+        logger.error('💥 Unexpected error in placeVolumeOrders:', error);
+      }
     } finally {
       this.isPlacingOrders = false;
     }
