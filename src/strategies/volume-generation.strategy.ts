@@ -67,6 +67,7 @@ export class VolumeGenerationStrategy {
   private isRunning: boolean = false;
   private stepSize: number = 1;
   private minQty: number = 1;
+  private tickSize: number = 0.0000000000001;
   private symbol: string;
   private volumeStats: VolumeStats;
   protected profitStats: ProfitStats;
@@ -301,6 +302,103 @@ export class VolumeGenerationStrategy {
 
   private getIdleWashMaxExecSpreadPercent(): number {
     return Math.max(config.volumeStrategy.idleWashMaxExecSpreadPercent, 0);
+  }
+
+  private getIdleWashSamePriceUpwardStepBpsPerMinute(): number {
+    return Math.max(config.volumeStrategy.idleWashSamePriceUpwardStepBpsPerMinute, 0);
+  }
+
+  private getIdleWashSamePriceUpwardMaxBps(): number {
+    return Math.max(config.volumeStrategy.idleWashSamePriceUpwardMaxBps, 0);
+  }
+
+  private getIdleWashProtectExternalBuys(): boolean {
+    return config.volumeStrategy.idleWashProtectExternalBuys;
+  }
+
+  private getIdleWashProtectMinSpreadTicks(): number {
+    return Math.max(Math.floor(config.volumeStrategy.idleWashProtectMinSpreadTicks), 1);
+  }
+
+  private quantizePriceToTick(price: number): number {
+    if (!Number.isFinite(price) || price <= 0) {
+      return price;
+    }
+
+    const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
+    return Math.max(Math.floor(price / tick) * tick, tick);
+  }
+
+  private resolveSamePriceWashReference(
+    washPriceReference: number,
+    executableBestBid: number,
+    executableBestAsk: number
+  ): { price: number | null; reason?: string } {
+    const upwardStepBpsPerMinute = this.getIdleWashSamePriceUpwardStepBpsPerMinute();
+    const upwardMaxBps = this.getIdleWashSamePriceUpwardMaxBps();
+    const idleMinutes = Math.max(0, Math.floor((Date.now() - this.lastRealFillAt) / 60000));
+    const upwardBps = Math.min(upwardStepBpsPerMinute * idleMinutes, upwardMaxBps);
+    let targetPrice = washPriceReference;
+
+    if (upwardBps > 0) {
+      targetPrice = washPriceReference * (1 + upwardBps / 10000);
+      logger.info(
+        `📈 Idle wash upward trend active: +${upwardBps.toFixed(2)} bps after ${idleMinutes}m idle (${washPriceReference.toExponential(4)} -> ${targetPrice.toExponential(4)}).`
+      );
+    }
+
+    if (!this.getIdleWashProtectExternalBuys()) {
+      return { price: targetPrice };
+    }
+
+    if (
+      !Number.isFinite(executableBestBid) ||
+      !Number.isFinite(executableBestAsk) ||
+      executableBestBid <= 0 ||
+      executableBestAsk <= 0 ||
+      executableBestAsk <= executableBestBid
+    ) {
+      return {
+        price: null,
+        reason: 'missing executable bid/ask needed for protected same-price wash',
+      };
+    }
+
+    const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
+    const spreadTicks = (executableBestAsk - executableBestBid) / tick;
+    const minSpreadTicks = this.getIdleWashProtectMinSpreadTicks();
+    if (!Number.isFinite(spreadTicks) || spreadTicks < minSpreadTicks) {
+      return {
+        price: null,
+        reason: `spread too tight for protected same-price wash (${spreadTicks.toFixed(2)} ticks < ${minSpreadTicks})`,
+      };
+    }
+
+    const lowerBound = executableBestBid + tick;
+    const upperBound = executableBestAsk - tick;
+    if (!(lowerBound < upperBound)) {
+      return {
+        price: null,
+        reason: 'no safe inside-spread price remains for protected same-price wash',
+      };
+    }
+
+    const clampedInsideSpread = Math.min(Math.max(targetPrice, lowerBound), upperBound);
+    const quantizedInsideSpread = this.quantizePriceToTick(clampedInsideSpread);
+    if (!(quantizedInsideSpread > executableBestBid && quantizedInsideSpread < executableBestAsk)) {
+      return {
+        price: null,
+        reason: 'tick-size quantization removed protected inside-spread wash price',
+      };
+    }
+
+    if (Math.abs(quantizedInsideSpread - targetPrice) > Number.EPSILON) {
+      logger.info(
+        `🛡️  Protected same-price wash adjusted from ${targetPrice.toExponential(4)} to ${quantizedInsideSpread.toExponential(4)} to avoid external liquidity.`
+      );
+    }
+
+    return { price: quantizedInsideSpread };
   }
 
   private async cancelActiveWashOrders(reason: string): Promise<void> {
@@ -1165,6 +1263,10 @@ export class VolumeGenerationStrategy {
         this.stepSize = Number(pairInfo.stepSize);
       }
       if (pairInfo.minQty) this.minQty = Number(pairInfo.minQty);
+      const parsedTickSize = Number(pairInfo.tickSize);
+      if (Number.isFinite(parsedTickSize) && parsedTickSize > 0) {
+        this.tickSize = parsedTickSize;
+      }
       logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}, baseAssetPrecision=${pairInfo.baseAssetPrecision}, quoteAssetPrecision=${pairInfo.quoteAssetPrecision}, tickSize=${pairInfo.tickSize}`);
     } catch (e) {
       logger.warn('Could not fetch EPWX/USDT pair info, using defaults.');
@@ -2039,8 +2141,21 @@ export class VolumeGenerationStrategy {
       if (washFeatureEnabled && washTradePairs > 0 && !canAttemptWashTradesThisCycle) {
         logger.info(`⏭️  Wash trades are enabled but skipped this cycle because buy-side placement is gated: ${buyReactivationGate.reason}`);
       }
+      const samePriceWashReference = this.resolveSamePriceWashReference(
+        washPriceReference,
+        executableBestBid,
+        executableBestAsk
+      );
+      if (canAttemptWashTradesThisCycle && samePriceWashReference.price === null) {
+        logger.warn(`⏭️  Skipping protected same-price wash this cycle: ${samePriceWashReference.reason}`);
+      }
+      const useProtectedSamePriceWashFlow = this.getSelfTradeMode() === 'on' && this.getIdleWashProtectExternalBuys();
       for (let i = 0; i < washTradePairs && placementsThisCycle <= maxPlacementsPerCycle - 2 && canAttemptWashTradesThisCycle; i++) {
-        const matchPrice = washPriceReference;
+        if (samePriceWashReference.price === null) {
+          break;
+        }
+
+        const matchPrice = samePriceWashReference.price;
         const washOrderUsdTarget = this.getDynamicOrderUsdTarget(washSafeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
@@ -2054,6 +2169,45 @@ export class VolumeGenerationStrategy {
           logger.warn(`⚠️  Skipping wash trade after normalization: amount=${amount}, minQty=${this.minQty}`);
           continue;
         }
+
+        if (useProtectedSamePriceWashFlow) {
+          logger.info(`[Wash ${i+1}/${washTradePairs}] Placing protected matching SELL/BUY: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
+          const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
+          if (!sellOrderId) {
+            logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
+          const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
+          if (!buyOrderId) {
+            logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
+            try {
+              await this.exchange.cancelOrder(this.symbol, sellOrderId);
+            } catch (error: any) {
+              logger.warn(`⚠️  Failed to cancel orphaned protected wash SELL ${sellOrderId}: ${error?.message || error}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
+          const placedBuyOrder = this.activeOrders.get(buyOrderId);
+          const pairedAmount =
+            typeof placedBuyOrder?.amount === 'number' && Number.isFinite(placedBuyOrder.amount) && placedBuyOrder.amount > 0
+              ? placedBuyOrder.amount
+              : washAmount;
+          const pairedPrice =
+            typeof placedBuyOrder?.price === 'number' && Number.isFinite(placedBuyOrder.price) && placedBuyOrder.price > 0
+              ? placedBuyOrder.price
+              : matchPrice;
+
+          placementsThisCycle += 2;
+          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: pairedPrice, amount: pairedAmount });
+          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${pairedPrice.toExponential(4)} (${pairedAmount.toFixed(2)} EPWX)`);
+          await new Promise(resolve => setTimeout(resolve, 100));
+          continue;
+        }
+
         logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
         if (!buyOrderId) {

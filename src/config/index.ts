@@ -53,6 +53,10 @@ interface Config {
     washUsdtScaleThreshold: number;
     washBasePairsPerCycle: number;
     washMaxPairsPerCycle: number;
+    idleWashSamePriceUpwardStepBpsPerMinute: number;
+    idleWashSamePriceUpwardMaxBps: number;
+    idleWashProtectExternalBuys: boolean;
+    idleWashProtectMinSpreadTicks: number;
     inventorySkewMaxPercent: number;
     inventorySkewActivationRatio: number;
     passiveBuyBandOuterOffsetPercent: number;
@@ -196,6 +200,10 @@ export const config: Config = {
     washUsdtScaleThreshold: getEnvNumber('WASH_USDT_SCALE_THRESHOLD', 250),
     washBasePairsPerCycle: getEnvNumber('WASH_BASE_PAIRS_PER_CYCLE', 0),
     washMaxPairsPerCycle: getEnvNumber('WASH_MAX_PAIRS_PER_CYCLE', 3),
+    idleWashSamePriceUpwardStepBpsPerMinute: getEnvNumber('IDLE_WASH_SAME_PRICE_UPWARD_STEP_BPS_PER_MINUTE', 0),
+    idleWashSamePriceUpwardMaxBps: getEnvNumber('IDLE_WASH_SAME_PRICE_UPWARD_MAX_BPS', 0),
+    idleWashProtectExternalBuys: getEnvBoolean('IDLE_WASH_PROTECT_EXTERNAL_BUYS', false),
+    idleWashProtectMinSpreadTicks: getEnvNumber('IDLE_WASH_PROTECT_MIN_SPREAD_TICKS', 2),
     inventorySkewMaxPercent: getEnvNumber('INVENTORY_SKEW_MAX_PERCENT', 0.003),
     inventorySkewActivationRatio: getEnvNumber('INVENTORY_SKEW_ACTIVATION_RATIO', 0.15),
     passiveBuyBandOuterOffsetPercent: getEnvNumber('PASSIVE_BUY_BAND_OUTER_OFFSET_PERCENT', 0.004),
