@@ -2225,14 +2225,34 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
+          const placedSellOrder = this.activeOrders.get(sellOrderId);
+          const plannedProtectedBuyPrice = await this.clampPriceToLatestBand(matchPrice);
+          const plannedProtectedSellAmount =
+            typeof placedSellOrder?.amount === 'number' && Number.isFinite(placedSellOrder.amount) && placedSellOrder.amount > 0
+              ? placedSellOrder.amount
+              : washAmount;
+
           await new Promise(resolve => setTimeout(resolve, 120));
-          const protectedBuySafety = await this.evaluateProtectedWashBuySafety(matchPrice, washAmount);
+          const protectedBuySafety = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
           if (!protectedBuySafety.safe) {
             logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to external-liquidity risk: ${protectedBuySafety.reason}`);
             try {
               await this.exchange.cancelOrder(this.symbol, sellOrderId);
             } catch (error: any) {
               logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during pre-buy safety check: ${error?.message || error}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 40));
+          const protectedBuySafetyFinal = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
+          if (!protectedBuySafetyFinal.safe) {
+            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to final external-liquidity risk recheck: ${protectedBuySafetyFinal.reason}`);
+            try {
+              await this.exchange.cancelOrder(this.symbol, sellOrderId);
+            } catch (error: any) {
+              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during final pre-buy safety recheck: ${error?.message || error}`);
             }
             await new Promise(resolve => setTimeout(resolve, 100));
             continue;
