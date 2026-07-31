@@ -401,6 +401,52 @@ export class VolumeGenerationStrategy {
     return { price: quantizedInsideSpread };
   }
 
+  private async evaluateProtectedWashBuySafety(
+    buyPrice: number,
+    plannedSellAmount: number
+  ): Promise<{ safe: boolean; reason?: string }> {
+    if (!Number.isFinite(buyPrice) || buyPrice <= 0 || !Number.isFinite(plannedSellAmount) || plannedSellAmount <= 0) {
+      return { safe: false, reason: 'invalid protected wash inputs for pre-buy safety check' };
+    }
+
+    try {
+      const orderBook = await this.exchange.getOrderBook(this.symbol);
+      const asks = orderBook?.asks ?? [];
+      if (!asks.length) {
+        return { safe: false, reason: 'no ask-side order book levels available for pre-buy safety check' };
+      }
+
+      const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
+      const epsilon = tick * 0.5;
+      const bestAsk = asks[0]?.[0] ?? 0;
+
+      if (Number.isFinite(bestAsk) && bestAsk > 0 && bestAsk < buyPrice - epsilon) {
+        return {
+          safe: false,
+          reason: `best ask ${bestAsk.toExponential(4)} is below protected wash buy ${buyPrice.toExponential(4)}`,
+        };
+      }
+
+      const askQtyAtOrBelowBuyPrice = asks
+        .filter(([price]) => Number.isFinite(price) && price <= buyPrice + epsilon)
+        .reduce((sum, [, amount]) => sum + (Number.isFinite(amount) ? amount : 0), 0);
+
+      if (askQtyAtOrBelowBuyPrice > plannedSellAmount * 1.1) {
+        return {
+          safe: false,
+          reason: `ask liquidity at/below buy price (${Math.floor(askQtyAtOrBelowBuyPrice).toLocaleString()} EPWX) exceeds planned protected sell amount (${Math.floor(plannedSellAmount).toLocaleString()} EPWX)`,
+        };
+      }
+
+      return { safe: true };
+    } catch (error: any) {
+      return {
+        safe: false,
+        reason: `pre-buy safety check failed: ${error?.message || error}`,
+      };
+    }
+  }
+
   private async cancelActiveWashOrders(reason: string): Promise<void> {
     const washOrderIds = new Set<string>();
     for (const pair of this.washTradePairsActive) {
@@ -2175,6 +2221,19 @@ export class VolumeGenerationStrategy {
           const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 120));
+          const protectedBuySafety = await this.evaluateProtectedWashBuySafety(matchPrice, washAmount);
+          if (!protectedBuySafety.safe) {
+            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to external-liquidity risk: ${protectedBuySafety.reason}`);
+            try {
+              await this.exchange.cancelOrder(this.symbol, sellOrderId);
+            } catch (error: any) {
+              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during pre-buy safety check: ${error?.message || error}`);
+            }
             await new Promise(resolve => setTimeout(resolve, 100));
             continue;
           }
