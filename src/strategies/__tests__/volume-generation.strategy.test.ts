@@ -3410,3 +3410,59 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).profitStats.washTrades).toBe(2);
   });
 });
+
+describe('Protected wash pre-buy safety checks', () => {
+  it('blocks protected wash buy when best ask is already below planned buy price', async () => {
+    const mockExchange = {
+      getOrderBook: jest.fn().mockResolvedValue({
+        bids: [[1.614e-10, 1000]],
+        asks: [[1.615e-10, 1000]],
+        timestamp: Date.now(),
+      }),
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
+
+    expect(result.safe).toBe(false);
+    expect(result.reason).toContain('best ask');
+  });
+
+  it('blocks protected wash buy when ask liquidity at or below buy price is too large', async () => {
+    const mockExchange = {
+      getOrderBook: jest.fn().mockResolvedValue({
+        bids: [[1.614e-10, 1000]],
+        asks: [
+          [1.616e-10, 2500],
+          [1.617e-10, 500],
+        ],
+        timestamp: Date.now(),
+      }),
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
+
+    expect(result.safe).toBe(false);
+    expect(result.reason).toContain('ask liquidity at/below buy price');
+  });
+
+  it('allows protected wash buy when best ask is above and near-touch liquidity is limited', async () => {
+    const mockExchange = {
+      getOrderBook: jest.fn().mockResolvedValue({
+        bids: [[1.614e-10, 1000]],
+        asks: [
+          [1.617e-10, 500],
+          [1.618e-10, 750],
+        ],
+        timestamp: Date.now(),
+      }),
+    };
+
+    const strategy = new VolumeGenerationStrategy(mockExchange as any);
+    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
+
+    expect(result.safe).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+});
