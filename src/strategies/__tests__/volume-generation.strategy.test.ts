@@ -552,6 +552,9 @@ it('places paired wash SELL immediately in SELF_TRADE_MODE=on even when confirma
 
   try {
     const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+    const resolveReferenceSpy = jest
+      .spyOn(VolumeGenerationStrategy.prototype as any, 'resolveSamePriceWashReference')
+      .mockReturnValue({ price: 1.005 });
     const strategy = new VolumeGenerationStrategy(mockExchange);
     (strategy as any).isRunning = true;
 
@@ -592,6 +595,180 @@ it('places paired wash SELL immediately in SELF_TRADE_MODE=on even when confirma
     config.volumeStrategy.idleWashRequireLowDrift = originalIdleWashRequireLowDrift;
     config.volumeStrategy.idleWashMaxDriftPercent = originalIdleWashMaxDriftPercent;
     config.volumeStrategy.idleWashMaxExecSpreadPercent = originalIdleWashMaxExecSpreadPercent;
+  }
+});
+
+it('blocks protected wash buy safety when best ask is below planned buy price', async () => {
+  const mockExchange = {
+    getOrderBook: jest.fn().mockResolvedValue({
+      bids: [[1.0e-10, 1000]],
+      asks: [[1.599e-10, 1000]],
+      timestamp: Date.now(),
+    }),
+  };
+
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const result = await (strategy as any).evaluateProtectedWashBuySafety(1.6e-10, 1000);
+
+  expect(result.safe).toBe(false);
+  expect(result.reason).toContain('best ask');
+});
+
+it('blocks protected wash buy safety when ask liquidity at or below buy price is too large', async () => {
+  const mockExchange = {
+    getOrderBook: jest.fn().mockResolvedValue({
+      bids: [[1.0e-10, 1000]],
+      asks: [
+        [1.6000e-10, 3000],
+        [1.6001e-10, 1500],
+        [1.7000e-10, 500],
+      ],
+      timestamp: Date.now(),
+    }),
+  };
+
+  const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+  const strategy = new VolumeGenerationStrategy(mockExchange);
+  const result = await (strategy as any).evaluateProtectedWashBuySafety(1.6e-10, 3000);
+
+  expect(result.safe).toBe(false);
+  expect(result.reason).toContain('ask liquidity at/below buy price');
+});
+
+it('cancels protected wash SELL and skips BUY when final pre-buy safety recheck fails', async () => {
+  const mockExchange = {
+    getBalances: jest.fn().mockResolvedValue([
+      { asset: 'USDT', free: 500, locked: 0, total: 500 },
+      { asset: 'EPWX', free: 1000000000000, locked: 0, total: 1000000000000 }
+    ]),
+    getTicker: jest.fn().mockResolvedValue({ bid: 1.0, ask: 1.01, price: 1.005 }),
+    getOpenOrders: jest.fn().mockResolvedValue([]),
+    getOrderBook: jest.fn().mockResolvedValue({
+      bids: [[1.0, 1000]],
+      asks: [[1.01, 1000]],
+      timestamp: Date.now(),
+    }),
+    getOrder: jest.fn().mockResolvedValue({
+      orderId: 'wash-buy-on-mode',
+      symbol: 'EPWXUSDT',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 1,
+      amount: 10,
+      filled: 0,
+      status: 'NEW',
+      timestamp: Date.now(),
+      fee: 0,
+    }),
+    cancelOrder: jest.fn(),
+    placeOrder: jest.fn().mockResolvedValue({ orderId: 'wash-priority-on', symbol: 'EPWXUSDT', side: 'BUY', type: 'LIMIT', price: 1.0, amount: 1, filled: 0, status: 'NEW', timestamp: Date.now(), fee: 0 }),
+    getRecentTrades: jest.fn().mockResolvedValue([]),
+  };
+
+  jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(1.005);
+  const config = require('../../config').config;
+  const originalOrderFrequency = config.volumeStrategy.orderFrequency;
+  const originalPair = config.trading.pair;
+  const originalTargetOrdersPerSide = config.volumeStrategy.targetOrdersPerSide;
+  const originalTargetBuyDepthUsd = config.volumeStrategy.targetBuyDepthUsd;
+  const originalTargetSellDepthUsd = config.volumeStrategy.targetSellDepthUsd;
+  const originalReserve = config.volumeStrategy.idleBalanceReserveUsd;
+  const originalForceBuyPause = config.volumeStrategy.forceBuyPause;
+  const originalBuyReactivationMode = config.volumeStrategy.buyReactivationMode;
+  const originalSelfTradeMode = config.volumeStrategy.selfTradeMode;
+  const originalIdleWashEnableAfterMs = config.volumeStrategy.idleWashEnableAfterMs;
+  const originalWashReservedPlacements = config.volumeStrategy.washReservedPlacementsPerCycle;
+  const originalWashBasePairs = config.volumeStrategy.washBasePairsPerCycle;
+  const originalWashMaxPairs = config.volumeStrategy.washMaxPairsPerCycle;
+  const originalMaxExecSpreadPercent = config.volumeStrategy.maxExecSpreadPercent;
+  const originalMinNetEdgeBps = config.volumeStrategy.minNetEdgeBps;
+  const originalMinExecDepthBuyUsd = config.volumeStrategy.minExecDepthBuyUsd;
+  const originalMinExecDepthSellUsd = config.volumeStrategy.minExecDepthSellUsd;
+  const originalMaxDexCexDriftPercent = config.volumeStrategy.maxDexCexDriftPercent;
+  const originalPauseWashOnHighDrift = config.volumeStrategy.pauseWashOnHighDrift;
+  const originalIdleWashRequireLowDrift = config.volumeStrategy.idleWashRequireLowDrift;
+  const originalIdleWashMaxDriftPercent = config.volumeStrategy.idleWashMaxDriftPercent;
+  const originalIdleWashMaxExecSpreadPercent = config.volumeStrategy.idleWashMaxExecSpreadPercent;
+  const originalProtectExternalBuys = config.volumeStrategy.idleWashProtectExternalBuys;
+
+  config.volumeStrategy.orderFrequency = 8000;
+  config.trading.pair = 'EPWXUSDT';
+  config.volumeStrategy.targetOrdersPerSide = 1;
+  config.volumeStrategy.targetBuyDepthUsd = 0;
+  config.volumeStrategy.targetSellDepthUsd = 0;
+  config.volumeStrategy.idleBalanceReserveUsd = 140;
+  config.volumeStrategy.forceBuyPause = false;
+  config.volumeStrategy.buyReactivationMode = 'on';
+  config.volumeStrategy.selfTradeMode = 'on';
+  config.volumeStrategy.idleWashEnableAfterMs = 0;
+  config.volumeStrategy.washReservedPlacementsPerCycle = 0;
+  config.volumeStrategy.washBasePairsPerCycle = 1;
+  config.volumeStrategy.washMaxPairsPerCycle = 1;
+  config.volumeStrategy.maxExecSpreadPercent = 999;
+  config.volumeStrategy.minNetEdgeBps = 0;
+  config.volumeStrategy.minExecDepthBuyUsd = 0;
+  config.volumeStrategy.minExecDepthSellUsd = 0;
+  config.volumeStrategy.maxDexCexDriftPercent = 999;
+  config.volumeStrategy.pauseWashOnHighDrift = false;
+  config.volumeStrategy.idleWashRequireLowDrift = false;
+  config.volumeStrategy.idleWashMaxDriftPercent = 999;
+  config.volumeStrategy.idleWashMaxExecSpreadPercent = 999;
+  config.volumeStrategy.idleWashProtectExternalBuys = true;
+  let resolveReferenceSpy: jest.SpyInstance | null = null;
+
+  try {
+    const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+    resolveReferenceSpy = jest
+      .spyOn(VolumeGenerationStrategy.prototype as any, 'resolveSamePriceWashReference')
+      .mockReturnValue({ price: 1.005 });
+    const strategy = new VolumeGenerationStrategy(mockExchange);
+    (strategy as any).isRunning = true;
+
+    const buySpy = jest.spyOn(strategy as any, 'placeBuyOrder').mockImplementation(async (_price, _amount, isWashTrade = false) => {
+      return isWashTrade ? 'wash-buy-on-mode' : 'regular-buy';
+    });
+    const sellSpy = jest.spyOn(strategy as any, 'placeSellOrder').mockImplementation(async (_price, _amount, isWashTrade = false) => {
+      return isWashTrade ? 'wash-sell-on-mode' : 'regular-sell';
+    });
+    jest
+      .spyOn(strategy as any, 'evaluateProtectedWashBuySafety')
+      .mockResolvedValueOnce({ safe: true })
+      .mockResolvedValueOnce({ safe: false, reason: 'forced-final-check-failure' });
+
+    await (strategy as any).placeVolumeOrders();
+
+    const washBuyCalls = buySpy.mock.calls.filter(([, , isWashTrade]) => isWashTrade === true);
+    const washSellCalls = sellSpy.mock.calls.filter(([, , isWashTrade]) => isWashTrade === true);
+
+    expect(washSellCalls).toHaveLength(1);
+    expect(washBuyCalls).toHaveLength(0);
+    expect(mockExchange.cancelOrder).toHaveBeenCalledWith('EPWXUSDT', 'wash-sell-on-mode');
+  } finally {
+    resolveReferenceSpy?.mockRestore();
+    config.volumeStrategy.orderFrequency = originalOrderFrequency;
+    config.trading.pair = originalPair;
+    config.volumeStrategy.targetOrdersPerSide = originalTargetOrdersPerSide;
+    config.volumeStrategy.targetBuyDepthUsd = originalTargetBuyDepthUsd;
+    config.volumeStrategy.targetSellDepthUsd = originalTargetSellDepthUsd;
+    config.volumeStrategy.idleBalanceReserveUsd = originalReserve;
+    config.volumeStrategy.forceBuyPause = originalForceBuyPause;
+    config.volumeStrategy.buyReactivationMode = originalBuyReactivationMode;
+    config.volumeStrategy.selfTradeMode = originalSelfTradeMode;
+    config.volumeStrategy.idleWashEnableAfterMs = originalIdleWashEnableAfterMs;
+    config.volumeStrategy.washReservedPlacementsPerCycle = originalWashReservedPlacements;
+    config.volumeStrategy.washBasePairsPerCycle = originalWashBasePairs;
+    config.volumeStrategy.washMaxPairsPerCycle = originalWashMaxPairs;
+    config.volumeStrategy.maxExecSpreadPercent = originalMaxExecSpreadPercent;
+    config.volumeStrategy.minNetEdgeBps = originalMinNetEdgeBps;
+    config.volumeStrategy.minExecDepthBuyUsd = originalMinExecDepthBuyUsd;
+    config.volumeStrategy.minExecDepthSellUsd = originalMinExecDepthSellUsd;
+    config.volumeStrategy.maxDexCexDriftPercent = originalMaxDexCexDriftPercent;
+    config.volumeStrategy.pauseWashOnHighDrift = originalPauseWashOnHighDrift;
+    config.volumeStrategy.idleWashRequireLowDrift = originalIdleWashRequireLowDrift;
+    config.volumeStrategy.idleWashMaxDriftPercent = originalIdleWashMaxDriftPercent;
+    config.volumeStrategy.idleWashMaxExecSpreadPercent = originalIdleWashMaxExecSpreadPercent;
+    config.volumeStrategy.idleWashProtectExternalBuys = originalProtectExternalBuys;
   }
 });
 
@@ -3408,61 +3585,5 @@ describe('Confirmed wash fill polling', () => {
     expect((strategy as any).washTradePairsActive.length).toBe(0);
     expect((strategy as any).volumeStats.totalVolume).toBe(24);
     expect((strategy as any).profitStats.washTrades).toBe(2);
-  });
-});
-
-describe('Protected wash pre-buy safety checks', () => {
-  it('blocks protected wash buy when best ask is already below planned buy price', async () => {
-    const mockExchange = {
-      getOrderBook: jest.fn().mockResolvedValue({
-        bids: [[1.614e-10, 1000]],
-        asks: [[1.615e-10, 1000]],
-        timestamp: Date.now(),
-      }),
-    };
-
-    const strategy = new VolumeGenerationStrategy(mockExchange as any);
-    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
-
-    expect(result.safe).toBe(false);
-    expect(result.reason).toContain('best ask');
-  });
-
-  it('blocks protected wash buy when ask liquidity at or below buy price is too large', async () => {
-    const mockExchange = {
-      getOrderBook: jest.fn().mockResolvedValue({
-        bids: [[1.614e-10, 1000]],
-        asks: [
-          [1.616e-10, 2500],
-          [1.617e-10, 500],
-        ],
-        timestamp: Date.now(),
-      }),
-    };
-
-    const strategy = new VolumeGenerationStrategy(mockExchange as any);
-    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
-
-    expect(result.safe).toBe(false);
-    expect(result.reason).toContain('ask liquidity at/below buy price');
-  });
-
-  it('allows protected wash buy when best ask is above and near-touch liquidity is limited', async () => {
-    const mockExchange = {
-      getOrderBook: jest.fn().mockResolvedValue({
-        bids: [[1.614e-10, 1000]],
-        asks: [
-          [1.617e-10, 500],
-          [1.618e-10, 750],
-        ],
-        timestamp: Date.now(),
-      }),
-    };
-
-    const strategy = new VolumeGenerationStrategy(mockExchange as any);
-    const result = await (strategy as any).evaluateProtectedWashBuySafety(1.616e-10, 1000);
-
-    expect(result.safe).toBe(true);
-    expect(result.reason).toBeUndefined();
   });
 });
