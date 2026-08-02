@@ -2227,7 +2227,10 @@ export class VolumeGenerationStrategy {
           }
 
           const placedSellOrder = this.activeOrders.get(sellOrderId);
-          const plannedProtectedBuyPrice = protectedExecutionPrice;
+          const plannedProtectedBuyPrice =
+            typeof placedSellOrder?.price === 'number' && Number.isFinite(placedSellOrder.price) && placedSellOrder.price > 0
+              ? placedSellOrder.price
+              : protectedExecutionPrice;
           const plannedProtectedSellAmount =
             typeof placedSellOrder?.amount === 'number' && Number.isFinite(placedSellOrder.amount) && placedSellOrder.amount > 0
               ? placedSellOrder.amount
