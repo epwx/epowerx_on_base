@@ -2218,7 +2218,8 @@ export class VolumeGenerationStrategy {
 
         if (useProtectedSamePriceWashFlow) {
           logger.info(`[Wash ${i+1}/${washTradePairs}] Placing protected matching SELL/BUY: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
-          const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
+          const protectedExecutionPrice = await this.clampPriceToLatestBand(matchPrice);
+          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, washAmount, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -2226,7 +2227,7 @@ export class VolumeGenerationStrategy {
           }
 
           const placedSellOrder = this.activeOrders.get(sellOrderId);
-          const plannedProtectedBuyPrice = await this.clampPriceToLatestBand(matchPrice);
+          const plannedProtectedBuyPrice = protectedExecutionPrice;
           const plannedProtectedSellAmount =
             typeof placedSellOrder?.amount === 'number' && Number.isFinite(placedSellOrder.amount) && placedSellOrder.amount > 0
               ? placedSellOrder.amount
@@ -2258,7 +2259,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
+          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, washAmount, true);
           if (!buyOrderId) {
             logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
             try {
@@ -2278,7 +2279,7 @@ export class VolumeGenerationStrategy {
           const pairedPrice =
             typeof placedBuyOrder?.price === 'number' && Number.isFinite(placedBuyOrder.price) && placedBuyOrder.price > 0
               ? placedBuyOrder.price
-              : matchPrice;
+              : plannedProtectedBuyPrice;
 
           placementsThisCycle += 2;
           this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: pairedPrice, amount: pairedAmount });
