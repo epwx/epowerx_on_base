@@ -2291,6 +2291,18 @@ export class VolumeGenerationStrategy {
             );
           }
 
+          const protectedPreSellSafety = await this.evaluateProtectedWashBuySafety(
+            protectedExecutionPrice,
+            protectedWashAmount
+          );
+          if (!protectedPreSellSafety.safe) {
+            logger.warn(
+              `⏭️  Skipping protected wash SELL placement due to preflight external-liquidity risk at projected execution price: ${protectedPreSellSafety.reason}`
+            );
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
           const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
