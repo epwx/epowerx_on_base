@@ -2373,6 +2373,22 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
+          const pairedBuyExecutablePrice = await this.clampPriceToLatestBand(plannedProtectedBuyPrice);
+          const priceDivergence = Math.abs(pairedBuyExecutablePrice - plannedProtectedBuyPrice);
+          const priceTolerance = (Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON) * 0.5;
+          if (priceDivergence > priceTolerance) {
+            logger.warn(
+              `⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY because paired BUY would reprice from ${plannedProtectedBuyPrice.toExponential(4)} to ${pairedBuyExecutablePrice.toExponential(4)} under the latest-price band.`
+            );
+            try {
+              await this.exchange.cancelOrder(this.symbol, sellOrderId);
+            } catch (error: any) {
+              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} after detecting buy reprice divergence: ${error?.message || error}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
           const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true);
           if (!buyOrderId) {
             logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
