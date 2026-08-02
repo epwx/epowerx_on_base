@@ -2241,10 +2241,19 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const protectedWashAmount = Math.min(protectedRequestedAmount, protectedExecutableBuyAmount);
+            const protectedBuyCapacityHeadroomFactor = 0.998;
+            const protectedExecutableWithHeadroom = Math.floor(protectedExecutableBuyAmount * protectedBuyCapacityHeadroomFactor);
+            const protectedWashAmount = Math.min(protectedRequestedAmount, protectedExecutableWithHeadroom);
+            if (!Number.isFinite(protectedWashAmount) || protectedWashAmount < this.minQty) {
+              logger.warn(
+                `⚠️  Skipping protected wash pair before SELL placement: BUY executable capacity with headroom is below minQty (${this.minQty})`
+              );
+              await new Promise(resolve => setTimeout(resolve, 100));
+              continue;
+            }
           if (protectedWashAmount !== washAmount) {
             logger.info(
-              `⚠️  Pre-sizing protected wash amount from ${washAmount.toLocaleString()} to ${protectedWashAmount.toLocaleString()} to align SELL with BUY executable capacity`
+                `⚠️  Pre-sizing protected wash amount from ${washAmount.toLocaleString()} to ${protectedWashAmount.toLocaleString()} to align SELL with BUY executable capacity (with headroom)`
             );
           }
 
