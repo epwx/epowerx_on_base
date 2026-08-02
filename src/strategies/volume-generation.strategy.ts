@@ -2329,6 +2329,19 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
+          const preflightPairedBuyExecutablePrice = await this.clampPriceToLatestBand(protectedExecutionPrice);
+          const preflightBuyPriceDivergence = Math.abs(preflightPairedBuyExecutablePrice - protectedExecutionPrice);
+          const preflightTickForDivergence = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
+          const preflightPriceTolerance = preflightTickForDivergence * 2;
+          if (preflightBuyPriceDivergence > preflightPriceTolerance) {
+            const preflightDivergenceTicks = preflightBuyPriceDivergence / preflightTickForDivergence;
+            logger.warn(
+              `⏭️  Skipping protected wash pair before SELL placement because paired BUY would reprice from ${protectedExecutionPrice.toExponential(4)} to ${preflightPairedBuyExecutablePrice.toExponential(4)} under the latest-price band (${preflightDivergenceTicks.toFixed(2)} ticks > 2.00 tick tolerance).`
+            );
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
           const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
