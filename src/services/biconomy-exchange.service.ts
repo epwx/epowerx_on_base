@@ -224,13 +224,24 @@ export class BiconomyExchangeService {
     return (normalizedValue / scale).toFixed(decimals);
   }
 
-  private quantizeEpwxPrice(value: number, decimals: number): string {
-    const effectiveStep = 0.00000000000030;
-    const effectiveAnchor = 0.00000000008210;
-    const nearestStepCount = Math.max(0, Math.round((value - effectiveAnchor) / effectiveStep));
-    const quantizedValue = effectiveAnchor + nearestStepCount * effectiveStep;
+  private quantizeEpwxPrice(value: number, decimals: number, side: 'BUY' | 'SELL', tickSize?: string): string {
+    const safeDecimals = Math.max(0, decimals);
+    const tick = Number.parseFloat(tickSize || '0');
+    if (!Number.isFinite(value) || value <= 0) {
+      return (0).toFixed(safeDecimals);
+    }
 
-    return quantizedValue.toFixed(decimals);
+    // Quantize to the live pair tick while preserving intent per side.
+    if (Number.isFinite(tick) && tick > 0) {
+      const rawSteps = value / tick;
+      const quantizedSteps = side === 'SELL'
+        ? Math.ceil(rawSteps - 1e-9)
+        : Math.floor(rawSteps + 1e-9);
+      const quantizedValue = Math.max(quantizedSteps, 0) * tick;
+      return quantizedValue.toFixed(safeDecimals);
+    }
+
+    return value.toFixed(safeDecimals);
   }
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
@@ -378,7 +389,7 @@ export class BiconomyExchangeService {
           const decimals = (pairInfo?.tickSize || '').includes('.')
             ? (pairInfo?.tickSize || '').split('.')[1].length
             : pairInfo?.quoteAssetPrecision ?? 13;
-          priceStr = this.quantizeEpwxPrice(price, decimals);
+          priceStr = this.quantizeEpwxPrice(price, decimals, side, pairInfo?.tickSize);
         }
       } else if (pairInfo) {
         const minQty = pairInfo.minQty ?? 5;
