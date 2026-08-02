@@ -2219,7 +2219,36 @@ export class VolumeGenerationStrategy {
         if (useProtectedSamePriceWashFlow) {
           logger.info(`[Wash ${i+1}/${washTradePairs}] Placing protected matching SELL/BUY: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
           const protectedExecutionPrice = await this.clampPriceToLatestBand(matchPrice);
-          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, washAmount, true);
+          const protectedRequestedAmount = this.applyOrderAmountCap(
+            Math.floor(washAmount),
+            'SELL',
+            protectedExecutionPrice,
+            availableUSDT
+          );
+          const protectedExecutableBuyAmount = this.recalculateExecutableOrderAmount(
+            'BUY',
+            protectedExecutionPrice,
+            protectedRequestedAmount,
+            protectedExecutionPrice,
+            availableUSDT,
+            0
+          );
+          if (protectedExecutableBuyAmount === null) {
+            logger.warn(
+              `⚠️  Skipping protected wash pair before SELL placement: insufficient BUY executable notional @ ${protectedExecutionPrice.toExponential(4)} with spendable reserve-aware USDT $${Math.max(availableUSDT - this.getIdleBalanceReserveUsd(), 0).toFixed(2)}`
+            );
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
+          const protectedWashAmount = Math.min(protectedRequestedAmount, protectedExecutableBuyAmount);
+          if (protectedWashAmount !== washAmount) {
+            logger.info(
+              `⚠️  Pre-sizing protected wash amount from ${washAmount.toLocaleString()} to ${protectedWashAmount.toLocaleString()} to align SELL with BUY executable capacity`
+            );
+          }
+
+          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -2234,7 +2263,7 @@ export class VolumeGenerationStrategy {
           const plannedProtectedSellAmount =
             typeof placedSellOrder?.amount === 'number' && Number.isFinite(placedSellOrder.amount) && placedSellOrder.amount > 0
               ? placedSellOrder.amount
-              : washAmount;
+              : protectedWashAmount;
 
           await new Promise(resolve => setTimeout(resolve, 120));
           const protectedBuySafety = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
@@ -2262,7 +2291,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, washAmount, true);
+          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true);
           if (!buyOrderId) {
             logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
             try {
@@ -2278,7 +2307,7 @@ export class VolumeGenerationStrategy {
           const pairedAmount =
             typeof placedBuyOrder?.amount === 'number' && Number.isFinite(placedBuyOrder.amount) && placedBuyOrder.amount > 0
               ? placedBuyOrder.amount
-              : washAmount;
+              : plannedProtectedSellAmount;
           const pairedPrice =
             typeof placedBuyOrder?.price === 'number' && Number.isFinite(placedBuyOrder.price) && placedBuyOrder.price > 0
               ? placedBuyOrder.price
