@@ -2318,7 +2318,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true);
+          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true, true);
           if (!sellOrderId) {
             logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -2391,7 +2391,7 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true);
+          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true, true);
           if (!buyOrderId) {
             logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
             try {
@@ -2651,7 +2651,12 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeBuyOrder(
+    price: number,
+    amount: number,
+    isWashTrade: boolean = false,
+    skipLatestBandClamp: boolean = false
+  ): Promise<string | void> {
     try {
       const washTradeBuyGate = isWashTrade
         ? this.evaluateWashTradeBuyGate(
@@ -2690,12 +2695,14 @@ export class VolumeGenerationStrategy {
       const requestedPrice = price;
       const requestedAmount = normalizedAmount;
 
-      const clampedPrice = await this.clampPriceToLatestBand(price);
-      if (clampedPrice !== price) {
-        logger.warn(
-          `⚠️  Clamping buy price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
-        );
-        price = clampedPrice;
+      if (!skipLatestBandClamp) {
+        const clampedPrice = await this.clampPriceToLatestBand(price);
+        if (clampedPrice !== price) {
+          logger.warn(
+            `⚠️  Clamping buy price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+          );
+          price = clampedPrice;
+        }
       }
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
@@ -2773,7 +2780,12 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeSellOrder(
+    price: number,
+    amount: number,
+    isWashTrade: boolean = false,
+    skipLatestBandClamp: boolean = false
+  ): Promise<string | void> {
     try {
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
@@ -2788,12 +2800,14 @@ export class VolumeGenerationStrategy {
       const requestedPrice = price;
       const requestedAmount = normalizedAmount;
 
-      const clampedPrice = await this.clampPriceToLatestBand(price);
-      if (clampedPrice !== price) {
-        logger.warn(
-          `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
-        );
-        price = clampedPrice;
+      if (!skipLatestBandClamp) {
+        const clampedPrice = await this.clampPriceToLatestBand(price);
+        if (clampedPrice !== price) {
+          logger.warn(
+            `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+          );
+          price = clampedPrice;
+        }
       }
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
