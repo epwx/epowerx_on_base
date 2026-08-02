@@ -1093,7 +1093,22 @@ export class VolumeGenerationStrategy {
 
   private async clampPriceToLatestBand(price: number): Promise<number> {
     const ticker = await this.exchange.getTicker(this.symbol);
-    const latestPrice = ticker?.price ?? 0;
+    let latestPrice = ticker?.price ?? 0;
+    const bid = ticker?.bid ?? 0;
+    const ask = ticker?.ask ?? 0;
+
+    // Some feeds pin ticker price to best ask/bid in sparse books.
+    // Anchor to midpoint in that case so clamping does not force marketable prices.
+    if (
+      Number.isFinite(bid) &&
+      Number.isFinite(ask) &&
+      bid > 0 &&
+      ask > 0 &&
+      ask > bid &&
+      (!Number.isFinite(latestPrice) || latestPrice <= bid || latestPrice >= ask)
+    ) {
+      latestPrice = (bid + ask) / 2;
+    }
 
     if (!Number.isFinite(latestPrice) || latestPrice <= 0) {
       return price;
