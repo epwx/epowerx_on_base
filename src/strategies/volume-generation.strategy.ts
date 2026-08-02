@@ -2397,14 +2397,14 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
-          const pairedBuyExecutablePrice = await this.clampPriceToLatestBand(plannedProtectedBuyPrice);
+          const pairedBuyExecutablePrice = preflightPairedBuyExecutablePrice;
           const priceDivergence = Math.abs(pairedBuyExecutablePrice - plannedProtectedBuyPrice);
           const tickForDivergence = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
           const priceTolerance = tickForDivergence * 2;
           if (priceDivergence > priceTolerance) {
             const divergenceTicks = priceDivergence / tickForDivergence;
             logger.warn(
-              `⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY because paired BUY would reprice from ${plannedProtectedBuyPrice.toExponential(4)} to ${pairedBuyExecutablePrice.toExponential(4)} under the latest-price band (${divergenceTicks.toFixed(2)} ticks > 2.00 tick tolerance).`
+              `⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY because placed SELL drifted from the protected preflight buy price: ${plannedProtectedBuyPrice.toExponential(4)} vs ${pairedBuyExecutablePrice.toExponential(4)} (${divergenceTicks.toFixed(2)} ticks > 2.00 tick tolerance).`
             );
             try {
               await this.exchange.cancelOrder(this.symbol, sellOrderId);
