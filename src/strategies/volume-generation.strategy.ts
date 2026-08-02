@@ -50,6 +50,7 @@ export class VolumeGenerationStrategy {
   private static readonly ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD = 25;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
+  private static readonly PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO = 1.2;
   private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
   private static readonly DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS = 4;
   private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 3000;
@@ -2268,6 +2269,16 @@ export class VolumeGenerationStrategy {
         if (useProtectedSamePriceWashFlow) {
           logger.info(`[Wash ${i+1}/${washTradePairs}] Placing protected matching SELL/BUY: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
           const protectedExecutionPrice = await this.clampPriceToLatestBand(matchPrice);
+          const protectedReferenceRepriceRatio =
+            Math.max(protectedExecutionPrice, matchPrice) /
+            Math.max(Math.min(protectedExecutionPrice, matchPrice), Number.EPSILON);
+          if (protectedReferenceRepriceRatio > VolumeGenerationStrategy.PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO) {
+            logger.warn(
+              `⏭️  Skipping protected wash pair before SELL placement because execution would reprice too far from same-price reference: ${matchPrice.toExponential(4)} -> ${protectedExecutionPrice.toExponential(4)} (ratio x${protectedReferenceRepriceRatio.toFixed(2)} > x${VolumeGenerationStrategy.PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO.toFixed(2)}).`
+            );
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
           const protectedRequestedAmount = this.applyOrderAmountCap(
             Math.floor(washAmount),
             'SELL',
