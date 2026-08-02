@@ -91,6 +91,7 @@ export class VolumeGenerationStrategy {
   private realSellFills: number = 0;
   private lastRealFillAt: number = Date.now();
   private washAutoCooldownUntil: number = 0;
+  private protectedWashCooldownUntil: number = 0;
   private washAutoEnabled: boolean = false;
   private washConfirmedBuyCarryAmount: number = 0;
   private washConfirmedBuyCreditedByOrder: Map<string, number> = new Map();
@@ -431,6 +432,14 @@ export class VolumeGenerationStrategy {
         .filter(([price]) => Number.isFinite(price) && price <= buyPrice + epsilon)
         .reduce((sum, [, amount]) => sum + (Number.isFinite(amount) ? amount : 0), 0);
 
+      const externalAskQtyAtOrBelowBuyPrice = Math.max(askQtyAtOrBelowBuyPrice - plannedSellAmount, 0);
+      if (externalAskQtyAtOrBelowBuyPrice >= this.minQty) {
+        return {
+          safe: false,
+          reason: `external ask liquidity at/below buy price (${Math.floor(externalAskQtyAtOrBelowBuyPrice).toLocaleString()} EPWX) risks non-self protected BUY fills`,
+        };
+      }
+
       if (askQtyAtOrBelowBuyPrice > plannedSellAmount * 1.1) {
         return {
           safe: false,
@@ -498,6 +507,22 @@ export class VolumeGenerationStrategy {
     }
   }
 
+  private activateProtectedWashCooldown(reason: string): void {
+    const mode = this.getSelfTradeMode();
+    if (mode === 'off' || !this.getIdleWashProtectExternalBuys()) {
+      return;
+    }
+
+    const cooldownMs = this.getIdleWashCooldownAfterRealFillMs();
+    if (cooldownMs <= 0) {
+      return;
+    }
+
+    const now = Date.now();
+    this.protectedWashCooldownUntil = Math.max(this.protectedWashCooldownUntil, now + cooldownMs);
+    logger.warn(`🛑 Protected wash cooldown activated (${Math.ceil(cooldownMs / 1000)}s): ${reason}`);
+  }
+
   private resolveWashTradeDecision(params: {
     canRunWashTradesByDrift: boolean;
     dexCexDriftPercent: number;
@@ -548,6 +573,15 @@ export class VolumeGenerationStrategy {
     if (!params.canRunWashTradesByDrift) {
       this.washAutoEnabled = false;
       return { enabled: false, maxPairs: 0, reason: 'DEX/CEX drift guard blocked wash trades' };
+    }
+
+    if (this.getIdleWashProtectExternalBuys() && now < this.protectedWashCooldownUntil) {
+      this.washAutoEnabled = false;
+      return {
+        enabled: false,
+        maxPairs: 0,
+        reason: `protected wash cooldown active (${Math.ceil((this.protectedWashCooldownUntil - now) / 1000)}s remaining)`,
+      };
     }
 
     if (mode === 'on') {
@@ -2300,6 +2334,18 @@ export class VolumeGenerationStrategy {
             continue;
           }
 
+          const protectedBuySafetyImmediate = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
+          if (!protectedBuySafetyImmediate.safe) {
+            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to immediate external-liquidity risk check: ${protectedBuySafetyImmediate.reason}`);
+            try {
+              await this.exchange.cancelOrder(this.symbol, sellOrderId);
+            } catch (error: any) {
+              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during immediate pre-buy safety check: ${error?.message || error}`);
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            continue;
+          }
+
           const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true);
           if (!buyOrderId) {
             logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
@@ -3118,6 +3164,15 @@ export class VolumeGenerationStrategy {
       if (isWashTrade) {
         this.profitStats.washTrades++;
         logger.info(`🔄 WASH TRADE FILL: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
+          if (effectiveSide === 'BUY') {
+            const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
+            const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
+            if (Number.isFinite(trackedOrderPrice) && trackedOrderPrice > 0 && trade.price + tick < trackedOrderPrice) {
+              this.activateProtectedWashCooldown(
+                `wash BUY ${orderId} filled at ${trade.price.toExponential(4)} below order price ${trackedOrderPrice.toExponential(4)} (likely external sell interaction)`
+              );
+            }
+          }
       } else {
         this.noteRealFillDetected(`trade ${trade.tradeId}`);
         const realizedPnl = this.applyEconomicFill(effectiveSide, trade.amount, trade.price, false);
