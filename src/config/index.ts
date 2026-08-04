@@ -30,6 +30,7 @@ interface Config {
     buyReactivationMode: 'off' | 'auto' | 'on';
     minNetEdgeBps: number;
     maxExecSpreadPercent: number;
+    executableSpreadCircuitBreakerPercent: number;
     minExecDepthBuyUsd: number;
     minExecDepthSellUsd: number;
     adverseFillRatioMax: number;
@@ -176,6 +177,7 @@ export const config: Config = {
     buyReactivationMode: getEnvBuyReactivationMode('BUY_REACTIVATION_MODE', 'on'),
     minNetEdgeBps: getEnvNumber('MIN_NET_EDGE_BPS', 0),
     maxExecSpreadPercent: getEnvNumber('MAX_EXEC_SPREAD_PERCENT', 8),
+    executableSpreadCircuitBreakerPercent: getEnvNumber('MAX_EXECUTABLE_SPREAD_CIRCUIT_BREAKER_PERCENT', 3),
     minExecDepthBuyUsd: getEnvNumber('MIN_EXEC_DEPTH_BUY_USD', 0),
     minExecDepthSellUsd: getEnvNumber('MIN_EXEC_DEPTH_SELL_USD', 0),
     adverseFillRatioMax: getEnvNumber('ADVERSE_FILL_RATIO_MAX', 1.6),

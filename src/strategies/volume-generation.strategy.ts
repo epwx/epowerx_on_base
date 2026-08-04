@@ -48,7 +48,6 @@ export class VolumeGenerationStrategy {
   private static readonly ADVERSE_BUY_FILL_GUARD_MIN_RATIO = 1.6;
   private static readonly ADVERSE_BUY_FILL_GUARD_INVENTORY_DEPTH_MULTIPLIER = 1.25;
   private static readonly ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD = 25;
-  private static readonly MAX_EXECUTABLE_SPREAD_CIRCUIT_BREAKER_PERCENT = 3;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
     public getProfitStats(): ProfitStats {
@@ -1256,12 +1255,16 @@ export class VolumeGenerationStrategy {
         executableBestBid > 0 && executableBestAsk > 0
           ? ((executableBestAsk - executableBestBid) / executableBestBid) * 100
           : Infinity;
+      const executableSpreadCircuitBreakerPercent = Math.max(
+        config.volumeStrategy.executableSpreadCircuitBreakerPercent,
+        0
+      );
       if (
         Number.isFinite(executableSpreadPercent) &&
-        executableSpreadPercent > VolumeGenerationStrategy.MAX_EXECUTABLE_SPREAD_CIRCUIT_BREAKER_PERCENT
+        executableSpreadPercent > executableSpreadCircuitBreakerPercent
       ) {
         logger.warn(
-          `🛑 Executable spread circuit breaker: ${executableSpreadPercent.toFixed(2)}% > ${VolumeGenerationStrategy.MAX_EXECUTABLE_SPREAD_CIRCUIT_BREAKER_PERCENT.toFixed(2)}%; pausing quote placement for this cycle.`
+          `🛑 Executable spread circuit breaker: ${executableSpreadPercent.toFixed(2)}% > ${executableSpreadCircuitBreakerPercent.toFixed(2)}%; pausing quote placement for this cycle.`
         );
         return;
       }
