@@ -50,12 +50,6 @@ export class VolumeGenerationStrategy {
   private static readonly ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD = 25;
   private static readonly MAX_EXECUTABLE_SPREAD_PERCENT = 5;
   private static readonly MAX_CLAMP_REPRICE_RATIO = 1.5;
-  private static readonly PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO = 1.2;
-  private static readonly QUOTE_CHURN_REFRESH_PER_SIDE = 2;
-  private static readonly DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS = 4;
-  private static readonly DISAPPEARED_ORDER_RETRY_DELAY_MS = 3000;
-  private static readonly DISAPPEARED_CAPTURE_TRADES_SOFT_TIMEOUT_MS = 2500;
-  private static readonly ORDER_STATUS_CHECK_DELAY_MS = 700;
     public getProfitStats(): ProfitStats {
       return this.profitStats;
     }
@@ -68,7 +62,6 @@ export class VolumeGenerationStrategy {
   private isRunning: boolean = false;
   private stepSize: number = 1;
   private minQty: number = 1;
-  private tickSize: number = 0.0000000000001;
   private symbol: string;
   private volumeStats: VolumeStats;
   protected profitStats: ProfitStats;
@@ -92,12 +85,7 @@ export class VolumeGenerationStrategy {
   private realSellFills: number = 0;
   private lastRealFillAt: number = Date.now();
   private washAutoCooldownUntil: number = 0;
-  private protectedWashCooldownUntil: number = 0;
   private washAutoEnabled: boolean = false;
-  private washConfirmedBuyCarryAmount: number = 0;
-  private washConfirmedBuyCreditedByOrder: Map<string, number> = new Map();
-  private washSubmittedOrderIds: Set<string> = new Set();
-  private disappearedOrderRetryState: Map<string, { attempts: number; nextRetryAt: number }> = new Map();
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
@@ -306,157 +294,6 @@ export class VolumeGenerationStrategy {
     return Math.max(config.volumeStrategy.idleWashMaxExecSpreadPercent, 0);
   }
 
-  private getIdleWashSamePriceUpwardStepBpsPerMinute(): number {
-    return Math.max(config.volumeStrategy.idleWashSamePriceUpwardStepBpsPerMinute, 0);
-  }
-
-  private getIdleWashSamePriceUpwardMaxBps(): number {
-    return Math.max(config.volumeStrategy.idleWashSamePriceUpwardMaxBps, 0);
-  }
-
-  private getIdleWashProtectExternalBuys(): boolean {
-    return config.volumeStrategy.idleWashProtectExternalBuys;
-  }
-
-  private getIdleWashProtectMinSpreadTicks(): number {
-    return Math.max(Math.floor(config.volumeStrategy.idleWashProtectMinSpreadTicks), 1);
-  }
-
-  private quantizePriceToTick(price: number): number {
-    if (!Number.isFinite(price) || price <= 0) {
-      return price;
-    }
-
-    const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-    return Math.max(Math.floor(price / tick) * tick, tick);
-  }
-
-  private resolveSamePriceWashReference(
-    washPriceReference: number,
-    executableBestBid: number,
-    executableBestAsk: number
-  ): { price: number | null; reason?: string } {
-    const upwardStepBpsPerMinute = this.getIdleWashSamePriceUpwardStepBpsPerMinute();
-    const upwardMaxBps = this.getIdleWashSamePriceUpwardMaxBps();
-    const idleMinutes = Math.max(0, Math.floor((Date.now() - this.lastRealFillAt) / 60000));
-    const upwardBps = Math.min(upwardStepBpsPerMinute * idleMinutes, upwardMaxBps);
-    let targetPrice = washPriceReference;
-
-    if (upwardBps > 0) {
-      targetPrice = washPriceReference * (1 + upwardBps / 10000);
-      logger.info(
-        `📈 Idle wash upward trend active: +${upwardBps.toFixed(2)} bps after ${idleMinutes}m idle (${washPriceReference.toExponential(4)} -> ${targetPrice.toExponential(4)}).`
-      );
-    }
-
-    if (!this.getIdleWashProtectExternalBuys()) {
-      return { price: targetPrice };
-    }
-
-    if (
-      !Number.isFinite(executableBestBid) ||
-      !Number.isFinite(executableBestAsk) ||
-      executableBestBid <= 0 ||
-      executableBestAsk <= 0 ||
-      executableBestAsk <= executableBestBid
-    ) {
-      return {
-        price: null,
-        reason: 'missing executable bid/ask needed for protected same-price wash',
-      };
-    }
-
-    const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-    const spreadTicks = (executableBestAsk - executableBestBid) / tick;
-    const minSpreadTicks = this.getIdleWashProtectMinSpreadTicks();
-    if (!Number.isFinite(spreadTicks) || spreadTicks < minSpreadTicks) {
-      return {
-        price: null,
-        reason: `spread too tight for protected same-price wash (${spreadTicks.toFixed(2)} ticks < ${minSpreadTicks})`,
-      };
-    }
-
-    const lowerBound = executableBestBid + tick;
-    const upperBound = executableBestAsk - tick;
-    if (!(lowerBound < upperBound)) {
-      return {
-        price: null,
-        reason: 'no safe inside-spread price remains for protected same-price wash',
-      };
-    }
-
-    const clampedInsideSpread = Math.min(Math.max(targetPrice, lowerBound), upperBound);
-    const quantizedInsideSpread = this.quantizePriceToTick(clampedInsideSpread);
-    if (!(quantizedInsideSpread > executableBestBid && quantizedInsideSpread < executableBestAsk)) {
-      return {
-        price: null,
-        reason: 'tick-size quantization removed protected inside-spread wash price',
-      };
-    }
-
-    if (Math.abs(quantizedInsideSpread - targetPrice) > Number.EPSILON) {
-      logger.info(
-        `🛡️  Protected same-price wash adjusted from ${targetPrice.toExponential(4)} to ${quantizedInsideSpread.toExponential(4)} to avoid external liquidity.`
-      );
-    }
-
-    return { price: quantizedInsideSpread };
-  }
-
-  private async evaluateProtectedWashBuySafety(
-    buyPrice: number,
-    plannedSellAmount: number
-  ): Promise<{ safe: boolean; reason?: string }> {
-    if (!Number.isFinite(buyPrice) || buyPrice <= 0 || !Number.isFinite(plannedSellAmount) || plannedSellAmount <= 0) {
-      return { safe: false, reason: 'invalid protected wash inputs for pre-buy safety check' };
-    }
-
-    try {
-      const orderBook = await this.exchange.getOrderBook(this.symbol);
-      const asks = orderBook?.asks ?? [];
-      if (!asks.length) {
-        return { safe: false, reason: 'no ask-side order book levels available for pre-buy safety check' };
-      }
-
-      const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-      const epsilon = tick * 0.5;
-      const bestAsk = asks[0]?.[0] ?? 0;
-
-      if (Number.isFinite(bestAsk) && bestAsk > 0 && bestAsk < buyPrice - epsilon) {
-        return {
-          safe: false,
-          reason: `best ask ${bestAsk.toExponential(4)} is below protected wash buy ${buyPrice.toExponential(4)}`,
-        };
-      }
-
-      const askQtyAtOrBelowBuyPrice = asks
-        .filter(([price]) => Number.isFinite(price) && price <= buyPrice + epsilon)
-        .reduce((sum, [, amount]) => sum + (Number.isFinite(amount) ? amount : 0), 0);
-
-      const externalAskQtyAtOrBelowBuyPrice = Math.max(askQtyAtOrBelowBuyPrice - plannedSellAmount, 0);
-      if (externalAskQtyAtOrBelowBuyPrice >= this.minQty) {
-        return {
-          safe: false,
-          reason: `external ask liquidity at/below buy price (${Math.floor(externalAskQtyAtOrBelowBuyPrice).toLocaleString()} EPWX) risks non-self protected BUY fills`,
-        };
-      }
-
-      if (askQtyAtOrBelowBuyPrice > plannedSellAmount * 1.1) {
-        return {
-          safe: false,
-          reason: `ask liquidity at/below buy price (${Math.floor(askQtyAtOrBelowBuyPrice).toLocaleString()} EPWX) exceeds planned protected sell amount (${Math.floor(plannedSellAmount).toLocaleString()} EPWX)`,
-        };
-      }
-
-      return { safe: true };
-    } catch (error: any) {
-      return {
-        safe: false,
-        reason: `pre-buy safety check failed: ${error?.message || error}`,
-      };
-    }
-  }
-
   private async cancelActiveWashOrders(reason: string): Promise<void> {
     const washOrderIds = new Set<string>();
     for (const pair of this.washTradePairsActive) {
@@ -478,8 +315,6 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.delete(orderId);
       this.orderPrices.delete(orderId);
-      this.washSubmittedOrderIds.delete(orderId);
-      this.washConfirmedBuyCreditedByOrder.delete(orderId);
       this.settledWashOrderIds.add(orderId);
     }
 
@@ -508,22 +343,6 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  private activateProtectedWashCooldown(reason: string): void {
-    const mode = this.getSelfTradeMode();
-    if (mode === 'off' || !this.getIdleWashProtectExternalBuys()) {
-      return;
-    }
-
-    const cooldownMs = this.getIdleWashCooldownAfterRealFillMs();
-    if (cooldownMs <= 0) {
-      return;
-    }
-
-    const now = Date.now();
-    this.protectedWashCooldownUntil = Math.max(this.protectedWashCooldownUntil, now + cooldownMs);
-    logger.warn(`🛑 Protected wash cooldown activated (${Math.ceil(cooldownMs / 1000)}s): ${reason}`);
-  }
-
   private resolveWashTradeDecision(params: {
     canRunWashTradesByDrift: boolean;
     dexCexDriftPercent: number;
@@ -531,7 +350,6 @@ export class VolumeGenerationStrategy {
     adverseBuyGuardActive: boolean;
     forceBuyPause: boolean;
     dynamicWashTradePairs: number;
-    relaxedWashGates?: boolean;
   }): { enabled: boolean; maxPairs: number; reason: string } {
     const mode = this.getSelfTradeMode();
     const now = Date.now();
@@ -551,38 +369,9 @@ export class VolumeGenerationStrategy {
       return { enabled: false, maxPairs: 0, reason: 'adverse-fill buy guard active' };
     }
 
-    if (params.relaxedWashGates) {
-      const idleMs = now - this.lastRealFillAt;
-      const idleThresholdMs = this.getIdleWashEnableAfterMs();
-      if (idleMs < idleThresholdMs) {
-        this.washAutoEnabled = false;
-        return {
-          enabled: false,
-          maxPairs: 0,
-          reason: `waiting for idle window (${Math.ceil((idleThresholdMs - idleMs) / 1000)}s remaining)`,
-        };
-      }
-
-      this.washAutoEnabled = true;
-      return {
-        enabled: true,
-        maxPairs: Math.min(Math.max(params.dynamicWashTradePairs, 0), this.getIdleWashMaxPairsPerCycle()),
-        reason: 'SELF_TRADE_MODE=auto enabled after idle window (relaxed wash gates)',
-      };
-    }
-
     if (!params.canRunWashTradesByDrift) {
       this.washAutoEnabled = false;
       return { enabled: false, maxPairs: 0, reason: 'DEX/CEX drift guard blocked wash trades' };
-    }
-
-    if (this.getIdleWashProtectExternalBuys() && now < this.protectedWashCooldownUntil) {
-      this.washAutoEnabled = false;
-      return {
-        enabled: false,
-        maxPairs: 0,
-        reason: `protected wash cooldown active (${Math.ceil((this.protectedWashCooldownUntil - now) / 1000)}s remaining)`,
-      };
     }
 
     if (mode === 'on') {
@@ -696,56 +485,6 @@ export class VolumeGenerationStrategy {
       multiplier: defensiveMultiplier,
       regime: 'defensive',
       reason: `Auto-mode defensive risk sizing (${defensiveMultiplier.toFixed(2)}x)`
-    };
-  }
-
-  /**
-   * Evaluate gate for wash-trade-only buy orders (same-price self-matching).
-   * Wash trades have relaxed requirements:
-   * - No executable depth requirement (they self-match, don't need external liquidity)
-   * - No drift/spread gates (both orders at same price, zero external price risk)
-   * Only checks: idle window, adverse fill guard, force pause, mode enabled
-   */
-  private evaluateWashTradeBuyGate(
-    selfTradeMode: SelfTradeMode,
-    forceBuyPause: boolean,
-    adverseBuyGuardActive: boolean,
-    isIdleWindowActive: boolean
-  ): {
-    allowWashBuys: boolean;
-    reason: string;
-  } {
-    if (selfTradeMode === 'off') {
-      return {
-        allowWashBuys: false,
-        reason: 'SELF_TRADE_MODE=off',
-      };
-    }
-
-    if (forceBuyPause) {
-      return {
-        allowWashBuys: false,
-        reason: 'FORCE_BUY_PAUSE=true',
-      };
-    }
-
-    if (adverseBuyGuardActive) {
-      return {
-        allowWashBuys: false,
-        reason: 'adverse-fill guard active',
-      };
-    }
-
-    if (!isIdleWindowActive && selfTradeMode === 'auto') {
-      return {
-        allowWashBuys: false,
-        reason: 'waiting for idle window',
-      };
-    }
-
-    return {
-      allowWashBuys: true,
-      reason: 'Wash-trade buy gate passed (relaxed: no depth/drift/spread gates)',
     };
   }
 
@@ -1094,22 +833,7 @@ export class VolumeGenerationStrategy {
 
   private async clampPriceToLatestBand(price: number): Promise<number> {
     const ticker = await this.exchange.getTicker(this.symbol);
-    let latestPrice = ticker?.price ?? 0;
-    const bid = ticker?.bid ?? 0;
-    const ask = ticker?.ask ?? 0;
-
-    // Some feeds pin ticker price to best ask/bid in sparse books.
-    // Anchor to midpoint in that case so clamping does not force marketable prices.
-    if (
-      Number.isFinite(bid) &&
-      Number.isFinite(ask) &&
-      bid > 0 &&
-      ask > 0 &&
-      ask > bid &&
-      (!Number.isFinite(latestPrice) || latestPrice <= bid || latestPrice >= ask)
-    ) {
-      latestPrice = (bid + ask) / 2;
-    }
+    const latestPrice = ticker?.price ?? 0;
 
     if (!Number.isFinite(latestPrice) || latestPrice <= 0) {
       return price;
@@ -1259,18 +983,7 @@ export class VolumeGenerationStrategy {
       );
     } catch (error: any) {
       const message = error?.message || 'unknown';
-      const isOrderAlreadyGone = message.includes('Order not found or already completed');
-      const isExpectedWashVanish = isOrderAlreadyGone && this.isTrackedWashOrder(orderId) && this.getSelfTradeMode() === 'on';
-
-      if (isExpectedWashVanish) {
-        logger.info(
-          `ℹ️  [POST-PLACE] ${side} ${orderId} already disappeared from pending in SELF_TRADE_MODE=on; reconciliation will attribute this wash leg.`
-        );
-      } else if (isOrderAlreadyGone) {
-        logger.info(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
-      } else {
-        logger.warn(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
-      }
+      logger.warn(`🧾 [POST-PLACE] ${side} ${orderId} is not pending immediately after placement (message=${message}).`);
     }
   }
 
@@ -1359,10 +1072,6 @@ export class VolumeGenerationStrategy {
         this.stepSize = Number(pairInfo.stepSize);
       }
       if (pairInfo.minQty) this.minQty = Number(pairInfo.minQty);
-      const parsedTickSize = Number(pairInfo.tickSize);
-      if (Number.isFinite(parsedTickSize) && parsedTickSize > 0) {
-        this.tickSize = parsedTickSize;
-      }
       logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}, baseAssetPrecision=${pairInfo.baseAssetPrecision}, quoteAssetPrecision=${pairInfo.quoteAssetPrecision}, tickSize=${pairInfo.tickSize}`);
     } catch (e) {
       logger.warn('Could not fetch EPWX/USDT pair info, using defaults.');
@@ -1466,13 +1175,8 @@ export class VolumeGenerationStrategy {
         await this.syncCurrentPositionWithBalances();
         await this.checkAndRebalancePosition();
         this.logPerformance();
-      } catch (error: any) {
-        const message = String(error?.message || '').toLowerCase();
-        if (message.includes('service is not available')) {
-          logger.warn('Exchange service temporarily unavailable in monitoring loop. Retrying on next cycle.');
-        } else {
-          logger.error('Error in monitoring loop:', error);
-        }
+      } catch (error) {
+        logger.error('Error in monitoring loop:', error);
       }
     }, config.marketMaking.updateInterval);
   }
@@ -1659,11 +1363,14 @@ export class VolumeGenerationStrategy {
       sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
 
-      let bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
-      const bookAlreadyFull = bookSeeded;
+      const bookAlreadyFull = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
       if (bookAlreadyFull && cleanupCancelledCount === 0) {
+        const configuredRefreshPerSide = Math.max(
+          Math.floor(config.volumeStrategy.quoteChurnRefreshPerSide),
+          0
+        );
         const refreshPerSide = Math.min(
-          VolumeGenerationStrategy.QUOTE_CHURN_REFRESH_PER_SIDE,
+          configuredRefreshPerSide,
           Math.max(Math.floor(bookPlacementBudget / 2), 1)
         );
 
@@ -1748,12 +1455,6 @@ export class VolumeGenerationStrategy {
       const adverseBuyGuard = this.evaluateAdverseBuyFillGuard(priceReference, targetBuyDepthUsd);
       const forceBuyPause = this.getForceBuyPause();
       const buyReactivationMode = this.getBuyReactivationMode();
-      const washTradeBuyGate = this.evaluateWashTradeBuyGate(
-        this.getSelfTradeMode(),
-        forceBuyPause,
-        adverseBuyGuard.active,
-        Date.now() - this.lastRealFillAt >= this.getIdleWashEnableAfterMs()
-      );
       const buyReactivationGate = this.evaluateBuyReactivationGate(
         buyReactivationMode,
         placementPriceSource,
@@ -1888,29 +1589,6 @@ export class VolumeGenerationStrategy {
         shouldPrioritizeBuysForDepth = false;
       }
 
-      const autoSellCooldownActive =
-        this.getSelfTradeMode() === 'auto' && Date.now() < this.washAutoCooldownUntil;
-      const shortInventorySellGuardThreshold = Math.max(config.marketMaking.positionRebalanceThreshold, 1);
-      const shortInventorySellGuardActive = this.currentPosition <= -shortInventorySellGuardThreshold;
-
-      if (autoSellCooldownActive || shortInventorySellGuardActive) {
-        const guardReasons: string[] = [];
-        if (autoSellCooldownActive) {
-          guardReasons.push(`auto wash cooldown active (${Math.ceil((this.washAutoCooldownUntil - Date.now()) / 1000)}s remaining)`);
-        }
-        if (shortInventorySellGuardActive) {
-          guardReasons.push(
-            `net short inventory ${this.currentPosition.toFixed(2)} exceeds threshold ${(-shortInventorySellGuardThreshold).toFixed(2)}`
-          );
-        }
-
-        if (sellPlacementCap > 0) {
-          logger.warn(`🛑 Freezing new non-wash sell placements this cycle: ${guardReasons.join('; ')}.`);
-        }
-
-        sellPlacementCap = 0;
-      }
-
       let sellPlacementPriceReference = skewedPriceReference;
       let sellPlacementMode: 'PASSIVE' | 'EXCHANGE_BAND_FALLBACK' = 'PASSIVE';
       if (!shouldFreezeSellPlacements) {
@@ -1926,45 +1604,8 @@ export class VolumeGenerationStrategy {
       }
       const allowSparseSellRecovery = !canPlaceBuysThisCycle;
 
-      const remainingPlacementSlots = Math.max(maxPlacementsPerCycle - placementsThisCycle, 0);
-      const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
-      const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
-      const washPairsByReservedBudget = washReservedPlacements > 0
-        ? Math.floor(reservedWashSlotsLeft / 2)
-        : Number.POSITIVE_INFINITY;
-      const washDecision = this.resolveWashTradeDecision({
-        canRunWashTradesByDrift,
-        dexCexDriftPercent,
-        executableSpreadPercent,
-        adverseBuyGuardActive: adverseBuyGuard.active,
-        forceBuyPause,
-        dynamicWashTradePairs,
-        relaxedWashGates: this.getSelfTradeMode() === 'auto' && washTradeBuyGate.allowWashBuys,
-      });
-      const washFeatureEnabled = washDecision.enabled;
-      const washTradePairs = washFeatureEnabled
-        ? Math.min(
-            washDecision.maxPairs,
-            Math.max(washPairsByRemainingSlots, 0),
-            Number.isFinite(washPairsByReservedBudget) ? Math.max(washPairsByReservedBudget, 0) : Number.POSITIVE_INFINITY
-          )
-        : 0;
-      const canAttemptWashTradesThisCycle =
-        washFeatureEnabled &&
-        washTradePairs > 0 &&
-        canPlaceBuysThisCycle &&
-        buyReactivationGate.allowBuys &&
-        washTradeBuyGate.allowWashBuys;
-      const shouldPrioritizeWashPairsOverTopTouch = canAttemptWashTradesThisCycle;
-
-      if (shouldPrioritizeWashPairsOverTopTouch) {
-        logger.info(`🧼 Prioritizing ${washTradePairs} wash pair(s) over regular placements this cycle.`);
-      } else if (washFeatureEnabled && washTradePairs > 0) {
-        logger.info(`⏭️  Wash trades are enabled but skipped this cycle because buy placements are gated: ${buyReactivationGate.reason}`);
-      }
-
       // Place one small top-touch order per side to improve fill discovery while keeping most quotes passive.
-      if (hasExecutableTouchLevels && !shouldPrioritizeWashPairsOverTopTouch) {
+      if (hasExecutableTouchLevels) {
         const passiveTopTouchPrices = this.selectPassiveTopTouchPrices(executableBestBid, executableBestAsk);
         const topTouchBaseUsd = Math.max(
           this.getMinimumOrderUsdTarget(),
@@ -2061,7 +1702,7 @@ export class VolumeGenerationStrategy {
         logger.info('⏭️  Skipping buy-depth additions this cycle: FORCE_BUY_PAUSE=true.');
       }
 
-      if (!shouldPrioritizeWashPairsOverTopTouch && buyDepthShortfall > 0 && canPlaceBuysThisCycle) {
+      if (buyDepthShortfall > 0 && canPlaceBuysThisCycle) {
         logger.info(`🟢 Need to add $${buyDepthShortfall.toFixed(2)} buy orders in ${buyBandLabel} of Mid-Price (Business Support)`);
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
@@ -2103,7 +1744,7 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      if (!shouldPrioritizeWashPairsOverTopTouch && sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
+      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
         if (sellPlacementMode === 'EXCHANGE_BAND_FALLBACK') {
           logger.info(
             `🔁 Using exchange-band fallback sell pricing this cycle to keep sell depth building inside the latest-price band.`
@@ -2153,14 +1794,10 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
-      bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
-
-      if (shouldPrioritizeWashPairsOverTopTouch) {
-        logger.info('⏭️  Skipping regular book-depth placements while wash pairs are prioritized this cycle.');
-      }
+      const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (!shouldPrioritizeWashPairsOverTopTouch && buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
+      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
         const needBuys = targetOrdersPerSide - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'BUY', i);
@@ -2187,7 +1824,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (!shouldPrioritizeWashPairsOverTopTouch && sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
+      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
@@ -2225,33 +1862,40 @@ export class VolumeGenerationStrategy {
       }
 
       // 2. Place a configurable number of matching buy/sell orders for wash trading (fills/volume)
+      const remainingPlacementSlots = Math.max(maxPlacementsPerCycle - placementsThisCycle, 0);
+      const washPairsByRemainingSlots = Math.floor(remainingPlacementSlots / 2);
+      const reservedWashSlotsLeft = Math.max(washReservedPlacements - Math.max(placementsThisCycle - bookPlacementBudget, 0), 0);
+      const washPairsByReservedBudget = Math.floor(reservedWashSlotsLeft / 2);
+      const washDecision = this.resolveWashTradeDecision({
+        canRunWashTradesByDrift,
+        dexCexDriftPercent,
+        executableSpreadPercent,
+        adverseBuyGuardActive: adverseBuyGuard.active,
+        forceBuyPause,
+        dynamicWashTradePairs,
+      });
+      const washFeatureEnabled = washDecision.enabled;
+      const washTradePairs = washFeatureEnabled
+        ? Math.min(
+            washDecision.maxPairs,
+            Math.max(washPairsByRemainingSlots, 0),
+            Math.max(washPairsByReservedBudget, 0)
+          )
+        : 0;
       this.washTradePairsActive = this.washTradePairsActive.filter(pair =>
         !this.settledWashOrderIds.has(pair.buyOrderId) && !this.settledWashOrderIds.has(pair.sellOrderId)
       );
       if (!washFeatureEnabled) {
         logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
-      if (washFeatureEnabled && washTradePairs === 0) {
+      if (!bookSeeded) {
+        logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
+      }
+      if (bookSeeded && washTradePairs === 0) {
         logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
       }
-      if (washFeatureEnabled && washTradePairs > 0 && !canAttemptWashTradesThisCycle) {
-        logger.info(`⏭️  Wash trades are enabled but skipped this cycle because buy-side placement is gated: ${buyReactivationGate.reason}`);
-      }
-      const samePriceWashReference = this.resolveSamePriceWashReference(
-        washPriceReference,
-        executableBestBid,
-        executableBestAsk
-      );
-      if (canAttemptWashTradesThisCycle && samePriceWashReference.price === null) {
-        logger.warn(`⏭️  Skipping protected same-price wash this cycle: ${samePriceWashReference.reason}`);
-      }
-      const useProtectedSamePriceWashFlow = this.getSelfTradeMode() === 'on' && this.getIdleWashProtectExternalBuys();
-      for (let i = 0; i < washTradePairs && placementsThisCycle <= maxPlacementsPerCycle - 2 && canAttemptWashTradesThisCycle; i++) {
-        if (samePriceWashReference.price === null) {
-          break;
-        }
-
-        const matchPrice = samePriceWashReference.price;
+      for (let i = 0; i < washTradePairs && bookSeeded && placementsThisCycle <= maxPlacementsPerCycle - 2; i++) {
+        const matchPrice = washPriceReference;
         const washOrderUsdTarget = this.getDynamicOrderUsdTarget(washSafeOrderSizeUSD);
         let rawAmount = washOrderUsdTarget / matchPrice;
         let amount = quantizeToStepSize(rawAmount, this.stepSize);
@@ -2265,233 +1909,13 @@ export class VolumeGenerationStrategy {
           logger.warn(`⚠️  Skipping wash trade after normalization: amount=${amount}, minQty=${this.minQty}`);
           continue;
         }
-
-        if (useProtectedSamePriceWashFlow) {
-          logger.info(`[Wash ${i+1}/${washTradePairs}] Placing protected matching SELL/BUY: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
-          const protectedExecutionPrice = await this.clampPriceToLatestBand(matchPrice);
-          const protectedReferenceRepriceRatio =
-            Math.max(protectedExecutionPrice, matchPrice) /
-            Math.max(Math.min(protectedExecutionPrice, matchPrice), Number.EPSILON);
-          if (protectedReferenceRepriceRatio > VolumeGenerationStrategy.PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO) {
-            logger.warn(
-              `⏭️  Skipping protected wash pair before SELL placement because execution would reprice too far from same-price reference: ${matchPrice.toExponential(4)} -> ${protectedExecutionPrice.toExponential(4)} (ratio x${protectedReferenceRepriceRatio.toFixed(2)} > x${VolumeGenerationStrategy.PROTECTED_WASH_MAX_REFERENCE_REPRICE_RATIO.toFixed(2)}).`
-            );
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-          const protectedRequestedAmount = this.applyOrderAmountCap(
-            Math.floor(washAmount),
-            'SELL',
-            protectedExecutionPrice,
-            availableUSDT
-          );
-          const protectedExecutableBuyAmount = this.recalculateExecutableOrderAmount(
-            'BUY',
-            protectedExecutionPrice,
-            protectedRequestedAmount,
-            protectedExecutionPrice,
-            availableUSDT,
-            0
-          );
-          if (protectedExecutableBuyAmount === null) {
-            logger.warn(
-              `⚠️  Skipping protected wash pair before SELL placement: insufficient BUY executable notional @ ${protectedExecutionPrice.toExponential(4)} with spendable reserve-aware USDT $${Math.max(availableUSDT - this.getIdleBalanceReserveUsd(), 0).toFixed(2)}`
-            );
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-            const protectedBuyCapacityHeadroomFactor = 0.998;
-            const protectedExecutableWithHeadroom = Math.floor(protectedExecutableBuyAmount * protectedBuyCapacityHeadroomFactor);
-            const protectedWashAmount = Math.min(protectedRequestedAmount, protectedExecutableWithHeadroom);
-            if (!Number.isFinite(protectedWashAmount) || protectedWashAmount < this.minQty) {
-              logger.warn(
-                `⚠️  Skipping protected wash pair before SELL placement: BUY executable capacity with headroom is below minQty (${this.minQty})`
-              );
-              await new Promise(resolve => setTimeout(resolve, 100));
-              continue;
-            }
-          if (protectedWashAmount !== washAmount) {
-            logger.info(
-                `⚠️  Pre-sizing protected wash amount from ${washAmount.toLocaleString()} to ${protectedWashAmount.toLocaleString()} to align SELL with BUY executable capacity (with headroom)`
-            );
-          }
-
-          const protectedPreSellSafety = await this.evaluateProtectedWashBuySafety(
-            protectedExecutionPrice,
-            protectedWashAmount
-          );
-          if (!protectedPreSellSafety.safe) {
-            logger.warn(
-              `⏭️  Skipping protected wash SELL placement due to preflight external-liquidity risk at projected execution price: ${protectedPreSellSafety.reason}`
-            );
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const preflightPairedBuyExecutablePrice = await this.clampPriceToLatestBand(protectedExecutionPrice);
-          const preflightBuyPriceDivergence = Math.abs(preflightPairedBuyExecutablePrice - protectedExecutionPrice);
-          const preflightTickForDivergence = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-          const preflightPriceTolerance = preflightTickForDivergence * 2;
-          if (preflightBuyPriceDivergence > preflightPriceTolerance) {
-            const preflightDivergenceTicks = preflightBuyPriceDivergence / preflightTickForDivergence;
-            logger.warn(
-              `⏭️  Skipping protected wash pair before SELL placement because paired BUY would reprice from ${protectedExecutionPrice.toExponential(4)} to ${preflightPairedBuyExecutablePrice.toExponential(4)} under the latest-price band (${preflightDivergenceTicks.toFixed(2)} ticks > 2.00 tick tolerance).`
-            );
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const sellOrderId = await this.placeSellOrder(protectedExecutionPrice, protectedWashAmount, true, true);
-          if (!sellOrderId) {
-            logger.warn('⏭️  Skipping protected wash BUY because wash SELL placement did not complete.');
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const placedSellOrder = this.activeOrders.get(sellOrderId);
-          const plannedProtectedBuyPrice =
-            typeof placedSellOrder?.price === 'number' && Number.isFinite(placedSellOrder.price) && placedSellOrder.price > 0
-              ? placedSellOrder.price
-              : protectedExecutionPrice;
-          const plannedProtectedSellAmount =
-            typeof placedSellOrder?.amount === 'number' && Number.isFinite(placedSellOrder.amount) && placedSellOrder.amount > 0
-              ? placedSellOrder.amount
-              : protectedWashAmount;
-
-          await new Promise(resolve => setTimeout(resolve, 120));
-          const protectedBuySafety = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
-          if (!protectedBuySafety.safe) {
-            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to external-liquidity risk: ${protectedBuySafety.reason}`);
-            try {
-              await this.exchange.cancelOrder(this.symbol, sellOrderId);
-            } catch (error: any) {
-              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during pre-buy safety check: ${error?.message || error}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          await new Promise(resolve => setTimeout(resolve, 40));
-          const protectedBuySafetyFinal = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
-          if (!protectedBuySafetyFinal.safe) {
-            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to final external-liquidity risk recheck: ${protectedBuySafetyFinal.reason}`);
-            try {
-              await this.exchange.cancelOrder(this.symbol, sellOrderId);
-            } catch (error: any) {
-              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during final pre-buy safety recheck: ${error?.message || error}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const protectedBuySafetyImmediate = await this.evaluateProtectedWashBuySafety(plannedProtectedBuyPrice, plannedProtectedSellAmount);
-          if (!protectedBuySafetyImmediate.safe) {
-            logger.warn(`⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY due to immediate external-liquidity risk check: ${protectedBuySafetyImmediate.reason}`);
-            try {
-              await this.exchange.cancelOrder(this.symbol, sellOrderId);
-            } catch (error: any) {
-              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} during immediate pre-buy safety check: ${error?.message || error}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const pairedBuyExecutablePrice = preflightPairedBuyExecutablePrice;
-          const priceDivergence = Math.abs(pairedBuyExecutablePrice - plannedProtectedBuyPrice);
-          const tickForDivergence = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-          const priceTolerance = tickForDivergence * 2;
-          if (priceDivergence > priceTolerance) {
-            const divergenceTicks = priceDivergence / tickForDivergence;
-            logger.warn(
-              `⏭️  Cancelling protected wash SELL ${sellOrderId} before BUY because placed SELL drifted from the protected preflight buy price: ${plannedProtectedBuyPrice.toExponential(4)} vs ${pairedBuyExecutablePrice.toExponential(4)} (${divergenceTicks.toFixed(2)} ticks > 2.00 tick tolerance).`
-            );
-            try {
-              await this.exchange.cancelOrder(this.symbol, sellOrderId);
-            } catch (error: any) {
-              logger.warn(`⚠️  Failed to cancel protected wash SELL ${sellOrderId} after detecting buy reprice divergence: ${error?.message || error}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const buyOrderId = await this.placeBuyOrder(plannedProtectedBuyPrice, plannedProtectedSellAmount, true, true);
-          if (!buyOrderId) {
-            logger.warn(`⏭️  Protected wash BUY failed after SELL ${sellOrderId}; cancelling orphaned wash SELL.`);
-            try {
-              await this.exchange.cancelOrder(this.symbol, sellOrderId);
-            } catch (error: any) {
-              logger.warn(`⚠️  Failed to cancel orphaned protected wash SELL ${sellOrderId}: ${error?.message || error}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 100));
-            continue;
-          }
-
-          const placedBuyOrder = this.activeOrders.get(buyOrderId);
-          const pairedAmount =
-            typeof placedBuyOrder?.amount === 'number' && Number.isFinite(placedBuyOrder.amount) && placedBuyOrder.amount > 0
-              ? placedBuyOrder.amount
-              : plannedProtectedSellAmount;
-          const pairedPrice =
-            typeof placedBuyOrder?.price === 'number' && Number.isFinite(placedBuyOrder.price) && placedBuyOrder.price > 0
-              ? placedBuyOrder.price
-              : plannedProtectedBuyPrice;
-
-          placementsThisCycle += 2;
-          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: pairedPrice, amount: pairedAmount });
-          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${pairedPrice.toExponential(4)} (${pairedAmount.toFixed(2)} EPWX)`);
-          await new Promise(resolve => setTimeout(resolve, 100));
-          continue;
-        }
-
         logger.info(`[Wash ${i+1}/${washTradePairs}] Placing matching BUY/SELL: ${washAmount} EPWX @ ${matchPrice.toExponential(4)} [Wash Trade]`);
         const buyOrderId = await this.placeBuyOrder(matchPrice, washAmount, true);
-        if (!buyOrderId) {
-          logger.warn('⏭️  Skipping paired wash SELL because wash BUY placement did not complete.');
-          await new Promise(resolve => setTimeout(resolve, 100));
-          continue;
-        }
-        const placedBuyOrder = this.activeOrders.get(buyOrderId);
-        const placedBuyAmount = placedBuyOrder?.amount;
-        const placedBuyPrice = placedBuyOrder?.price;
-        const pairedSellAmountFromPlacement =
-          typeof placedBuyAmount === 'number' && Number.isFinite(placedBuyAmount) && placedBuyAmount > 0
-            ? placedBuyAmount
-            : washAmount;
-
-        const confirmedBuyFillAmount = buyOrderId
-          ? await this.getConfirmedFilledAmount(buyOrderId)
-          : 0;
-        const confirmedBuyFillCappedAmount = quantizeToStepSize(Math.max(confirmedBuyFillAmount, 0), this.stepSize);
-        const newlyConfirmedBuyFillAmount = buyOrderId
-          ? this.creditConfirmedWashBuyFills(buyOrderId, confirmedBuyFillCappedAmount)
-          : 0;
-        const carrySellableAmount = quantizeToStepSize(Math.max(this.washConfirmedBuyCarryAmount, 0), this.stepSize);
-        const immediatePairingEnabled = this.getSelfTradeMode() === 'on';
-        const pairedSellPrice =
-          immediatePairingEnabled && typeof placedBuyPrice === 'number' && Number.isFinite(placedBuyPrice) && placedBuyPrice > 0
-            ? placedBuyPrice
-            : matchPrice;
-        const pairedSellAmount = immediatePairingEnabled
-          ? pairedSellAmountFromPlacement
-          : Math.min(pairedSellAmountFromPlacement, carrySellableAmount);
-
-        if (!this.isValidOrderAmount(pairedSellAmount, pairedSellPrice)) {
-          logger.info(
-            `⏭️  Skipping wash SELL for BUY ${buyOrderId}: confirmed BUY fills ${confirmedBuyFillCappedAmount.toLocaleString()} EPWX (new +${newlyConfirmedBuyFillAmount.toLocaleString()}, carry ${carrySellableAmount.toLocaleString()}) are below executable minimum at ${pairedSellPrice.toExponential(4)}.`
-          );
-          await new Promise(resolve => setTimeout(resolve, 100));
-          continue;
-        }
-
-        const sellOrderId = await this.placeSellOrder(pairedSellPrice, pairedSellAmount, true);
+        const sellOrderId = await this.placeSellOrder(matchPrice, washAmount, true);
         if (buyOrderId && sellOrderId) {
           placementsThisCycle += 2;
-          if (!immediatePairingEnabled) {
-            this.washConfirmedBuyCarryAmount = Math.max(this.washConfirmedBuyCarryAmount - pairedSellAmount, 0);
-          }
-          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: pairedSellPrice, amount: pairedSellAmount });
-          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${pairedSellPrice.toExponential(4)} (${pairedSellAmount.toFixed(2)} EPWX)`);
+          this.washTradePairsActive.push({ buyOrderId, sellOrderId, price: matchPrice, amount });
+          logger.info(`[Wash Pair] Tracked: BUY ${buyOrderId}, SELL ${sellOrderId} @ ${matchPrice.toFixed(6)} (${amount.toFixed(2)} EPWX)`);
         }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
@@ -2521,13 +1945,8 @@ export class VolumeGenerationStrategy {
       }
 
       this.volumeStats.lastOrderTime = Date.now();
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      if (message.includes('service is not available')) {
-        logger.warn('⚠️  Exchange service temporarily unavailable in placeVolumeOrders; skipping this cycle.');
-      } else {
-        logger.error('💥 Unexpected error in placeVolumeOrders:', error);
-      }
+    } catch (error) {
+      logger.error('💥 Unexpected error in placeVolumeOrders:', error);
     } finally {
       this.isPlacingOrders = false;
     }
@@ -2675,34 +2094,15 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  protected async placeBuyOrder(
-    price: number,
-    amount: number,
-    isWashTrade: boolean = false,
-    skipLatestBandClamp: boolean = false
-  ): Promise<string | void> {
+  protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
-      const washTradeBuyGate = isWashTrade
-        ? this.evaluateWashTradeBuyGate(
-            this.getSelfTradeMode(),
-            this.getForceBuyPause(),
-            false,
-            Number.isFinite(this.lastRealFillAt) && Date.now() - this.lastRealFillAt >= this.getIdleWashEnableAfterMs()
-          )
-        : null;
-
       if (this.getForceBuyPause()) {
         logger.info('⏭️  Skipping buy order: FORCE_BUY_PAUSE=true.');
         return;
       }
 
-      if (this.getBuyReactivationMode() === 'off' && !isWashTrade) {
+      if (this.getBuyReactivationMode() === 'off') {
         logger.info('⏭️  Skipping buy order: BUY_REACTIVATION_MODE=off.');
-        return;
-      }
-
-      if (isWashTrade && washTradeBuyGate && !washTradeBuyGate.allowWashBuys) {
-        logger.info(`⏭️  Skipping wash-trade buy order: ${washTradeBuyGate.reason}`);
         return;
       }
 
@@ -2719,14 +2119,12 @@ export class VolumeGenerationStrategy {
       const requestedPrice = price;
       const requestedAmount = normalizedAmount;
 
-      if (!skipLatestBandClamp) {
-        const clampedPrice = await this.clampPriceToLatestBand(price);
-        if (clampedPrice !== price) {
-          logger.warn(
-            `⚠️  Clamping buy price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
-          );
-          price = clampedPrice;
-        }
+      const clampedPrice = await this.clampPriceToLatestBand(price);
+      if (clampedPrice !== price) {
+        logger.warn(
+          `⚠️  Clamping buy price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+        );
+        price = clampedPrice;
       }
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
@@ -2744,13 +2142,9 @@ export class VolumeGenerationStrategy {
       }
 
       if (executableAmount !== normalizedAmount) {
-        const reduceBuyAmountMessage =
-          `⚠️  Reducing buy amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the reserve and executable notional`;
-        if (isWashTrade) {
-          logger.info(reduceBuyAmountMessage);
-        } else {
-          logger.warn(reduceBuyAmountMessage);
-        }
+        logger.warn(
+          `⚠️  Reducing buy amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the reserve and executable notional`
+        );
       }
 
       amount = executableAmount;
@@ -2784,9 +2178,6 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'BUY', price });
-      if (isWashTrade) {
-        this.washSubmittedOrderIds.add(order.orderId);
-      }
       this.volumeStats.orderCount++;
       logger.info(`✅ Buy order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'BUY', price);
@@ -2794,22 +2185,12 @@ export class VolumeGenerationStrategy {
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'BUY', isWashTrade);
       return order.orderId;
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      if (message.includes('service is not available')) {
-        logger.debug('Error placing buy order: Service is not available');
-      } else {
-        logger.error('Error placing buy order:', error);
-      }
+    } catch (error) {
+      logger.error('Error placing buy order:', error);
     }
   }
 
-  protected async placeSellOrder(
-    price: number,
-    amount: number,
-    isWashTrade: boolean = false,
-    skipLatestBandClamp: boolean = false
-  ): Promise<string | void> {
+  protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
@@ -2824,14 +2205,12 @@ export class VolumeGenerationStrategy {
       const requestedPrice = price;
       const requestedAmount = normalizedAmount;
 
-      if (!skipLatestBandClamp) {
-        const clampedPrice = await this.clampPriceToLatestBand(price);
-        if (clampedPrice !== price) {
-          logger.warn(
-            `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
-          );
-          price = clampedPrice;
-        }
+      const clampedPrice = await this.clampPriceToLatestBand(price);
+      if (clampedPrice !== price) {
+        logger.warn(
+          `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
+        );
+        price = clampedPrice;
       }
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
@@ -2850,13 +2229,9 @@ export class VolumeGenerationStrategy {
       }
 
       if (executableAmount !== normalizedAmount) {
-        const reduceSellAmountMessage =
-          `⚠️  Reducing sell amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the executable notional`;
-        if (isWashTrade) {
-          logger.info(reduceSellAmountMessage);
-        } else {
-          logger.warn(reduceSellAmountMessage);
-        }
+        logger.warn(
+          `⚠️  Reducing sell amount from ${normalizedAmount.toLocaleString()} to ${executableAmount.toLocaleString()} after price clamp to respect the executable notional`
+        );
       }
 
       amount = executableAmount;
@@ -2888,9 +2263,6 @@ export class VolumeGenerationStrategy {
       }
       this.activeOrders.set(order.orderId, order);
       this.orderPrices.set(order.orderId, { side: 'SELL', price });
-      if (isWashTrade) {
-        this.washSubmittedOrderIds.add(order.orderId);
-      }
       this.volumeStats.orderCount++;
       logger.info(`✅ Sell order placed: ${amount.toLocaleString()} EPWX @ $${price.toExponential(4)}`);
       void this.logPostPlacementOrderState(order.orderId, 'SELL', price);
@@ -2898,102 +2270,9 @@ export class VolumeGenerationStrategy {
       // Poll for fills after placing order
       void this.pollOrderFills(order.orderId, 'SELL', isWashTrade);
       return order.orderId;
-    } catch (error: any) {
-      const message = String(error?.message || '').toLowerCase();
-      if (message.includes('service is not available')) {
-        logger.debug('Error placing sell order: Service is not available');
-      } else {
-        logger.error('Error placing sell order:', error);
-      }
-    }
-  }
-
-  private async getConfirmedFilledAmount(orderId: string): Promise<number> {
-    // Allow enough delay so exchange trade records include near-immediate fills.
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    let tradesError: unknown = null;
-    try {
-      const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
-      if (trades && trades.length > 0) {
-        return trades.reduce((sum, trade) => sum + trade.amount, 0);
-      }
     } catch (error) {
-      tradesError = error;
+      logger.error('Error placing sell order:', error);
     }
-
-    const filledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
-    if (filledFromOrderState > 0) {
-      logger.info(
-        `ℹ️  Using order-state fill fallback for ${orderId}: ${Math.floor(filledFromOrderState).toLocaleString()} EPWX confirmed before paired wash SELL.`
-      );
-      return filledFromOrderState;
-    }
-
-    if (tradesError) {
-      logger.warn(`⚠️  Unable to confirm fills for order ${orderId} before wash sell placement.`);
-    }
-
-    return 0;
-  }
-
-  private creditConfirmedWashBuyFills(orderId: string, confirmedFilledAmount: number): number {
-    if (!orderId) {
-      return 0;
-    }
-
-    const quantizedConfirmed = quantizeToStepSize(Math.max(confirmedFilledAmount, 0), this.stepSize);
-    if (!Number.isFinite(quantizedConfirmed) || quantizedConfirmed <= 0) {
-      return 0;
-    }
-
-    const previouslyCredited = this.washConfirmedBuyCreditedByOrder.get(orderId) ?? 0;
-    const incrementalConfirmed = quantizeToStepSize(Math.max(quantizedConfirmed - previouslyCredited, 0), this.stepSize);
-
-    if (!Number.isFinite(incrementalConfirmed) || incrementalConfirmed <= 0) {
-      return 0;
-    }
-
-    this.washConfirmedBuyCreditedByOrder.set(orderId, previouslyCredited + incrementalConfirmed);
-    this.washConfirmedBuyCarryAmount += incrementalConfirmed;
-    return incrementalConfirmed;
-  }
-
-  private isTrackedWashOrder(orderId: string): boolean {
-    if (this.washSubmittedOrderIds.has(orderId)) {
-      return true;
-    }
-
-    return this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
-  }
-
-  private async getFilledAmountFromOrderState(orderId: string): Promise<number> {
-    const exchangeAny = this.exchange as any;
-
-    if (typeof exchangeAny.getOrder === 'function') {
-      try {
-        const pendingOrder = await exchangeAny.getOrder(this.symbol, orderId);
-        if (pendingOrder && Number.isFinite(pendingOrder.filled) && pendingOrder.filled > 0) {
-          return pendingOrder.filled;
-        }
-      } catch {
-        // Ignore and try open-order snapshot fallback.
-      }
-    }
-
-    if (typeof exchangeAny.getOpenOrders === 'function') {
-      try {
-        const openOrders: Order[] = await exchangeAny.getOpenOrders(this.symbol);
-        const pendingOrder = openOrders.find((order: Order) => order.orderId === orderId);
-        if (pendingOrder && Number.isFinite(pendingOrder.filled) && pendingOrder.filled > 0) {
-          return pendingOrder.filled;
-        }
-      } catch {
-        // Diagnostics only; keep main flow non-fatal.
-      }
-    }
-
-    return 0;
   }
 
   // Poll for fills after placing an order
@@ -3006,74 +2285,13 @@ export class VolumeGenerationStrategy {
         this.recordTrades(trades, orderId, isWashTrade, side);
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
         const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
-        if (isWashTrade && side === 'BUY') {
-          this.creditConfirmedWashBuyFills(orderId, filledAmount);
-        }
         this.applyPositionForFilledOrder(orderId, side, filledAmount);
         if (isWashTrade) {
           this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
         }
       } else {
-        const filledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
-        if (filledFromOrderState > 0) {
-          logger.info(
-            `ℹ️  Pending-order snapshot shows ${side} ${orderId} has ${Math.floor(filledFromOrderState).toLocaleString()} filled even though recent trades are not yet visible.`
-          );
-          if (isWashTrade && side === 'BUY') {
-            this.creditConfirmedWashBuyFills(orderId, filledFromOrderState);
-          }
-          const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
-          const filledVolumeUSD = trackedOrderPrice > 0 ? filledFromOrderState * trackedOrderPrice : 0;
-          this.applyPositionForFilledOrder(orderId, side, filledFromOrderState);
-          if (isWashTrade) {
-            this.settlePairedWashOrder(orderId, side, filledFromOrderState, filledVolumeUSD, true);
-          }
-          return;
-        }
-
-        const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
-        if (capturedAnyTrade) {
-          return;
-        }
-
-        if (isWashTrade) {
-          const maxLateAttempts = 3;
-          for (let attempt = 1; attempt <= maxLateAttempts; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            const lateCapturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
-            if (lateCapturedAnyTrade) {
-              logger.info(
-                `ℹ️  Captured delayed ${side} wash fill for ${orderId} on reconciliation attempt ${attempt}/${maxLateAttempts}.`
-              );
-              return;
-            }
-
-            const lateFilledFromOrderState = await this.getFilledAmountFromOrderState(orderId);
-            if (lateFilledFromOrderState > 0) {
-              logger.info(
-                `ℹ️  Delayed pending-order snapshot shows ${side} ${orderId} has ${Math.floor(lateFilledFromOrderState).toLocaleString()} filled on reconciliation attempt ${attempt}/${maxLateAttempts}.`
-              );
-              if (side === 'BUY') {
-                this.creditConfirmedWashBuyFills(orderId, lateFilledFromOrderState);
-              }
-              const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
-              const filledVolumeUSD = trackedOrderPrice > 0 ? lateFilledFromOrderState * trackedOrderPrice : 0;
-              this.applyPositionForFilledOrder(orderId, side, lateFilledFromOrderState);
-              this.settlePairedWashOrder(orderId, side, lateFilledFromOrderState, filledVolumeUSD, true);
-              return;
-            }
-          }
-        }
-
-        if (isWashTrade) {
-          logger.info(
-            `ℹ️  No immediate fill visible for wash order ${orderId} (${side}) after 1s; deferring attribution to disappeared-order reconciliation.`
-          );
-        } else {
-          logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
-          await this.logNoFillDiagnostics(orderId, side);
-        }
+        logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
+        await this.logNoFillDiagnostics(orderId, side);
       }
     } catch (error) {
       logger.error(`Error polling fills for order ${orderId}:`, error);
@@ -3088,7 +2306,7 @@ export class VolumeGenerationStrategy {
 
   private async updateOrderStatus(): Promise<void> {
     const orderIds = Array.from(this.activeOrders.keys());
-    const batchSize = Math.min(10, Math.max(5, Math.ceil(orderIds.length / 3)));
+    const batchSize = 5; // Only check 5 orders per cycle
     if (orderIds.length === 0) return;
     // Rotate through the list
     const start = this.orderStatusIndex;
@@ -3097,14 +2315,8 @@ export class VolumeGenerationStrategy {
     this.orderStatusIndex = end >= orderIds.length ? 0 : end;
     let backoff = 1000; // Start with 1s
     for (const orderId of batch) {
-      const retryState = this.disappearedOrderRetryState.get(orderId);
-      if (retryState && Date.now() < retryState.nextRetryAt) {
-        continue;
-      }
-
       try {
         const order = await this.exchange.getOrder(this.symbol, orderId);
-        this.disappearedOrderRetryState.delete(orderId);
 
         if (order.status === 'FILLED') {
           // Update volume stats
@@ -3119,11 +2331,16 @@ export class VolumeGenerationStrategy {
             this.currentPosition -= order.filled;
           }
 
-          const trackedAsWashOrder = this.isTrackedWashOrder(orderId);
-          if (trackedAsWashOrder && order.side === 'BUY' && order.filled > 0) {
-            this.creditConfirmedWashBuyFills(orderId, order.filled);
+          const trackedAsWashPair = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
+          let isRealFill = true;
+
+          if (!config.volumeStrategy.selfTradeEnabled) {
+            isRealFill = true;
+          } else if (trackedAsWashPair) {
+            isRealFill = false;
+          } else {
+            isRealFill = true;
           }
-          const isRealFill = !trackedAsWashOrder;
 
           if (order.filled > 0 && !this.pnlSettledOrderIds.has(orderId)) {
             const realizedPnl = this.applyEconomicFill(order.side, order.filled, order.price, !isRealFill);
@@ -3143,15 +2360,9 @@ export class VolumeGenerationStrategy {
           
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
-          this.washConfirmedBuyCreditedByOrder.delete(orderId);
-          this.washSubmittedOrderIds.delete(orderId);
-          this.disappearedOrderRetryState.delete(orderId);
         } else if (order.status === 'CANCELED') {
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
-          this.washConfirmedBuyCreditedByOrder.delete(orderId);
-          this.washSubmittedOrderIds.delete(orderId);
-          this.disappearedOrderRetryState.delete(orderId);
         }
       } catch (error: any) {
         if (error.message && error.message.includes('Service is not available')) {
@@ -3167,52 +2378,19 @@ export class VolumeGenerationStrategy {
           continue;
         }
         if (error.message && error.message.includes('Order not found or already completed')) {
-          const previousState = this.disappearedOrderRetryState.get(orderId);
-          const nextAttempt = (previousState?.attempts ?? 0) + 1;
-
-          if (nextAttempt <= VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS) {
-            this.disappearedOrderRetryState.set(orderId, {
-              attempts: nextAttempt,
-              nextRetryAt: Date.now() + VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_DELAY_MS,
-            });
-            logger.info(
-              `⏳ [ORDER-DISAPPEARED-RETRY] ${orderId} missing from pending/detail and trades feed; retry ${nextAttempt}/${VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS} in ${Math.round(VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_DELAY_MS / 1000)}s before finalizing.`
-            );
-
-            if (this.trySettleDisappearedWashPair(orderId, 1)) {
-              continue;
-            }
-
-            continue;
+          const capturedAnyTrade = await this.captureTradesForCompletedOrder(orderId);
+          if (!capturedAnyTrade) {
+            await this.logOrderDisappearance(orderId);
           }
-
-          const capturedAnyTrade = await this.captureTradesForCompletedOrderWithSoftTimeout(orderId);
-          if (capturedAnyTrade) {
-            this.activeOrders.delete(orderId);
-            this.orderPrices.delete(orderId);
-            this.washConfirmedBuyCreditedByOrder.delete(orderId);
-            this.washSubmittedOrderIds.delete(orderId);
-            this.disappearedOrderRetryState.delete(orderId);
-            continue;
-          }
-
-          if (this.trySettleDisappearedWashPair(orderId)) {
-            continue;
-          }
-
-          await this.logOrderDisappearance(orderId);
-          logger.info(`Order ${orderId} not found or already completed after retry window. Removing from activeOrders.`);
+          logger.info(`Order ${orderId} not found or already completed. Removing from activeOrders.`);
           this.activeOrders.delete(orderId);
           this.orderPrices.delete(orderId);
-          this.washConfirmedBuyCreditedByOrder.delete(orderId);
-          this.washSubmittedOrderIds.delete(orderId);
-          this.disappearedOrderRetryState.delete(orderId);
           continue;
         }
         logger.error('Error updating order status:', error);
       }
       // Add a delay between each order status check to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, VolumeGenerationStrategy.ORDER_STATUS_CHECK_DELAY_MS));
+      await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
 
@@ -3247,15 +2425,6 @@ export class VolumeGenerationStrategy {
       if (isWashTrade) {
         this.profitStats.washTrades++;
         logger.info(`🔄 WASH TRADE FILL: ${effectiveSide} ${trade.amount} @ $${trade.price} (Order ID: ${orderId}, Trade ID: ${trade.tradeId})`);
-          if (effectiveSide === 'BUY') {
-            const trackedOrderPrice = this.getTrackedOrderPrice(orderId);
-            const tick = Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : Number.EPSILON;
-            if (Number.isFinite(trackedOrderPrice) && trackedOrderPrice > 0 && trade.price + tick < trackedOrderPrice) {
-              this.activateProtectedWashCooldown(
-                `wash BUY ${orderId} filled at ${trade.price.toExponential(4)} below order price ${trackedOrderPrice.toExponential(4)} (likely external sell interaction)`
-              );
-            }
-          }
       } else {
         this.noteRealFillDetected(`trade ${trade.tradeId}`);
         const realizedPnl = this.applyEconomicFill(effectiveSide, trade.amount, trade.price, false);
@@ -3280,42 +2449,8 @@ export class VolumeGenerationStrategy {
     this.positionAdjustedOrderIds.add(orderId);
   }
 
-  private getTrackedOrderPrice(orderId: string): number {
-    const activeOrderPrice = this.activeOrders.get(orderId)?.price;
-    if (Number.isFinite(activeOrderPrice) && (activeOrderPrice ?? 0) > 0) {
-      return activeOrderPrice as number;
-    }
-
-    const trackedPrice = this.orderPrices.get(orderId)?.price;
-    if (Number.isFinite(trackedPrice) && (trackedPrice ?? 0) > 0) {
-      return trackedPrice as number;
-    }
-
-    return 0;
-  }
-
-  private isTransientServiceUnavailableError(error: any): boolean {
-    const message = String(error?.message || '').toLowerCase();
-    return (
-      message.includes('service is not available') ||
-      message.includes('timeout') ||
-      message.includes('econnreset') ||
-      message.includes('socket hang up')
-    );
-  }
-
   private async syncCurrentPositionWithBalances(): Promise<void> {
-    let balances;
-    try {
-      balances = await this.exchange.getBalances();
-    } catch (error: any) {
-      if (this.isTransientServiceUnavailableError(error)) {
-        logger.warn('Position sync skipped: exchange service temporarily unavailable. Retrying on next cycle.');
-        return;
-      }
-      throw error;
-    }
-
+    const balances = await this.exchange.getBalances();
     const epwxBalance = balances.find(balance => balance.asset === 'EPWX');
     const totalEpwx = epwxBalance?.total ?? ((epwxBalance?.free || 0) + (epwxBalance?.locked || 0));
 
@@ -3333,13 +2468,7 @@ export class VolumeGenerationStrategy {
     this.currentPosition = totalEpwx - this.initialEpwxBalance;
   }
 
-  private settlePairedWashOrder(
-    orderId: string,
-    side: 'BUY' | 'SELL',
-    filledAmount: number,
-    filledVolumeUSD: number,
-    includeObservedLegAccounting: boolean = false
-  ): void {
+  private settlePairedWashOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number, filledVolumeUSD: number): void {
     const pair = this.washTradePairsActive.find(candidate =>
       candidate.buyOrderId === orderId || candidate.sellOrderId === orderId
     );
@@ -3355,121 +2484,21 @@ export class VolumeGenerationStrategy {
       return;
     }
 
-    const observedLegVolumeUSD =
-      Number.isFinite(filledVolumeUSD) && filledVolumeUSD > 0
-        ? filledVolumeUSD
-        : Math.max(filledAmount, 0) * Math.max(pair.price, 0);
-
-    if (includeObservedLegAccounting && observedLegVolumeUSD > 0) {
-      this.volumeStats.totalVolume += observedLegVolumeUSD;
-      if (side === 'BUY') {
-        this.volumeStats.buyVolume += observedLegVolumeUSD;
-      } else {
-        this.volumeStats.sellVolume += observedLegVolumeUSD;
-      }
-    }
-
-    this.volumeStats.totalVolume += observedLegVolumeUSD;
+    this.volumeStats.totalVolume += filledVolumeUSD;
     if (counterpartSide === 'BUY') {
-      this.volumeStats.buyVolume += observedLegVolumeUSD;
+      this.volumeStats.buyVolume += filledVolumeUSD;
     } else {
-      this.volumeStats.sellVolume += observedLegVolumeUSD;
+      this.volumeStats.sellVolume += filledVolumeUSD;
     }
-
-    this.profitStats.washTrades += includeObservedLegAccounting ? 2 : 1;
 
     this.applyPositionForFilledOrder(counterpartOrderId, counterpartSide, filledAmount);
     this.settledWashOrderIds.add(orderId);
     this.settledWashOrderIds.add(counterpartOrderId);
-    this.washSubmittedOrderIds.delete(orderId);
-    this.washSubmittedOrderIds.delete(counterpartOrderId);
     this.activeOrders.delete(counterpartOrderId);
     this.orderPrices.delete(counterpartOrderId);
     this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
 
     logger.info(`🔁 Settled paired wash ${counterpartSide} leg for ${counterpartOrderId} after ${side} fill on ${orderId}.`);
-  }
-
-  private trySettleDisappearedWashPair(
-    orderId: string,
-    minDisappearanceAttemptsPerLeg: number = VolumeGenerationStrategy.DISAPPEARED_ORDER_RETRY_MAX_ATTEMPTS
-  ): boolean {
-    if (this.getSelfTradeMode() !== 'on') {
-      return false;
-    }
-
-    const pair = this.washTradePairsActive.find(candidate =>
-      candidate.buyOrderId === orderId || candidate.sellOrderId === orderId
-    );
-
-    if (!pair) {
-      return false;
-    }
-
-    if (this.settledWashOrderIds.has(pair.buyOrderId) || this.settledWashOrderIds.has(pair.sellOrderId)) {
-      return false;
-    }
-
-    const buyRetryAttempts = this.disappearedOrderRetryState.get(pair.buyOrderId)?.attempts ?? 0;
-    const sellRetryAttempts = this.disappearedOrderRetryState.get(pair.sellOrderId)?.attempts ?? 0;
-    const buyMissingSignal = buyRetryAttempts >= minDisappearanceAttemptsPerLeg;
-    const sellMissingSignal = sellRetryAttempts >= minDisappearanceAttemptsPerLeg;
-
-    if (!buyMissingSignal || !sellMissingSignal) {
-      return false;
-    }
-
-    const settledAmount = quantizeToStepSize(Math.max(pair.amount, 0), this.stepSize);
-    const settledPrice = pair.price;
-    if (!Number.isFinite(settledAmount) || settledAmount <= 0 || !Number.isFinite(settledPrice) || settledPrice <= 0) {
-      return false;
-    }
-
-    const settledVolumePerLegUsd = settledAmount * settledPrice;
-    this.volumeStats.totalVolume += settledVolumePerLegUsd * 2;
-    this.volumeStats.buyVolume += settledVolumePerLegUsd;
-    this.volumeStats.sellVolume += settledVolumePerLegUsd;
-    this.profitStats.washTrades += 2;
-
-    this.applyPositionForFilledOrder(pair.buyOrderId, 'BUY', settledAmount);
-    this.applyPositionForFilledOrder(pair.sellOrderId, 'SELL', settledAmount);
-    this.settledWashOrderIds.add(pair.buyOrderId);
-    this.settledWashOrderIds.add(pair.sellOrderId);
-
-    for (const settledOrderId of [pair.buyOrderId, pair.sellOrderId]) {
-      this.activeOrders.delete(settledOrderId);
-      this.orderPrices.delete(settledOrderId);
-      this.washSubmittedOrderIds.delete(settledOrderId);
-      this.washConfirmedBuyCreditedByOrder.delete(settledOrderId);
-      this.disappearedOrderRetryState.delete(settledOrderId);
-    }
-
-    this.washTradePairsActive = this.washTradePairsActive.filter(candidate => candidate !== pair);
-
-    logger.warn(
-      `🧩 [WASH-RECON] Settled disappeared wash pair BUY ${pair.buyOrderId} / SELL ${pair.sellOrderId} as synthetic matched fill in SELF_TRADE_MODE=on: ${Math.floor(settledAmount).toLocaleString()} EPWX @ ${settledPrice.toExponential(4)}.`
-    );
-
-    return true;
-  }
-
-  private async captureTradesForCompletedOrderWithSoftTimeout(orderId: string): Promise<boolean> {
-    const timeoutMs = VolumeGenerationStrategy.DISAPPEARED_CAPTURE_TRADES_SOFT_TIMEOUT_MS;
-    const timeoutToken = Symbol('capture-timeout');
-
-    const result = await Promise.race<boolean | symbol>([
-      this.captureTradesForCompletedOrder(orderId),
-      new Promise<symbol>(resolve => setTimeout(() => resolve(timeoutToken), timeoutMs)),
-    ]);
-
-    if (result === timeoutToken) {
-      logger.warn(
-        `⏱️  [ORDER-DISAPPEARED] Skipping delayed trade capture for ${orderId} after ${timeoutMs}ms soft timeout; will continue retry/finalization flow.`
-      );
-      return false;
-    }
-
-    return result === true;
   }
 
   private async captureTradesForCompletedOrder(orderId: string): Promise<boolean> {
@@ -3480,16 +2509,13 @@ export class VolumeGenerationStrategy {
       }
 
       const trackedOrder = this.activeOrders.get(orderId);
-      const isWashTrade = this.isTrackedWashOrder(orderId);
+      const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
       const trackedOrderSide = trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined);
       this.recordTrades(trades, orderId, isWashTrade, trackedOrderSide);
 
       if (trackedOrderSide) {
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
         const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
-        if (isWashTrade && trackedOrderSide === 'BUY') {
-          this.creditConfirmedWashBuyFills(orderId, filledAmount);
-        }
         this.applyPositionForFilledOrder(orderId, trackedOrderSide, filledAmount);
         if (isWashTrade) {
           this.settlePairedWashOrder(orderId, trackedOrderSide, filledAmount, filledVolumeUSD);
@@ -3667,12 +2693,8 @@ export class VolumeGenerationStrategy {
         .forEach(b => {
           logger.info(`  ${b.asset}: ${b.total.toFixed(8)} (Free: ${b.free.toFixed(8)}, Locked: ${b.locked.toFixed(8)})`);
         });
-    } catch (error: any) {
-      if (this.isTransientServiceUnavailableError(error)) {
-        logger.warn('Account balance snapshot skipped: Service is not available');
-      } else {
-        logger.error('Error fetching balances:', error);
-      }
+    } catch (error) {
+      logger.error('Error fetching balances:', error);
     }
   }
 

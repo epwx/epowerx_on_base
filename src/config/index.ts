@@ -65,6 +65,7 @@ interface Config {
     passiveSellBandOuterOffsetPercent: number;
     passiveSeedBaseOffsetPercent: number;
     passiveSeedStepOffsetPercent: number;
+    quoteChurnRefreshPerSide: number;
   };
 
   marketMaking: {
@@ -212,6 +213,7 @@ export const config: Config = {
     passiveSellBandOuterOffsetPercent: getEnvNumber('PASSIVE_SELL_BAND_OUTER_OFFSET_PERCENT', 0.004),
     passiveSeedBaseOffsetPercent: getEnvNumber('PASSIVE_SEED_BASE_OFFSET_PERCENT', 0.001),
     passiveSeedStepOffsetPercent: getEnvNumber('PASSIVE_SEED_STEP_OFFSET_PERCENT', 0.0001),
+    quoteChurnRefreshPerSide: getEnvNumber('QUOTE_CHURN_REFRESH_PER_SIDE', 2),
   },
 
   marketMaking: {
