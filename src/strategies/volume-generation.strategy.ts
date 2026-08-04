@@ -894,9 +894,19 @@ export class VolumeGenerationStrategy {
       return null;
     }
 
+    const bestBid = Math.min(executableBestBid, executableBestAsk);
+    const bestAsk = Math.max(executableBestBid, executableBestAsk);
+    const spread = bestAsk - bestBid;
+
+    // Keep maker behavior while improving queue priority by posting slightly inside the spread.
+    const configuredFraction = Math.min(Math.max(config.volumeStrategy.topTouchImprovementSpreadFraction, 0), 0.49);
+    const improvement = spread > 0 ? spread * configuredFraction : 0;
+    const buyPrice = bestBid + improvement;
+    const sellPrice = bestAsk - improvement;
+
     return {
-      buyPrice: Math.min(executableBestBid, executableBestAsk),
-      sellPrice: Math.max(executableBestBid, executableBestAsk)
+      buyPrice: Math.min(buyPrice, sellPrice),
+      sellPrice: Math.max(sellPrice, buyPrice)
     };
   }
 

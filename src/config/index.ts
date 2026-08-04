@@ -66,6 +66,7 @@ interface Config {
     passiveSeedBaseOffsetPercent: number;
     passiveSeedStepOffsetPercent: number;
     quoteChurnRefreshPerSide: number;
+    topTouchImprovementSpreadFraction: number;
   };
 
   marketMaking: {
@@ -214,6 +215,7 @@ export const config: Config = {
     passiveSeedBaseOffsetPercent: getEnvNumber('PASSIVE_SEED_BASE_OFFSET_PERCENT', 0.001),
     passiveSeedStepOffsetPercent: getEnvNumber('PASSIVE_SEED_STEP_OFFSET_PERCENT', 0.0001),
     quoteChurnRefreshPerSide: getEnvNumber('QUOTE_CHURN_REFRESH_PER_SIDE', 2),
+    topTouchImprovementSpreadFraction: getEnvNumber('TOP_TOUCH_IMPROVEMENT_SPREAD_FRACTION', 0),
   },
 
   marketMaking: {
