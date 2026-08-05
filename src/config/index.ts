@@ -14,6 +14,11 @@ interface Config {
     epwxAddress: string;
     epwxWethPairAddress: string;
     baseRpcUrl: string;
+    ethUsdSource: 'chainlink' | 'coingecko' | 'static';
+    ethUsdChainlinkFeedAddress: string;
+    ethUsdFallback: number;
+    coingeckoEthUsdUrl: string;
+    ethUsdCacheMs: number;
   };
 
   volumeStrategy: {
@@ -140,6 +145,23 @@ const getEnvSelfTradeMode = (key: string, defaultValue: 'off' | 'auto' | 'on'): 
   return defaultValue;
 };
 
+const getEnvEthUsdSource = (
+  key: string,
+  defaultValue: 'chainlink' | 'coingecko' | 'static'
+): 'chainlink' | 'coingecko' | 'static' => {
+  const value = process.env[key];
+  if (!value) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'chainlink' || normalized === 'coingecko' || normalized === 'static') {
+    return normalized;
+  }
+
+  return defaultValue;
+};
+
 const getCancelOrdersDefault = (): boolean => {
   const legacyValue = process.env.CANCEL_ORDERS_ON_DEPLOY;
   if (!legacyValue) {
@@ -161,6 +183,14 @@ export const config: Config = {
     epwxAddress: getEnvVariable('EPWX_TOKEN_ADDRESS', '0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb'),
     epwxWethPairAddress: getEnvVariable('EPWX_WETH_PAIR', ''),
     baseRpcUrl: getEnvVariable('BASE_RPC_URL', ''),
+    ethUsdSource: getEnvEthUsdSource('ETH_USD_SOURCE', 'chainlink'),
+    ethUsdChainlinkFeedAddress: process.env.ETH_USD_CHAINLINK_FEED_ADDRESS || '',
+    ethUsdFallback: getEnvNumber('ETH_USD_FALLBACK', 2200),
+    coingeckoEthUsdUrl: getEnvVariable(
+      'COINGECKO_ETH_USD_URL',
+      'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd'
+    ),
+    ethUsdCacheMs: getEnvNumber('ETH_USD_CACHE_MS', 120000),
   },
 
   volumeStrategy: {

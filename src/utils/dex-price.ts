@@ -1,5 +1,5 @@
 /**
- * Fetches the price of EPWX in USD using PancakeSwap EPWX/WETH pair and CoinGecko ETH/USD price.
+ * Fetches the price of EPWX in USD using EPWX/WETH pair reserves and a configurable ETH/USD source.
  * @param providerUrl Ethereum RPC URL (Base)
  * @param epwxWethPairAddress PancakeSwap V2 pair address for EPWX/WETH
  * @param epwxAddress EPWX token address
@@ -33,10 +33,92 @@ const ERC20_ABI = [
   'function decimals() external view returns (uint8)'
 ];
 
+const CHAINLINK_AGGREGATOR_ABI = [
+  'function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
+  'function decimals() external view returns (uint8)'
+];
+
+type EthUsdSource = 'chainlink' | 'coingecko' | 'static';
+
+interface EthUsdConfig {
+  source: EthUsdSource;
+  chainlinkFeedAddress?: string;
+  fallbackPriceUsd?: number;
+  coingeckoUrl?: string;
+  cacheMs?: number;
+}
+
+let cachedEthUsdPrice: number | null = null;
+let cachedEthUsdAt = 0;
+
+async function fetchEthUsdPrice(provider: JsonRpcProvider, cfg: EthUsdConfig): Promise<number> {
+  const fallbackPriceUsd = cfg.fallbackPriceUsd ?? 2200;
+  const cacheMs = cfg.cacheMs ?? 120000;
+  const source = cfg.source;
+
+  if (cachedEthUsdPrice && Date.now() - cachedEthUsdAt <= cacheMs) {
+    return cachedEthUsdPrice;
+  }
+
+  if (source === 'chainlink') {
+    const feedAddress = cfg.chainlinkFeedAddress;
+    if (!feedAddress) {
+      logger.warn('ETH_USD_SOURCE=chainlink but ETH_USD_CHAINLINK_FEED_ADDRESS is empty; using fallback source path');
+    } else {
+      try {
+        const feed = new Contract(feedAddress, CHAINLINK_AGGREGATOR_ABI, provider);
+        const [roundData, decimals] = await Promise.all([
+          retry(() => feed.latestRoundData(), 3, 1000, 'chainlink latestRoundData'),
+          retry(() => feed.decimals(), 3, 1000, 'chainlink decimals')
+        ]);
+
+        const answer = roundData[1] as bigint;
+        const precision = Number(decimals);
+        const ethUsd = Number(answer) / Math.pow(10, precision);
+
+        if (Number.isFinite(ethUsd) && ethUsd > 0) {
+          cachedEthUsdPrice = ethUsd;
+          cachedEthUsdAt = Date.now();
+          return ethUsd;
+        }
+
+        logger.warn('Chainlink ETH/USD returned non-positive or invalid answer; falling back');
+      } catch (error) {
+        logger.warn('Chainlink ETH/USD fetch failed; falling back', { error });
+      }
+    }
+  }
+
+  if (source === 'coingecko' || source === 'chainlink') {
+    const coingeckoUrl = cfg.coingeckoUrl || 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd';
+
+    for (let i = 0; i < 3; i++) {
+      try {
+        const response = await axios.get(coingeckoUrl);
+        const ethUsd = response.data?.ethereum?.usd || 0;
+        if (ethUsd) {
+          cachedEthUsdPrice = ethUsd;
+          cachedEthUsdAt = Date.now();
+          return ethUsd;
+        }
+      } catch (error) {
+        logger.warn(`CoinGecko ETH/USD fetch failed (attempt ${i + 1}/3)`, { error });
+        await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+      }
+    }
+  }
+
+  logger.error(`Failed to fetch ETH/USD from configured source (${source}), using static fallback value ${fallbackPriceUsd}`);
+  cachedEthUsdPrice = fallbackPriceUsd;
+  cachedEthUsdAt = Date.now();
+  return fallbackPriceUsd;
+}
+
 export async function fetchEpwXPriceFromPancake(
   providerUrl: string,
   epwxWethPairAddress: string,
-  epwxAddress: string
+  epwxAddress: string,
+  ethUsdConfig: EthUsdConfig
 ): Promise<number> {
   const provider = new JsonRpcProvider(providerUrl);
   let reserve0: bigint, reserve1: bigint, token0: string, token1: string, decimals0: number, decimals1: number;
@@ -79,24 +161,7 @@ export async function fetchEpwXPriceFromPancake(
   const wethReserveNorm = Number(formatUnits(wethReserve, wethDecimals));
   const epwxPriceInWeth = wethReserveNorm / epwxReserveNorm;
 
-  // Fetch ETH/USD price from CoinGecko with retry and fallback
-  let ethPriceUSD = 0;
-  let coingeckoError = null;
-  for (let i = 0; i < 3; i++) {
-    try {
-      const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-      ethPriceUSD = response.data?.ethereum?.usd || 0;
-      if (ethPriceUSD) break;
-    } catch (error) {
-      coingeckoError = error;
-      logger.warn(`CoinGecko ETH/USD fetch failed (attempt ${i + 1}/3)`, { error });
-      await new Promise(res => setTimeout(res, 1000 * (i + 1)));
-    }
-  }
-  if (!ethPriceUSD) {
-    logger.error('Failed to fetch ETH/USD from CoinGecko after retries, using static fallback value 2200');
-    ethPriceUSD = 2200; // Fallback static value
-  }
+  const ethPriceUSD = await fetchEthUsdPrice(provider, ethUsdConfig);
 
   // Final price: EPWX in USD
   const epwxPriceInUsd = epwxPriceInWeth * ethPriceUSD;

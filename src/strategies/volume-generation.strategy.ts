@@ -1248,14 +1248,21 @@ export class VolumeGenerationStrategy {
       logger.info('🔄 Starting order placement cycle');
       logger.debug('DEBUG: Entered placeVolumeOrders');
 
-      // Fetch DEX price from PancakeSwap (EPWX/WETH + CoinGecko ETH/USD)
+      // Fetch DEX price from PancakeSwap (EPWX/WETH + configured ETH/USD source)
       logger.info('🔄 [DEX] Fetching EPWX price from PancakeSwap...');
       let dexPriceUSD: number | undefined;
       try {
         dexPriceUSD = await fetchEpwXPriceFromPancake(
           config.trading.baseRpcUrl,
           config.trading.epwxWethPairAddress,
-          config.trading.epwxAddress
+          config.trading.epwxAddress,
+          {
+            source: config.trading.ethUsdSource,
+            chainlinkFeedAddress: config.trading.ethUsdChainlinkFeedAddress,
+            fallbackPriceUsd: config.trading.ethUsdFallback,
+            coingeckoUrl: config.trading.coingeckoEthUsdUrl,
+            cacheMs: config.trading.ethUsdCacheMs,
+          }
         );
         logger.info(`🥞 DEX (PancakeSwap) price fetched: 1 EPWX ≈ ${dexPriceUSD} USD`);
         // Apply markup for CEX mirroring

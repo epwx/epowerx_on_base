@@ -62,6 +62,14 @@ BICONOMY_EXCHANGE_BASE_URL=https://api.biconomy.exchange
 # Trading Configuration
 TRADING_PAIR=EPWX/USDT
 EPWX_TOKEN_ADDRESS=0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb
+EPWX_WETH_PAIR=your_epwx_weth_pair_address
+BASE_RPC_URL=your_base_rpc_url
+
+# ETH/USD conversion source for EPWX/USD pricing
+ETH_USD_SOURCE=chainlink
+ETH_USD_CHAINLINK_FEED_ADDRESS=your_chainlink_eth_usd_feed_address
+ETH_USD_FALLBACK=2200
+ETH_USD_CACHE_MS=120000
 
 # Volume Generation Strategy
 VOLUME_TARGET_DAILY=100000          # Target daily volume in USD
