@@ -832,7 +832,7 @@ export class VolumeGenerationStrategy {
       : referencePrice * (1 + offset);
   }
 
-  private async clampPriceToLatestBand(price: number): Promise<number> {
+  private async clampPriceToLatestBand(price: number, side: 'BUY' | 'SELL' = 'BUY'): Promise<number> {
     const ticker = await this.exchange.getTicker(this.symbol);
     const latestPrice = ticker?.price ?? 0;
 
@@ -840,8 +840,28 @@ export class VolumeGenerationStrategy {
       return price;
     }
 
-    const lowerBound = latestPrice * 0.995;
-    const upperBound = latestPrice * 1.005;
+    let lowerBound = latestPrice * 0.995;
+    let upperBound = latestPrice * 1.005;
+
+    // In sell-only recovery mode, allow sell quotes to anchor near real-user bids.
+    if (
+      side === 'SELL' &&
+      config.volumeStrategy.sellNearBidEnabled &&
+      this.getForceBuyPause()
+    ) {
+      const bid = Number(ticker?.bid ?? 0);
+      const ask = Number(ticker?.ask ?? 0);
+      const bestBid = Math.min(bid, ask);
+      const bestAsk = Math.max(bid, ask);
+
+      if (Number.isFinite(bestBid) && Number.isFinite(bestAsk) && bestBid > 0 && bestAsk > 0) {
+        const tick = this.getEffectiveTickSize();
+        const minSellAboveBid = bestBid + tick;
+        lowerBound = Math.max(minSellAboveBid, Number.EPSILON);
+        upperBound = Math.max(upperBound, bestAsk);
+      }
+    }
+
     return Math.min(Math.max(price, lowerBound), upperBound);
   }
 
@@ -879,7 +899,7 @@ export class VolumeGenerationStrategy {
     let adjustedPrice = price;
     for (let i = 0; i < sameLevelCount; i++) {
       const candidatePrice = adjustedPrice + tick;
-      const clampedCandidatePrice = await this.clampPriceToLatestBand(candidatePrice);
+      const clampedCandidatePrice = await this.clampPriceToLatestBand(candidatePrice, 'SELL');
       if (clampedCandidatePrice <= adjustedPrice) {
         break;
       }
@@ -2277,10 +2297,33 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      if (!isWashTrade && config.volumeStrategy.sellNearBidEnabled && this.getForceBuyPause()) {
+        const ticker = await this.exchange.getTicker(this.symbol);
+        const bid = Number(ticker?.bid ?? 0);
+        const ask = Number(ticker?.ask ?? 0);
+        const bestBid = Math.min(bid, ask);
+
+        if (Number.isFinite(bestBid) && bestBid > 0) {
+          const tick = this.getEffectiveTickSize();
+          const anchorTicks = Math.max(Math.floor(config.volumeStrategy.sellNearBidTicks), 0);
+          const markupBps = Math.max(config.volumeStrategy.sellNearBidMinMarkupBps, 0);
+          const tickAnchoredPrice = bestBid + (tick * anchorTicks);
+          const bpsAnchoredPrice = bestBid * (1 + (markupBps / 10000));
+          const nearBidSellPrice = Math.max(tickAnchoredPrice, bpsAnchoredPrice, Number.EPSILON);
+
+          if (nearBidSellPrice < price) {
+            logger.info(
+              `🎯 Sell-near-bid mode: adjusting sell anchor from ${price.toExponential(4)} to ${nearBidSellPrice.toExponential(4)} (bestBid=${bestBid.toExponential(4)})`
+            );
+            price = nearBidSellPrice;
+          }
+        }
+      }
+
       const requestedPrice = price;
       const requestedAmount = normalizedAmount;
 
-      const clampedPrice = await this.clampPriceToLatestBand(price);
+      const clampedPrice = await this.clampPriceToLatestBand(price, 'SELL');
       if (clampedPrice !== price) {
         logger.warn(
           `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`

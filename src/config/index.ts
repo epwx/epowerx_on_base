@@ -73,6 +73,9 @@ interface Config {
     passiveSeedStepOffsetPercent: number;
     quoteChurnRefreshPerSide: number;
     topTouchImprovementSpreadFraction: number;
+    sellNearBidEnabled: boolean;
+    sellNearBidTicks: number;
+    sellNearBidMinMarkupBps: number;
   };
 
   marketMaking: {
@@ -248,6 +251,9 @@ export const config: Config = {
     passiveSeedStepOffsetPercent: getEnvNumber('PASSIVE_SEED_STEP_OFFSET_PERCENT', 0.0001),
     quoteChurnRefreshPerSide: getEnvNumber('QUOTE_CHURN_REFRESH_PER_SIDE', 2),
     topTouchImprovementSpreadFraction: getEnvNumber('TOP_TOUCH_IMPROVEMENT_SPREAD_FRACTION', 0),
+    sellNearBidEnabled: getEnvBoolean('SELL_NEAR_BID_ENABLED', false),
+    sellNearBidTicks: getEnvNumber('SELL_NEAR_BID_TICKS', 1),
+    sellNearBidMinMarkupBps: getEnvNumber('SELL_NEAR_BID_MIN_MARKUP_BPS', 1),
   },
 
   marketMaking: {
