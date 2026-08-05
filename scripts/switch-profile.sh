@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILES_DIR="$ROOT_DIR/profiles"
 ENV_FILE="$ROOT_DIR/.env"
+BASE_ENV_FILE="${BASE_ENV_FILE:-$ROOT_DIR/.env.production.base}"
 PM2_PROCESS_NAME="${PM2_PROCESS_NAME:-epwx-bot}"
 PM2_LOG_FILE="${PM2_LOG_FILE:-/home/deployer/.pm2/logs/${PM2_PROCESS_NAME}-out.log}"
 STATE_FILE="${STATE_FILE:-$ROOT_DIR/logs/profile-switch-state.env}"
@@ -40,6 +41,7 @@ Auto mode:
 	- Uses hysteresis (different enter/exit thresholds) to avoid flapping.
 
 Optional env vars:
+	BASE_ENV_FILE (default: .env.production.base)
 	PM2_PROCESS_NAME (default: epwx-bot)
 	PM2_LOG_FILE (default: /home/deployer/.pm2/logs/<process>-out.log)
 	AUTO_SWITCH_ENTER_DISLOCATED_SPREAD_PERCENT (default: 15)
@@ -68,18 +70,47 @@ profile_file() {
 	echo "$PROFILES_DIR/${profile_name}.env"
 }
 
+get_env_value() {
+	local file="$1"
+	local key="$2"
+	awk -F= -v k="$key" '
+		/^[[:space:]]*#/ {next}
+		/^[[:space:]]*$/ {next}
+		$1==k {print substr($0, index($0, "=")+1); found=1}
+		END {if (!found) print ""}
+	' "$file"
+}
+
+profile_matches_env() {
+	local profile_path="$1"
+	local key
+	local expected
+	local actual
+
+	while IFS='=' read -r key expected; do
+		[[ -z "${key// }" ]] && continue
+		[[ "$key" =~ ^[[:space:]]*# ]] && continue
+		actual="$(get_env_value "$ENV_FILE" "$key")"
+		if [[ "$actual" != "$expected" ]]; then
+			return 1
+		fi
+	done < "$profile_path"
+
+	return 0
+}
+
 current_profile_from_env() {
 	local real_user_file
 	local dislocated_file
 	real_user_file="$(profile_file "$PROFILE_REAL_USER")"
 	dislocated_file="$(profile_file "$PROFILE_DISLOCATED")"
 
-	if cmp -s "$ENV_FILE" "$real_user_file"; then
+	if profile_matches_env "$real_user_file"; then
 		echo "$PROFILE_REAL_USER"
 		return
 	fi
 
-	if cmp -s "$ENV_FILE" "$dislocated_file"; then
+	if profile_matches_env "$dislocated_file"; then
 		echo "$PROFILE_DISLOCATED"
 		return
 	fi
@@ -156,6 +187,36 @@ collect_new_log_chunk() {
 	cursor_offset="$current_size"
 }
 
+merge_env_files() {
+	local base_file="$1"
+	local override_file="$2"
+	local out_file="$3"
+
+	awk -F= '
+		function remember(k, v) {
+			if (!(k in seen)) {
+				order[++count] = k
+				seen[k] = 1
+			}
+			values[k] = v
+		}
+		FNR==1 && NR!=1 { phase=2 }
+		{
+			if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next
+			if ($0 !~ /^[A-Za-z_][A-Za-z0-9_]*=/) next
+			key = $1
+			val = substr($0, index($0, "=")+1)
+			remember(key, val)
+		}
+		END {
+			for (i=1; i<=count; i++) {
+				k = order[i]
+				print k "=" values[k]
+			}
+		}
+	' "$base_file" "$override_file" > "$out_file"
+}
+
 switch_profile() {
 	local target_profile="$1"
 	local reason="$2"
@@ -163,7 +224,14 @@ switch_profile() {
 	target_file="$(profile_file "$target_profile")"
 	ensure_file_exists "$target_file"
 
-	cp "$target_file" "$ENV_FILE"
+	if [[ -f "$BASE_ENV_FILE" ]]; then
+		merge_env_files "$BASE_ENV_FILE" "$target_file" "$ENV_FILE"
+		log_info "Merged base env ($BASE_ENV_FILE) with profile overrides ($target_file)."
+	else
+		cp "$target_file" "$ENV_FILE"
+		log_warn "Base env file not found ($BASE_ENV_FILE); copied profile directly to .env."
+	fi
+
 	mkdir -p "$(dirname "$STATE_FILE")"
 	{
 		echo "last_switch_ts=$(date +%s)"
