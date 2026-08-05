@@ -13,6 +13,8 @@ CURSOR_FILE="${CURSOR_FILE:-$ROOT_DIR/logs/profile-switch-cursor.env}"
 
 PROFILE_REAL_USER="legit-market-making-real-user"
 PROFILE_DISLOCATED="legit-market-making-dislocated"
+PROFILE_SELL_ONLY="legit-market-making-sell-only-recovery"
+AUTO_SWITCH_USE_SELL_ONLY_RECOVERY="${AUTO_SWITCH_USE_SELL_ONLY_RECOVERY:-false}"
 
 ENTER_DISLOCATED_SPREAD="${AUTO_SWITCH_ENTER_DISLOCATED_SPREAD_PERCENT:-18}"
 EXIT_DISLOCATED_SPREAD="${AUTO_SWITCH_EXIT_DISLOCATED_SPREAD_PERCENT:-6}"
@@ -34,6 +36,7 @@ Usage:
 Profiles:
 	legit-market-making-real-user
 	legit-market-making-dislocated
+	legit-market-making-sell-only-recovery
 
 Auto mode:
 	- Switches to dislocated profile when last N spreads are all >= ENTER threshold.
@@ -47,6 +50,7 @@ Optional env vars:
 	AUTO_SWITCH_ENTER_DISLOCATED_SPREAD_PERCENT (default: 18)
 	AUTO_SWITCH_EXIT_DISLOCATED_SPREAD_PERCENT (default: 6)
 	AUTO_SWITCH_CONFIRM_CYCLES (default: 4)
+	AUTO_SWITCH_USE_SELL_ONLY_RECOVERY (default: false)
 	AUTO_SWITCH_SCAN_LINES (default: 4000)
 	RESTART_ON_SWITCH (default: true)
 	CURSOR_FILE (default: logs/profile-switch-cursor.env)
@@ -102,8 +106,10 @@ profile_matches_env() {
 current_profile_from_env() {
 	local real_user_file
 	local dislocated_file
+	local sell_only_file
 	real_user_file="$(profile_file "$PROFILE_REAL_USER")"
 	dislocated_file="$(profile_file "$PROFILE_DISLOCATED")"
+	sell_only_file="$(profile_file "$PROFILE_SELL_ONLY")"
 
 	if profile_matches_env "$real_user_file"; then
 		echo "$PROFILE_REAL_USER"
@@ -112,6 +118,11 @@ current_profile_from_env() {
 
 	if profile_matches_env "$dislocated_file"; then
 		echo "$PROFILE_DISLOCATED"
+		return
+	fi
+
+	if profile_matches_env "$sell_only_file"; then
+		echo "$PROFILE_SELL_ONLY"
 		return
 	fi
 
@@ -284,6 +295,12 @@ auto_switch() {
 	local dry_run="$1"
 	local current_profile
 	local spreads
+	local stressed_target_profile
+
+	stressed_target_profile="$PROFILE_DISLOCATED"
+	if [[ "$AUTO_SWITCH_USE_SELL_ONLY_RECOVERY" == "true" ]]; then
+		stressed_target_profile="$PROFILE_SELL_ONLY"
+	fi
 
 	current_profile="$(current_profile_from_env)"
 	spreads="$(extract_recent_spreads || true)"
@@ -301,9 +318,9 @@ auto_switch() {
 	if [[ "$current_profile" == "$PROFILE_REAL_USER" ]]; then
 		if should_enter_dislocated "$spreads"; then
 			if [[ "$dry_run" == "true" ]]; then
-				log_info "[DRY-RUN] Would switch to $PROFILE_DISLOCATED"
+				log_info "[DRY-RUN] Would switch to $stressed_target_profile"
 			else
-				switch_profile "$PROFILE_DISLOCATED" "auto-switch: spread persisted above enter threshold"
+				switch_profile "$stressed_target_profile" "auto-switch: spread persisted above enter threshold"
 			fi
 		else
 			log_info "No switch: real-user profile retained."
@@ -312,6 +329,15 @@ auto_switch() {
 	fi
 
 	if [[ "$current_profile" == "$PROFILE_DISLOCATED" ]]; then
+		if [[ "$AUTO_SWITCH_USE_SELL_ONLY_RECOVERY" == "true" ]] && should_enter_dislocated "$spreads"; then
+			if [[ "$dry_run" == "true" ]]; then
+				log_info "[DRY-RUN] Would switch to $PROFILE_SELL_ONLY"
+			else
+				switch_profile "$PROFILE_SELL_ONLY" "auto-switch: moving from dislocated to sell-only recovery under persistent stress"
+			fi
+			return
+		fi
+
 		if should_exit_dislocated "$spreads"; then
 			if [[ "$dry_run" == "true" ]]; then
 				log_info "[DRY-RUN] Would switch to $PROFILE_REAL_USER"
@@ -320,6 +346,19 @@ auto_switch() {
 			fi
 		else
 			log_info "No switch: dislocated profile retained."
+		fi
+		return
+	fi
+
+	if [[ "$current_profile" == "$PROFILE_SELL_ONLY" ]]; then
+		if should_exit_dislocated "$spreads"; then
+			if [[ "$dry_run" == "true" ]]; then
+				log_info "[DRY-RUN] Would switch to $PROFILE_REAL_USER"
+			else
+				switch_profile "$PROFILE_REAL_USER" "auto-switch: spread normalized below exit threshold"
+			fi
+		else
+			log_info "No switch: sell-only recovery profile retained."
 		fi
 		return
 	fi
@@ -336,6 +375,7 @@ main() {
 	ensure_file_exists "$ENV_FILE"
 	ensure_file_exists "$(profile_file "$PROFILE_REAL_USER")"
 	ensure_file_exists "$(profile_file "$PROFILE_DISLOCATED")"
+	ensure_file_exists "$(profile_file "$PROFILE_SELL_ONLY")"
 
 	if [[ "$1" == "--auto" ]]; then
 		local dry_run="false"
@@ -352,7 +392,7 @@ main() {
 	fi
 
 	local target_profile="$1"
-	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" ]]; then
+	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" && "$target_profile" != "$PROFILE_SELL_ONLY" ]]; then
 		log_error "Unsupported profile: $target_profile"
 		usage
 		exit 1
