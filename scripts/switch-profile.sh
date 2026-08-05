@@ -8,6 +8,7 @@ ENV_FILE="$ROOT_DIR/.env"
 PM2_PROCESS_NAME="${PM2_PROCESS_NAME:-epwx-bot}"
 PM2_LOG_FILE="${PM2_LOG_FILE:-/home/deployer/.pm2/logs/${PM2_PROCESS_NAME}-out.log}"
 STATE_FILE="${STATE_FILE:-$ROOT_DIR/logs/profile-switch-state.env}"
+CURSOR_FILE="${CURSOR_FILE:-$ROOT_DIR/logs/profile-switch-cursor.env}"
 
 PROFILE_REAL_USER="legit-market-making-real-user"
 PROFILE_DISLOCATED="legit-market-making-dislocated"
@@ -17,6 +18,10 @@ EXIT_DISLOCATED_SPREAD="${AUTO_SWITCH_EXIT_DISLOCATED_SPREAD_PERCENT:-3}"
 CONFIRM_CYCLES="${AUTO_SWITCH_CONFIRM_CYCLES:-6}"
 SCAN_LINES="${AUTO_SWITCH_SCAN_LINES:-4000}"
 RESTART_ON_SWITCH="${RESTART_ON_SWITCH:-true}"
+
+cursor_inode=""
+cursor_offset="0"
+recent_spreads=""
 
 usage() {
 	cat <<'EOF'
@@ -42,6 +47,7 @@ Optional env vars:
 	AUTO_SWITCH_CONFIRM_CYCLES (default: 6)
 	AUTO_SWITCH_SCAN_LINES (default: 4000)
 	RESTART_ON_SWITCH (default: true)
+	CURSOR_FILE (default: logs/profile-switch-cursor.env)
 EOF
 }
 
@@ -96,6 +102,60 @@ restart_pm2_if_enabled() {
 	pm2 restart "$PM2_PROCESS_NAME" --update-env
 }
 
+load_cursor_state() {
+	if [[ -f "$CURSOR_FILE" ]]; then
+		# shellcheck disable=SC1090
+		source "$CURSOR_FILE"
+	fi
+
+	cursor_inode="${cursor_inode:-}"
+	cursor_offset="${cursor_offset:-0}"
+	recent_spreads="${recent_spreads:-}"
+}
+
+save_cursor_state() {
+	mkdir -p "$(dirname "$CURSOR_FILE")"
+	{
+		echo "cursor_inode=${cursor_inode}"
+		echo "cursor_offset=${cursor_offset}"
+		echo "recent_spreads=${recent_spreads}"
+	} > "$CURSOR_FILE"
+}
+
+extract_spreads_from_text() {
+	grep -E "\[EXEC BOOK\].*spread=" \
+		| grep -oE 'spread=[0-9]+(\.[0-9]+)?%' \
+		| sed -E 's/spread=([0-9]+(\.[0-9]+)?)%/\1/'
+}
+
+merge_recent_spreads() {
+	local new_spreads="$1"
+	local existing_lines
+	local merged_lines
+
+	existing_lines="$(echo "$recent_spreads" | tr ' ' '\n' | sed '/^$/d' || true)"
+	merged_lines="$(printf "%s\n%s\n" "$existing_lines" "$new_spreads" | sed '/^$/d' | tail -n "$CONFIRM_CYCLES")"
+	recent_spreads="$(echo "$merged_lines" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')"
+}
+
+collect_new_log_chunk() {
+	ensure_file_exists "$PM2_LOG_FILE"
+
+	local current_inode
+	local current_size
+	current_inode="$(stat -c %i "$PM2_LOG_FILE")"
+	current_size="$(stat -c %s "$PM2_LOG_FILE")"
+
+	if [[ "$cursor_inode" == "$current_inode" ]] && [[ "$current_size" -ge "$cursor_offset" ]] && [[ "$cursor_offset" -gt 0 ]]; then
+		dd if="$PM2_LOG_FILE" bs=1 skip="$cursor_offset" status=none || true
+	else
+		tail -n "$SCAN_LINES" "$PM2_LOG_FILE"
+	fi
+
+	cursor_inode="$current_inode"
+	cursor_offset="$current_size"
+}
+
 switch_profile() {
 	local target_profile="$1"
 	local reason="$2"
@@ -117,12 +177,13 @@ switch_profile() {
 }
 
 extract_recent_spreads() {
-	ensure_file_exists "$PM2_LOG_FILE"
-	tail -n "$SCAN_LINES" "$PM2_LOG_FILE" \
-		| grep -E "\[EXEC BOOK\].*spread=" \
-		| grep -oE 'spread=[0-9]+(\.[0-9]+)?%' \
-		| sed -E 's/spread=([0-9]+(\.[0-9]+)?)%/\1/' \
-		| tail -n "$CONFIRM_CYCLES"
+	local new_chunk
+	local new_spreads
+
+	new_chunk="$(collect_new_log_chunk)"
+	new_spreads="$(echo "$new_chunk" | extract_spreads_from_text || true)"
+	merge_recent_spreads "$new_spreads"
+	echo "$recent_spreads" | tr ' ' '\n' | sed '/^$/d'
 }
 
 should_enter_dislocated() {
@@ -158,6 +219,7 @@ auto_switch() {
 
 	current_profile="$(current_profile_from_env)"
 	spreads="$(extract_recent_spreads || true)"
+	save_cursor_state
 
 	if [[ -z "${spreads// }" ]]; then
 		log_warn "No executable spread samples found in log window. No switch performed."
