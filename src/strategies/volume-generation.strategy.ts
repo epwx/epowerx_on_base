@@ -61,6 +61,7 @@ export class VolumeGenerationStrategy {
   protected exchange: BiconomyExchangeService;
   private isRunning: boolean = false;
   private stepSize: number = 1;
+  private tickSize: number = 1e-13;
   private minQty: number = 1;
   private symbol: string;
   private volumeStats: VolumeStats;
@@ -853,6 +854,47 @@ export class VolumeGenerationStrategy {
     return ratio > VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO || ratio < (1 / VolumeGenerationStrategy.MAX_CLAMP_REPRICE_RATIO);
   }
 
+  private getEffectiveTickSize(): number {
+    return Number.isFinite(this.tickSize) && this.tickSize > 0 ? this.tickSize : 1e-13;
+  }
+
+  private async offsetSellPriceFromOpenLevels(price: number): Promise<number> {
+    const exchangeWithOpenOrders = this.exchange as any;
+    if (typeof exchangeWithOpenOrders.getOpenOrders !== 'function') {
+      return price;
+    }
+
+    const openOrders: Order[] = await exchangeWithOpenOrders.getOpenOrders(this.symbol);
+    const sellOrders = openOrders.filter(order => order.side === 'SELL');
+    if (!sellOrders.length) {
+      return price;
+    }
+
+    const tick = this.getEffectiveTickSize();
+    const sameLevelCount = sellOrders.filter(order => Math.abs(order.price - price) <= (tick / 2)).length;
+    if (sameLevelCount === 0) {
+      return price;
+    }
+
+    let adjustedPrice = price;
+    for (let i = 0; i < sameLevelCount; i++) {
+      const candidatePrice = adjustedPrice + tick;
+      const clampedCandidatePrice = await this.clampPriceToLatestBand(candidatePrice);
+      if (clampedCandidatePrice <= adjustedPrice) {
+        break;
+      }
+      adjustedPrice = clampedCandidatePrice;
+    }
+
+    if (adjustedPrice !== price) {
+      logger.info(
+        `↗️ Offsetting sell price by ${sameLevelCount} tick(s) to avoid same-price stacking: ${price.toExponential(4)} -> ${adjustedPrice.toExponential(4)}`
+      );
+    }
+
+    return adjustedPrice;
+  }
+
   private recalculateExecutableOrderAmount(
     side: 'BUY' | 'SELL',
     requestedPrice: number,
@@ -1080,6 +1122,9 @@ export class VolumeGenerationStrategy {
         this.stepSize = 1;
       } else if (pairInfo.stepSize) {
         this.stepSize = Number(pairInfo.stepSize);
+      }
+      if (pairInfo.tickSize && Number(pairInfo.tickSize) > 0) {
+        this.tickSize = Number(pairInfo.tickSize);
       }
       if (pairInfo.minQty) this.minQty = Number(pairInfo.minQty);
       logger.info(`[PAIR INFO] stepSize=${this.stepSize}, minQty=${this.minQty}, baseAssetPrecision=${pairInfo.baseAssetPrecision}, quoteAssetPrecision=${pairInfo.quoteAssetPrecision}, tickSize=${pairInfo.tickSize}`);
@@ -2235,6 +2280,8 @@ export class VolumeGenerationStrategy {
         );
         price = clampedPrice;
       }
+
+      price = await this.offsetSellPriceFromOpenLevels(price);
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
         logger.warn(
