@@ -76,6 +76,7 @@ interface Config {
     sellNearBidEnabled: boolean;
     sellNearBidTicks: number;
     sellNearBidMinMarkupBps: number;
+    dexPriceDiscountPercent: number;
   };
 
   marketMaking: {
@@ -231,6 +232,7 @@ export const config: Config = {
     balanceUtilizationPercent: getEnvNumber('BALANCE_UTILIZATION_PERCENT', 0.92),
     idleBalanceReserveUsd: getEnvNumber('IDLE_BALANCE_RESERVE_USD', 25),
     maxDexCexDriftPercent: getEnvNumber('MAX_DEX_CEX_DRIFT_PERCENT', 5),
+    dexPriceDiscountPercent: getEnvNumber('DEX_PRICE_DISCOUNT_PERCENT', 6),
     pauseWashOnHighDrift: getEnvBoolean('PAUSE_WASH_ON_HIGH_DRIFT', true),
     washReservedPlacementsPerCycle: getEnvNumber('WASH_RESERVED_PLACEMENTS_PER_CYCLE', 6),
     washOrderSizeCapUsd: getEnvNumber('WASH_ORDER_SIZE_CAP_USD', 25),
