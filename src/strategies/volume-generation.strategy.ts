@@ -2287,6 +2287,17 @@ export class VolumeGenerationStrategy {
 
   protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
     try {
+      const referencePrice = price; // Save original reference before any adjustments
+      
+      // EMERGENCY SHORT POSITION BRAKE: Refuse sells if position is dangerously short
+      const maxShortPosition = -config.marketMaking.maxPositionSize * 0.9; // Allow 90% of max as short
+      if (this.currentPosition < maxShortPosition) {
+        logger.error(
+          `🚨 EMERGENCY BRAKE: Position ${this.currentPosition.toFixed(2)} is dangerously short (< ${maxShortPosition.toFixed(2)}). Refusing sell orders until position recovers. This requires manual BUY intervention or profile change.`
+        );
+        return;
+      }
+      
       // Check available EPWX before placing order
       const balances = await this.exchange.getBalances();
       const epwxBalance = balances.find(b => b.asset === 'EPWX');
@@ -2318,6 +2329,15 @@ export class VolumeGenerationStrategy {
             price = nearBidSellPrice;
           }
         }
+      }
+
+      // Safety floor: never sell below 99.5% of reference (prevents loss-making sales)
+      const floorPrice = referencePrice * 0.995;
+      if (price < floorPrice) {
+        logger.warn(
+          `⚠️  Sell floor protection: rejected price ${price.toExponential(4)} below fair value floor ${floorPrice.toExponential(4)}. Skipping potentially loss-making sale.`
+        );
+        return;
       }
 
       const requestedPrice = price;
