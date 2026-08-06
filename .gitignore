@@ -9,8 +9,6 @@ dist/
 # Environment
 .env
 .env.local
-.env.production.base
-.env.backup.*
 
 # Logs
 logs/

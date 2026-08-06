@@ -63,8 +63,6 @@ export class BiconomyExchangeService {
   private apiSecret: string;
   private epwxPairInfo?: PairInfo;
   private static readonly BUILD_MARKER = BiconomyExchangeService.resolveBuildMarker();
-  private static readonly PRIVATE_API_RETRY_ATTEMPTS = 3;
-  private static readonly PRIVATE_API_RETRY_BASE_DELAY_MS = 300;
 
   private static resolveBuildMarker(): string {
     const runtimeSha = process.env.RUNTIME_GIT_SHA;
@@ -130,57 +128,6 @@ export class BiconomyExchangeService {
     return redacted;
   }
 
-  private isTransientServiceUnavailable(error: any): boolean {
-    const responseStatus = error?.response?.status;
-    const responseMessage = String(error?.response?.data?.message || '').toLowerCase();
-    const message = String(error?.message || '').toLowerCase();
-
-    if (responseStatus === 429 || responseStatus === 502 || responseStatus === 503 || responseStatus === 504) {
-      return true;
-    }
-
-    if (responseMessage.includes('service is not available') || message.includes('service is not available')) {
-      return true;
-    }
-
-    if (message.includes('timeout') || message.includes('econnreset') || message.includes('socket hang up')) {
-      return true;
-    }
-
-    return false;
-  }
-
-  private async delay(ms: number): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  private async withPrivateApiRetry<T>(operation: string, action: () => Promise<T>): Promise<T> {
-    let lastError: any;
-
-    for (let attempt = 1; attempt <= BiconomyExchangeService.PRIVATE_API_RETRY_ATTEMPTS; attempt++) {
-      try {
-        return await action();
-      } catch (error: any) {
-        lastError = error;
-        const transient = this.isTransientServiceUnavailable(error);
-        const canRetry = transient && attempt < BiconomyExchangeService.PRIVATE_API_RETRY_ATTEMPTS;
-
-        if (!canRetry) {
-          break;
-        }
-
-        const backoff = BiconomyExchangeService.PRIVATE_API_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1));
-        const jitter = Math.floor(Math.random() * 120);
-        logger.warn(
-          `[${operation}] Exchange API temporarily unavailable (attempt ${attempt}/${BiconomyExchangeService.PRIVATE_API_RETRY_ATTEMPTS}). Retrying in ${backoff + jitter}ms.`
-        );
-        await this.delay(backoff + jitter);
-      }
-    }
-
-    throw lastError;
-  }
-
   private async getPairFormatting(symbol: string): Promise<PairInfo | undefined> {
     if (symbol.replace('/', '_').toUpperCase() !== 'EPWX_USDT') {
       return undefined;
@@ -224,24 +171,13 @@ export class BiconomyExchangeService {
     return (normalizedValue / scale).toFixed(decimals);
   }
 
-  private quantizeEpwxPrice(value: number, decimals: number, side: 'BUY' | 'SELL', tickSize?: string): string {
-    const safeDecimals = Math.max(0, decimals);
-    const tick = Number.parseFloat(tickSize || '0');
-    if (!Number.isFinite(value) || value <= 0) {
-      return (0).toFixed(safeDecimals);
-    }
+  private quantizeEpwxPrice(value: number, decimals: number): string {
+    const effectiveStep = 0.00000000000030;
+    const effectiveAnchor = 0.00000000008210;
+    const nearestStepCount = Math.max(0, Math.round((value - effectiveAnchor) / effectiveStep));
+    const quantizedValue = effectiveAnchor + nearestStepCount * effectiveStep;
 
-    // Quantize to the live pair tick while preserving intent per side.
-    if (Number.isFinite(tick) && tick > 0) {
-      const rawSteps = value / tick;
-      const quantizedSteps = side === 'SELL'
-        ? Math.ceil(rawSteps - 1e-9)
-        : Math.floor(rawSteps + 1e-9);
-      const quantizedValue = Math.max(quantizedSteps, 0) * tick;
-      return quantizedValue.toFixed(safeDecimals);
-    }
-
-    return value.toFixed(safeDecimals);
+    return quantizedValue.toFixed(decimals);
   }
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
@@ -314,9 +250,7 @@ export class BiconomyExchangeService {
       logger.debug('Getting balances with params:', this.redactPrivateParams(params));
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.withPrivateApiRetry('getBalances', () =>
-        this.client.post('/api/v1/private/user', urlParams.toString())
-      );
+      const response = await this.client.post('/api/v1/private/user', urlParams.toString());
 
       logger.debug('Balance response:', response.data);
 
@@ -338,12 +272,8 @@ export class BiconomyExchangeService {
       }
 
       return balances;
-    } catch (error: any) {
-      if (this.isTransientServiceUnavailable(error)) {
-        logger.debug('Failed to get balances: Service is not available');
-      } else {
-        logger.error('Failed to get balances:', error);
-      }
+    } catch (error) {
+      logger.error('Failed to get balances:', error);
       throw error;
     }
   }
@@ -389,7 +319,7 @@ export class BiconomyExchangeService {
           const decimals = (pairInfo?.tickSize || '').includes('.')
             ? (pairInfo?.tickSize || '').split('.')[1].length
             : pairInfo?.quoteAssetPrecision ?? 13;
-          priceStr = this.quantizeEpwxPrice(price, decimals, side, pairInfo?.tickSize);
+          priceStr = this.quantizeEpwxPrice(price, decimals);
         }
       } else if (pairInfo) {
         const minQty = pairInfo.minQty ?? 5;
@@ -434,9 +364,7 @@ export class BiconomyExchangeService {
       const urlParams = new URLSearchParams(params);
       logger.debug(`Sending POST request to ${path} with params:`, { ...params, api_key: '***', sign: '***' });
       
-      const response = await this.withPrivateApiRetry('placeOrder', () =>
-        this.client.post(path, urlParams.toString())
-      );
+      const response = await this.client.post(path, urlParams.toString());
       const data = response.data;
 
       logger.debug(`Order response:`, data);
@@ -459,12 +387,8 @@ export class BiconomyExchangeService {
         timestamp: Date.now(),
         fee: 0, // Zero fee for MM account
       };
-    } catch (error: any) {
-      if (this.isTransientServiceUnavailable(error)) {
-        logger.warn(`Failed to place ${side} order for ${symbol}: Service is not available`);
-      } else {
-        logger.error(`Failed to place ${side} order for ${symbol}:`, error);
-      }
+    } catch (error) {
+      logger.error(`Failed to place ${side} order for ${symbol}:`, error);
       throw error;
     }
   }
@@ -481,9 +405,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.withPrivateApiRetry('cancelOrder', () =>
-        this.client.post('/api/v1/private/trade/cancel', urlParams.toString())
-      );
+      const response = await this.client.post('/api/v1/private/trade/cancel', urlParams.toString());
       
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to cancel order');
@@ -541,9 +463,7 @@ export class BiconomyExchangeService {
       params.sign = signature;
 
       const urlParams = new URLSearchParams(params);
-      const response = await this.withPrivateApiRetry('getOrder', () =>
-        this.client.post('/api/v1/private/order/pending/detail', urlParams.toString())
-      );
+      const response = await this.client.post('/api/v1/private/order/pending/detail', urlParams.toString());
 
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get order');
@@ -572,9 +492,7 @@ export class BiconomyExchangeService {
       const message = error?.message || 'Failed to get order';
 
       if (message.includes('Order not found or already completed')) {
-        logger.debug(`Order ${orderId} is no longer pending on the exchange.`);
-      } else if (this.isTransientServiceUnavailable(error)) {
-        logger.warn(`Failed to get order ${orderId}: Service is not available`);
+        logger.info(`Order ${orderId} is no longer pending on the exchange.`);
       } else {
         logger.error(`Failed to get order ${orderId}:`, error);
       }
@@ -596,18 +514,16 @@ export class BiconomyExchangeService {
     // Signature: all params sorted alphabetically, joined as key=value, then &secret_key=... and MD5/uppercase
     const sign = this.signRequest(params);
     params.sign = sign;
-    logger.debug(`[getOpenOrders] Params: ${JSON.stringify(this.redactPrivateParams(params))}`);
+    logger.info(`[getOpenOrders] Params: ${JSON.stringify(this.redactPrivateParams(params))}`);
     try {
       const urlParams = new URLSearchParams(params);
-      const response = await this.withPrivateApiRetry('getOpenOrders', () =>
-        this.client.post('/api/v1/private/order/pending', urlParams.toString(), {
-          headers: {
-            'X-API-KEY': this.apiKey,
-            'X-SITE-ID': '127',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        })
-      );
+      const response = await this.client.post('/api/v1/private/order/pending', urlParams.toString(), {
+        headers: {
+          'X-API-KEY': this.apiKey,
+          'X-SITE-ID': '127',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      });
       logger.debug(`[getOpenOrders] Response: ${JSON.stringify(response.data)}`);
       if (response.data.code !== 0) {
         throw new Error(response.data.message || 'Failed to get open orders');
@@ -626,12 +542,8 @@ export class BiconomyExchangeService {
         timestamp: (order.ctime || 0) * 1000,
         fee: parseFloat(order.deal_fee || '0'),
       }));
-    } catch (error: any) {
-      if (this.isTransientServiceUnavailable(error)) {
-        logger.debug(`[getOpenOrders] Error: Service is not available`);
-      } else {
-        logger.error(`[getOpenOrders] Error:`, error);
-      }
+    } catch (error) {
+      logger.error(`[getOpenOrders] Error:`, error);
       throw error;
     }
   }
