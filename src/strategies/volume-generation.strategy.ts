@@ -72,6 +72,7 @@ export class VolumeGenerationStrategy {
   private positionAdjustedOrderIds: Set<string> = new Set();
   private settledWashOrderIds: Set<string> = new Set();
   private pnlSettledOrderIds: Set<string> = new Set();
+  private reconcilingCompletedOrderIds: Set<string> = new Set();
   private updateTimer?: NodeJS.Timeout;
   private orderTimer?: NodeJS.Timeout;
   private initialEpwxBalance: number | null = null;
@@ -2689,48 +2690,58 @@ export class VolumeGenerationStrategy {
       return true;
     }
 
-    const finishedOrder = await this.exchange.getFinishedOrder(this.symbol, orderId);
-    if (!finishedOrder || finishedOrder.filled <= 0) {
-      return false;
+    if (this.reconcilingCompletedOrderIds.has(orderId)) {
+      return true;
     }
 
-    const fallbackPrice = this.orderPrices.get(orderId)?.price ?? 0;
-    const fillPrice = Number.isFinite(finishedOrder.price) && finishedOrder.price > 0
-      ? finishedOrder.price
-      : fallbackPrice;
+    this.reconcilingCompletedOrderIds.add(orderId);
 
-    if (!Number.isFinite(fillPrice) || fillPrice <= 0) {
-      return false;
+    try {
+      const finishedOrder = await this.exchange.getFinishedOrder(this.symbol, orderId);
+      if (!finishedOrder || finishedOrder.filled <= 0) {
+        return false;
+      }
+
+      const fallbackPrice = this.orderPrices.get(orderId)?.price ?? 0;
+      const fillPrice = Number.isFinite(finishedOrder.price) && finishedOrder.price > 0
+        ? finishedOrder.price
+        : fallbackPrice;
+
+      if (!Number.isFinite(fillPrice) || fillPrice <= 0) {
+        return false;
+      }
+
+      const filledAmount = finishedOrder.filled;
+      const filledVolumeUSD = filledAmount * fillPrice;
+
+      this.volumeStats.totalVolume += filledVolumeUSD;
+      if (side === 'BUY') {
+        this.volumeStats.buyVolume += filledVolumeUSD;
+      } else {
+        this.volumeStats.sellVolume += filledVolumeUSD;
+      }
+
+      this.applyPositionForFilledOrder(orderId, side, filledAmount);
+
+      if (isWashTrade) {
+        this.profitStats.washTrades++;
+        this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
+        logger.info(
+          `🔄 WASH TRADE FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId})`
+        );
+      } else {
+        this.noteRealFillDetected(`finished-order ${source} fallback ${orderId}`);
+        const realizedPnl = this.applyEconomicFill(side, filledAmount, fillPrice, false);
+        logger.info(
+          `💰 REAL FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId}) | RealizedPnL: $${realizedPnl.toFixed(4)} | TotalPnL: $${this.profitStats.totalPnl.toFixed(4)}`
+        );
+      }
+
+      this.pnlSettledOrderIds.add(orderId);
+      return true;
+    } finally {
+      this.reconcilingCompletedOrderIds.delete(orderId);
     }
-
-    const filledAmount = finishedOrder.filled;
-    const filledVolumeUSD = filledAmount * fillPrice;
-
-    this.volumeStats.totalVolume += filledVolumeUSD;
-    if (side === 'BUY') {
-      this.volumeStats.buyVolume += filledVolumeUSD;
-    } else {
-      this.volumeStats.sellVolume += filledVolumeUSD;
-    }
-
-    this.applyPositionForFilledOrder(orderId, side, filledAmount);
-
-    if (isWashTrade) {
-      this.profitStats.washTrades++;
-      this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
-      logger.info(
-        `🔄 WASH TRADE FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId})`
-      );
-    } else {
-      this.noteRealFillDetected(`finished-order ${source} fallback ${orderId}`);
-      const realizedPnl = this.applyEconomicFill(side, filledAmount, fillPrice, false);
-      logger.info(
-        `💰 REAL FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId}) | RealizedPnL: $${realizedPnl.toFixed(4)} | TotalPnL: $${this.profitStats.totalPnl.toFixed(4)}`
-      );
-    }
-
-    this.pnlSettledOrderIds.add(orderId);
-    return true;
   }
 
   private getSanitizedTickerQuotes(
