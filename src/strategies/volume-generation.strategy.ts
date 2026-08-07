@@ -2431,8 +2431,11 @@ export class VolumeGenerationStrategy {
           this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
         }
       } else {
-        logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
-        await this.logNoFillDiagnostics(orderId, side);
+        const reconciled = await this.reconcileCompletedOrderWithoutTrades(orderId, side, isWashTrade, 'poll');
+        if (!reconciled) {
+          logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
+          await this.logNoFillDiagnostics(orderId, side);
+        }
       }
     } catch (error) {
       logger.error(`Error polling fills for order ${orderId}:`, error);
@@ -2645,13 +2648,17 @@ export class VolumeGenerationStrategy {
   private async captureTradesForCompletedOrder(orderId: string): Promise<boolean> {
     try {
       const trades = await this.exchange.getRecentTrades(this.symbol, 20, orderId);
-      if (!trades.length) {
-        return false;
-      }
-
       const trackedOrder = this.activeOrders.get(orderId);
       const isWashTrade = this.washTradePairsActive.some(pair => pair.buyOrderId === orderId || pair.sellOrderId === orderId);
       const trackedOrderSide = trackedOrder?.side ?? (this.orderPrices.get(orderId)?.side as 'BUY' | 'SELL' | undefined);
+
+      if (!trades.length) {
+        if (!trackedOrderSide) {
+          return false;
+        }
+        return this.reconcileCompletedOrderWithoutTrades(orderId, trackedOrderSide, isWashTrade, 'completed');
+      }
+
       this.recordTrades(trades, orderId, isWashTrade, trackedOrderSide);
 
       if (trackedOrderSide) {
@@ -2663,11 +2670,67 @@ export class VolumeGenerationStrategy {
         }
       }
 
+      this.pnlSettledOrderIds.add(orderId);
+
       return true;
     } catch (error) {
       logger.warn(`Could not fetch trades for completed order ${orderId}:`, error);
       return false;
     }
+  }
+
+  private async reconcileCompletedOrderWithoutTrades(
+    orderId: string,
+    side: 'BUY' | 'SELL',
+    isWashTrade: boolean,
+    source: 'poll' | 'completed'
+  ): Promise<boolean> {
+    if (this.pnlSettledOrderIds.has(orderId)) {
+      return true;
+    }
+
+    const finishedOrder = await this.exchange.getFinishedOrder(this.symbol, orderId);
+    if (!finishedOrder || finishedOrder.filled <= 0) {
+      return false;
+    }
+
+    const fallbackPrice = this.orderPrices.get(orderId)?.price ?? 0;
+    const fillPrice = Number.isFinite(finishedOrder.price) && finishedOrder.price > 0
+      ? finishedOrder.price
+      : fallbackPrice;
+
+    if (!Number.isFinite(fillPrice) || fillPrice <= 0) {
+      return false;
+    }
+
+    const filledAmount = finishedOrder.filled;
+    const filledVolumeUSD = filledAmount * fillPrice;
+
+    this.volumeStats.totalVolume += filledVolumeUSD;
+    if (side === 'BUY') {
+      this.volumeStats.buyVolume += filledVolumeUSD;
+    } else {
+      this.volumeStats.sellVolume += filledVolumeUSD;
+    }
+
+    this.applyPositionForFilledOrder(orderId, side, filledAmount);
+
+    if (isWashTrade) {
+      this.profitStats.washTrades++;
+      this.settlePairedWashOrder(orderId, side, filledAmount, filledVolumeUSD);
+      logger.info(
+        `🔄 WASH TRADE FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId})`
+      );
+    } else {
+      this.noteRealFillDetected(`finished-order ${source} fallback ${orderId}`);
+      const realizedPnl = this.applyEconomicFill(side, filledAmount, fillPrice, false);
+      logger.info(
+        `💰 REAL FILL (${source}-fallback): ${side} ${filledAmount.toFixed(0)} @ $${fillPrice.toExponential(4)} (Order ID: ${orderId}) | RealizedPnL: $${realizedPnl.toFixed(4)} | TotalPnL: $${this.profitStats.totalPnl.toFixed(4)}`
+      );
+    }
+
+    this.pnlSettledOrderIds.add(orderId);
+    return true;
   }
 
   private getSanitizedTickerQuotes(
