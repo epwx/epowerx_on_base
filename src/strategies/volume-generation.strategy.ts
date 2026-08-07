@@ -4,6 +4,8 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { fetchEpwXPriceFromPancake } from '../utils/dex-price';
 import { quantizeToStepSize } from '../utils/quantize';
+import fs from 'fs';
+import path from 'path';
 // If you see errors about NodeJS.Timeout, setTimeout, etc., run: npm install --save-dev @types/node
 
 interface VolumeStats {
@@ -28,6 +30,19 @@ interface ProfitStats {
   inventoryQuantity: number;
   inventoryCostBasisUsd: number;
   inventoryMarkPrice: number;
+}
+
+interface PersistentRuntimeState {
+  version: number;
+  savedAt: number;
+  volumeStats: Pick<VolumeStats, 'totalVolume' | 'buyVolume' | 'sellVolume' | 'orderCount' | 'startTime'>;
+  profitStats: ProfitStats;
+  realBuyFills: number;
+  realSellFills: number;
+  lifetimeBaselineEpwx: number | null;
+  lifetimeBaselineUsdt: number | null;
+  latestEpwxTotal: number | null;
+  latestUsdtTotal: number | null;
 }
 
 type PlacementPriceSource = 'EXECUTABLE_BOOK_MID' | 'CEX_TICKER_MID' | 'DEX_FALLBACK';
@@ -88,12 +103,19 @@ export class VolumeGenerationStrategy {
   private lastRealFillAt: number = Date.now();
   private washAutoCooldownUntil: number = 0;
   private washAutoEnabled: boolean = false;
+  private readonly runtimeStatePath: string = path.resolve(process.cwd(), 'logs', 'runtime-pnl-state.json');
+  private latestEpwxTotal: number | null = null;
+  private latestUsdtTotal: number | null = null;
+  private lifetimeBaselineEpwx: number | null = null;
+  private lifetimeBaselineUsdt: number | null = null;
+  private lastStatePersistAt: number = 0;
 
   constructor(exchange?: BiconomyExchangeService) {
     this.exchange = exchange || new BiconomyExchangeService();
     this.symbol = config.trading.pair;
     this.volumeStats = this.initializeStats();
     this.profitStats = this.initializeProfitStats();
+    this.loadPersistentRuntimeState();
   }
 
   private initializeStats(): VolumeStats {
@@ -122,6 +144,80 @@ export class VolumeGenerationStrategy {
       inventoryCostBasisUsd: 0,
       inventoryMarkPrice: 0,
     };
+  }
+
+  private loadPersistentRuntimeState(): void {
+    try {
+      if (!fs.existsSync(this.runtimeStatePath)) {
+        return;
+      }
+
+      const raw = fs.readFileSync(this.runtimeStatePath, 'utf8');
+      const state = JSON.parse(raw) as PersistentRuntimeState;
+
+      if (state?.version !== 1) {
+        return;
+      }
+
+      this.volumeStats.totalVolume = Number(state.volumeStats?.totalVolume || 0);
+      this.volumeStats.buyVolume = Number(state.volumeStats?.buyVolume || 0);
+      this.volumeStats.sellVolume = Number(state.volumeStats?.sellVolume || 0);
+      this.volumeStats.orderCount = Number(state.volumeStats?.orderCount || 0);
+      if (Number.isFinite(state.volumeStats?.startTime) && (state.volumeStats?.startTime || 0) > 0) {
+        this.volumeStats.startTime = Number(state.volumeStats.startTime);
+      }
+
+      this.profitStats = {
+        ...this.profitStats,
+        ...state.profitStats,
+      };
+
+      this.realBuyFills = Number(state.realBuyFills || 0);
+      this.realSellFills = Number(state.realSellFills || 0);
+      this.lifetimeBaselineEpwx = state.lifetimeBaselineEpwx ?? null;
+      this.lifetimeBaselineUsdt = state.lifetimeBaselineUsdt ?? null;
+      this.latestEpwxTotal = state.latestEpwxTotal ?? null;
+      this.latestUsdtTotal = state.latestUsdtTotal ?? null;
+
+      this.recalculateProfitSnapshot();
+      logger.info(`📦 Loaded persistent runtime state from ${this.runtimeStatePath}`);
+    } catch (error) {
+      logger.warn('⚠️  Failed to load persistent runtime state:', error);
+    }
+  }
+
+  private persistRuntimeState(force: boolean = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastStatePersistAt < 5000) {
+      return;
+    }
+
+    const state: PersistentRuntimeState = {
+      version: 1,
+      savedAt: now,
+      volumeStats: {
+        totalVolume: this.volumeStats.totalVolume,
+        buyVolume: this.volumeStats.buyVolume,
+        sellVolume: this.volumeStats.sellVolume,
+        orderCount: this.volumeStats.orderCount,
+        startTime: this.volumeStats.startTime,
+      },
+      profitStats: this.profitStats,
+      realBuyFills: this.realBuyFills,
+      realSellFills: this.realSellFills,
+      lifetimeBaselineEpwx: this.lifetimeBaselineEpwx,
+      lifetimeBaselineUsdt: this.lifetimeBaselineUsdt,
+      latestEpwxTotal: this.latestEpwxTotal,
+      latestUsdtTotal: this.latestUsdtTotal,
+    };
+
+    try {
+      fs.mkdirSync(path.dirname(this.runtimeStatePath), { recursive: true });
+      fs.writeFileSync(this.runtimeStatePath, JSON.stringify(state, null, 2), 'utf8');
+      this.lastStatePersistAt = now;
+    } catch (error) {
+      logger.warn('⚠️  Failed to persist runtime state:', error);
+    }
   }
 
   private updateInventoryMarkPrice(markPrice: number): void {
@@ -229,6 +325,7 @@ export class VolumeGenerationStrategy {
     }
 
     this.recalculateProfitSnapshot();
+    this.persistRuntimeState();
     return realizedPnl;
   }
 
@@ -1172,6 +1269,7 @@ export class VolumeGenerationStrategy {
       // Get initial balances
       await this.logBalances();
       await this.syncCurrentPositionWithBalances();
+      this.persistRuntimeState(true);
 
       // Start order placement loop
       this.startOrderPlacementLoop();
@@ -1214,6 +1312,7 @@ export class VolumeGenerationStrategy {
       this.activeOrders.clear();
 
       await this.logFinalStats();
+      this.persistRuntimeState(true);
       logger.info('✅ Volume generation bot stopped');
     } catch (error) {
       logger.error('Error stopping bot:', error);
@@ -2597,20 +2696,35 @@ export class VolumeGenerationStrategy {
   private async syncCurrentPositionWithBalances(): Promise<void> {
     const balances = await this.exchange.getBalances();
     const epwxBalance = balances.find(balance => balance.asset === 'EPWX');
+    const usdtBalance = balances.find(balance => balance.asset === 'USDT');
     const totalEpwx = epwxBalance?.total ?? ((epwxBalance?.free || 0) + (epwxBalance?.locked || 0));
+    const totalUsdt = usdtBalance?.total ?? ((usdtBalance?.free || 0) + (usdtBalance?.locked || 0));
 
     if (!Number.isFinite(totalEpwx)) {
       return;
+    }
+
+    this.latestEpwxTotal = totalEpwx;
+    this.latestUsdtTotal = Number.isFinite(totalUsdt) ? totalUsdt : this.latestUsdtTotal;
+
+    if (this.lifetimeBaselineEpwx === null) {
+      this.lifetimeBaselineEpwx = totalEpwx;
+    }
+
+    if (this.lifetimeBaselineUsdt === null && Number.isFinite(totalUsdt)) {
+      this.lifetimeBaselineUsdt = totalUsdt;
     }
 
     if (this.initialEpwxBalance === null) {
       this.initialEpwxBalance = totalEpwx;
       this.currentPosition = 0;
       logger.info(`📌 Position baseline initialized from EPWX balance: ${this.initialEpwxBalance.toFixed(0)}`);
+      this.persistRuntimeState(true);
       return;
     }
 
     this.currentPosition = totalEpwx - this.initialEpwxBalance;
+    this.persistRuntimeState();
   }
 
   private settlePairedWashOrder(orderId: string, side: 'BUY' | 'SELL', filledAmount: number, filledVolumeUSD: number): void {
@@ -2897,6 +3011,30 @@ export class VolumeGenerationStrategy {
     logger.info(`  Inventory Qty: ${this.profitStats.inventoryQuantity.toFixed(4)} EPWX @ mark $${this.profitStats.inventoryMarkPrice.toFixed(6)}`);
     logger.info(`  Inventory Cost Basis: $${this.profitStats.inventoryCostBasisUsd.toFixed(4)}`);
     logger.info(`  Projected 24h Realized PnL: $${this.profitStats.estimatedDailyRealizedPnl.toFixed(2)}`);
+
+    if (
+      this.lifetimeBaselineEpwx !== null &&
+      this.lifetimeBaselineUsdt !== null &&
+      this.latestEpwxTotal !== null &&
+      this.latestUsdtTotal !== null
+    ) {
+      const deltaEpwx = this.latestEpwxTotal - this.lifetimeBaselineEpwx;
+      const deltaUsdt = this.latestUsdtTotal - this.lifetimeBaselineUsdt;
+      const markPrice = this.profitStats.inventoryMarkPrice;
+
+      if (markPrice > 0) {
+        const deltaUsdEstimate = deltaUsdt + (deltaEpwx * markPrice);
+        logger.info(
+          `  Balance Delta (persistent baseline): EPWX ${deltaEpwx.toFixed(0)}, USDT ${deltaUsdt.toFixed(4)}, estUSD ${deltaUsdEstimate.toFixed(4)} @ mark ${markPrice.toExponential(4)}`
+        );
+      } else {
+        logger.info(
+          `  Balance Delta (persistent baseline): EPWX ${deltaEpwx.toFixed(0)}, USDT ${deltaUsdt.toFixed(4)} (mark unavailable)`
+        );
+      }
+    }
+
+    this.persistRuntimeState();
   }
 
   private async logBalances(): Promise<void> {
