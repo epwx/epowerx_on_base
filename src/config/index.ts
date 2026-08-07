@@ -76,6 +76,7 @@ interface Config {
     sellNearBidEnabled: boolean;
     sellNearBidTicks: number;
     sellNearBidMinMarkupBps: number;
+    latestPriceBandHalfWidthPercent: number;
     dexPriceDiscountPercent: number;
   };
 
@@ -256,6 +257,7 @@ export const config: Config = {
     sellNearBidEnabled: getEnvBoolean('SELL_NEAR_BID_ENABLED', false),
     sellNearBidTicks: getEnvNumber('SELL_NEAR_BID_TICKS', 1),
     sellNearBidMinMarkupBps: getEnvNumber('SELL_NEAR_BID_MIN_MARKUP_BPS', 1),
+    latestPriceBandHalfWidthPercent: getEnvNumber('LATEST_PRICE_BAND_HALF_WIDTH_PERCENT', 0.5),
   },
 
   marketMaking: {

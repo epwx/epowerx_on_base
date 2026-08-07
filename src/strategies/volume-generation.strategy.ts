@@ -840,8 +840,9 @@ export class VolumeGenerationStrategy {
       return price;
     }
 
-    let lowerBound = latestPrice * 0.995;
-    let upperBound = latestPrice * 1.005;
+    const bandHalfWidth = config.volumeStrategy.latestPriceBandHalfWidthPercent / 100;
+    let lowerBound = latestPrice * (1 - bandHalfWidth);
+    let upperBound = latestPrice * (1 + bandHalfWidth);
 
     // In sell-only recovery mode, allow sell quotes to anchor near real-user bids.
     if (
