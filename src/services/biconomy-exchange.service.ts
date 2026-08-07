@@ -501,6 +501,37 @@ export class BiconomyExchangeService {
     }
   }
 
+  async getFinishedOrder(symbol: string, orderId: string): Promise<Order | null> {
+    try {
+      const params: any = {
+        api_key: this.apiKey,
+        market: symbol.replace('/', '_').toUpperCase(),
+        order_id: orderId,
+      };
+      const signature = this.signRequest(params);
+      params.sign = signature;
+      const urlParams = new URLSearchParams(params);
+      const response = await this.client.post('/api/v1/private/order/finished/detail', urlParams.toString());
+      if (response.data.code !== 0) return null;
+      const data = response.data.result;
+      if (!data || !data.id) return null;
+      return {
+        orderId: data.id.toString(),
+        symbol,
+        side: data.side === 1 ? 'SELL' : 'BUY',
+        type: 'LIMIT',
+        price: parseFloat(data.price),
+        amount: parseFloat(data.amount),
+        filled: parseFloat(data.deal_stock),
+        status: 'FILLED',
+        timestamp: data.ctime * 1000,
+        fee: parseFloat(data.deal_fee || '0'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getOpenOrders(symbol?: string, offset: number = 0, limit: number = 100): Promise<Order[]> {
     // Biconomy expects 'market' param, not 'symbol'
     const market = symbol ? symbol.replace('/', '_').toUpperCase() : undefined;
