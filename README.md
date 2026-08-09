@@ -122,6 +122,44 @@ LOG_FILE_PREFIX=
 - Keep `AZBIT_READ_ONLY=true` until market data and balance parsing are validated
 - Do not reuse Biconomy runtime state files across exchanges
 
+### Azbit Profile Observation
+
+Azbit profiles live under `profiles/azbit/` and explicitly keep read-only mode,
+self-trading, and wash paths disabled. The switcher samples the public Azbit
+ticker, so it can evaluate market regimes while the trading process is
+read-only. It defaults to dry-run and cannot change `.env.azbit` without the
+explicit `--apply` option.
+
+```bash
+# Observe one automatic decision (dry-run is the default)
+scripts/switch-azbit-profile.sh --auto
+
+# Preview a manual profile selection
+scripts/switch-azbit-profile.sh azbit-conservative --dry-run
+```
+
+Default hysteresis enters the dislocated profile at a 12% spread and returns
+to conservative at 6%. It enters sell-only recovery at 150% and leaves it for
+dislocated at 80%, requiring three consecutive samples for every transition.
+Override these values with the `AZBIT_ENTER_DISLOCATED_SPREAD_PERCENT`,
+`AZBIT_EXIT_DISLOCATED_SPREAD_PERCENT`,
+`AZBIT_ENTER_SELL_ONLY_SPREAD_PERCENT`,
+`AZBIT_EXIT_SELL_ONLY_SPREAD_PERCENT`, and
+`AZBIT_PROFILE_CONFIRM_CYCLES` environment variables.
+
+Use an exchange-specific lock and log when installing observation cron:
+
+```cron
+*/2 * * * * flock -n /tmp/epwx-azbit-switch.lock bash -lc 'cd /mnt/volume1_nyc3_1778885684099/epowerx_on_base && scripts/switch-azbit-profile.sh --auto --dry-run >> logs/azbit-profile-switch.log 2>&1'
+```
+
+Dry-run decisions are isolated in `logs/azbit-profile-switch-state.env` and
+`logs/azbit-profile-switch-cursor.env`. Do not replace `--dry-run` with
+`--apply` until Azbit order status, fill reconciliation, existing open orders,
+and a supervised writable canary have all been validated. Applied switches
+restart only through `scripts/start-azbit.sh`; they never export credentials or
+use `pm2 restart --update-env`.
+
 ### Getting Biconomy Exchange API Keys
 
 1. Log into your Biconomy Exchange account
