@@ -39,6 +39,7 @@ type AzbitOrderViewModel = {
   status?: string;
   currencyPairCode?: string;
   date?: string;
+  deals?: AzbitDeal[];
 };
 
 type AzbitDeal = {
@@ -47,6 +48,7 @@ type AzbitDeal = {
   price?: number;
   volume?: number;
   isBuy?: boolean;
+  isUserBuyer?: boolean;
   dealDateUtc?: string;
 };
 
@@ -127,13 +129,23 @@ export class AzbitExchangeService implements ExchangeService {
   private mapOrder(symbol: string, input: AzbitOrderViewModel): Order {
     const initialAmount = Number(input.initialAmount ?? input.amount ?? 0);
     const availableAmount = Number(input.amount ?? 0);
-    const filled = Number(input.amountExecuted ?? Math.max(initialAmount - availableAmount, 0));
+    const executedFromDeals = Array.isArray(input.deals)
+      ? input.deals.reduce((total, deal) => total + Math.max(Number(deal?.volume || 0), 0), 0)
+      : 0;
+    const inferredFilled = Math.max(initialAmount - availableAmount, 0);
+    const reportedFilled = Number(input.amountExecuted ?? 0);
+    const filled = Math.min(
+      Math.max(reportedFilled, inferredFilled, executedFromDeals),
+      initialAmount > 0 ? initialAmount : Number.POSITIVE_INFINITY
+    );
     const statusText = String(input.status || '').toUpperCase();
+    const isFullyExecuted = initialAmount > 0 && filled >= initialAmount;
+    const isTerminalStatus = ['FILLED', 'DONE', 'COMPLETE', 'COMPLETED'].includes(statusText);
 
     let status: Order['status'] = 'NEW';
     if (input.isCanceled || statusText.includes('CANCEL')) {
       status = 'CANCELED';
-    } else if (statusText.includes('FILL') || statusText.includes('DONE') || statusText.includes('COMPLETE')) {
+    } else if (isFullyExecuted || isTerminalStatus) {
       status = 'FILLED';
     } else if (filled > 0) {
       status = 'PARTIALLY_FILLED';
@@ -287,6 +299,14 @@ export class AzbitExchangeService implements ExchangeService {
       throw new Error('Azbit limit order requires a positive price');
     }
 
+    const minimumQuoteAmount = Number(pairData.minQuoteAmount ?? 0);
+    const quoteAmount = normalizedAmount * requestPrice;
+    if (minimumQuoteAmount > 0 && quoteAmount < minimumQuoteAmount) {
+      throw new Error(
+        `Azbit minimum quote amount check failed: quoteAmount=${quoteAmount}, minimumQuoteAmount=${minimumQuoteAmount}`
+      );
+    }
+
     const payload = {
       side: side.toLowerCase(),
       currencyPairCode: market,
@@ -321,16 +341,20 @@ export class AzbitExchangeService implements ExchangeService {
     this.requireWritable('cancel all orders');
 
     const market = this.normalizeSymbol(symbol);
+    const openOrders = await this.getOpenOrders(symbol);
+    if (openOrders.length === 0) {
+      return 0;
+    }
+
     try {
       await this.signedRequest({
         method: 'DELETE',
         url: '/api/orders',
         params: { currencyPairCode: market },
       });
-      return 0;
+      return openOrders.length;
     } catch (error) {
       logger.warn('Azbit bulk cancel endpoint failed, falling back to per-order cancel', error as any);
-      const openOrders = await this.getOpenOrders(symbol);
       let cancelled = 0;
       for (const order of openOrders) {
         try {
@@ -392,13 +416,16 @@ export class AzbitExchangeService implements ExchangeService {
 
     const rows = Array.isArray(response) ? response : [];
     return rows
-      .slice(Math.max(offset, 0), Math.max(offset, 0) + Math.max(limit, 1))
-      .map((row) => this.mapOrder(symbol || market, row));
+      .map((row) => this.mapOrder(symbol || market, row))
+      .filter((order) => order.status === 'NEW' || order.status === 'PARTIALLY_FILLED')
+      .slice(Math.max(offset, 0), Math.max(offset, 0) + Math.max(limit, 1));
   }
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
     const market = this.normalizeSymbol(symbol);
-    const response = await this.client.get<AzbitDeal[]>('/api/deals', {
+    const response = await this.signedRequest<AzbitDeal[]>({
+      method: 'GET',
+      url: '/api/user/deals',
       params: {
         currencyPairCode: market,
         pageNumber: 1,
@@ -406,7 +433,7 @@ export class AzbitExchangeService implements ExchangeService {
       },
     });
 
-    const rows = Array.isArray(response.data) ? response.data : [];
+    const rows = Array.isArray(response) ? response : [];
     const filtered = orderId
       ? rows.filter((row) => String(row?.orderId || '') === orderId)
       : rows;
@@ -416,7 +443,7 @@ export class AzbitExchangeService implements ExchangeService {
       orderId: String(trade?.orderId || ''),
       price: Number(trade?.price || 0),
       amount: Number(trade?.volume || 0),
-      side: trade?.isBuy ? 'BUY' : 'SELL',
+      side: (trade?.isUserBuyer ?? trade?.isBuy) ? 'BUY' : 'SELL',
       timestamp: trade?.dealDateUtc ? Date.parse(trade.dealDateUtc) : Date.now(),
       fee: 0,
     }));
