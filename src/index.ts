@@ -48,7 +48,7 @@ async function main() {
 
     process.on('SIGINT', shutdownReadOnly);
     process.on('SIGTERM', shutdownReadOnly);
-    await new Promise<void>(() => undefined);
+    setInterval(() => undefined, 60_000);
     return;
   }
 
