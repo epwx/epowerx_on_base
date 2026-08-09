@@ -2,20 +2,20 @@
 
 ## Purpose
 
-This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 10:47 UTC.
+This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 15:44 UTC.
 
 ## Executive Status
 
 - Production host: `deployer@104.131.164.145`
 - Production root: `/mnt/volume1_nyc3_1778885684099/epowerx_on_base`
 - PM2 process: `epwx-azbit-bot`
-- PM2 process ID: `20`
-- Process created: `2026-08-09T10:41:31.838Z`
+- PM2 process ID: `22`
+- Process created: `2026-08-09T15:42:29.354Z`
 - Status at capture: `online`
 - Restarts since creation: `0`
 - Exchange: Azbit
 - Pair: `EPWX_USDT`
-- Active profile: `azbit-sell-only-recovery`
+- Active profile: `azbit-extreme-shadow-liquidity`
 - Observation start: `2026-08-09 10:41 UTC`
 - Intended review point: after `2026-08-10 10:41 UTC`
 
@@ -75,15 +75,16 @@ used without both `AZBIT_READ_ONLY=true` and `AZBIT_SHADOW_MODE=true`.
   - best bid: `3.02e-11`
   - best ask: `9.999e-10`
   - executable spread: `3210.927%`
-- The `650%` executable-spread circuit breaker correctly pauses every quote-placement cycle.
-- Do not raise the spread breaker merely to force shadow placements. The current market is too dislocated for the sell-only profile to quote safely.
-- Shadow accounting currently reports zero orders, zero fills, and zero PnL.
+- The manual-only `4000%` executable-spread circuit breaker permits shadow analysis at the current `3210.927%` spread. This is not evidence that equivalent live quotes are safe.
+- The in-memory shadow book converged to five BUY and five SELL orders over three cycles. Observed per-order notionals were approximately `$5.26-$6.14`.
+- DEX/CEX drift remained approximately `84.57%`; wash trades stayed paused and `SELF_TRADE_MODE=off` prevented all self-trading.
+- Shadow accounting reports zero fills and zero PnL.
 
 `ETH_USD_SOURCE=chainlink` currently has no feed address configured. The pricing utility logs a warning and uses its configured fallback path. The direct DEX probe still returned a valid positive price.
 
 ## Real Account State
 
-Last independent forced non-shadow read-only diagnostic at approximately 2026-08-09 10:42 UTC:
+Last independent forced non-shadow read-only diagnostic at approximately 2026-08-09 15:43 UTC:
 
 - Azbit API connection: passed
 - Real open orders: `0`
@@ -99,7 +100,7 @@ The shadow process did not create real orders or lock funds.
 Current state file:
 
 ```text
-profile=azbit-sell-only-recovery
+profile=azbit-extreme-shadow-liquidity
 mode=apply
 spread_percent=manual
 ```
