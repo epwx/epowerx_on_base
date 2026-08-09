@@ -20,3 +20,4 @@ env -i \
   ENV_FILE=.env.azbit \
   pm2 start dist/index.js --name epwx-azbit-bot --time
 pm2 save
+rm -f "$HOME/.pm2/dump.pm2.bak"
