@@ -11,12 +11,24 @@ dist/
 .env.*
 !.env.example
 
+# Secrets and process snapshots
+*.key
+*.pem
+dump.pm2
+dump.pm2.bak
+
 # Logs
 logs/
 *.log
+SESSION_LOG_*.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local operational artifacts
+*.backup
+*.backup.*
+reset-guard-and-restart.sh
 
 # OS
 .DS_Store
