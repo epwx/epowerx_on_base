@@ -238,8 +238,12 @@ export const config: Config = {
   trading: {
     pair: getEnvVariable('TRADING_PAIR', selectedExchange === 'azbit' ? 'EPWX_USDT' : 'EPWX/USDT'),
     epwxAddress: getEnvVariable('EPWX_TOKEN_ADDRESS', '0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb'),
-    epwxWethPairAddress: getEnvVariable('EPWX_WETH_PAIR', ''),
-    baseRpcUrl: getEnvVariable('BASE_RPC_URL', ''),
+    epwxWethPairAddress: selectedExchange === 'biconomy'
+      ? getEnvVariable('EPWX_WETH_PAIR')
+      : (process.env.EPWX_WETH_PAIR || ''),
+    baseRpcUrl: selectedExchange === 'biconomy'
+      ? getEnvVariable('BASE_RPC_URL')
+      : (process.env.BASE_RPC_URL || ''),
     ethUsdSource: getEnvEthUsdSource('ETH_USD_SOURCE', 'chainlink'),
     ethUsdChainlinkFeedAddress: process.env.ETH_USD_CHAINLINK_FEED_ADDRESS || '',
     ethUsdFallback: getEnvNumber('ETH_USD_FALLBACK', 2200),
