@@ -147,11 +147,17 @@ scripts/switch-azbit-profile.sh --auto
 
 # Preview a manual profile selection
 scripts/switch-azbit-profile.sh azbit-conservative --dry-run
+
+# Preview the manual-only extreme-spread shadow ladder
+scripts/switch-azbit-profile.sh azbit-extreme-shadow-liquidity --dry-run
 ```
 
 Default hysteresis enters the dislocated profile at a 12% spread and returns
 to conservative at 6%. It enters sell-only recovery at 150% and leaves it for
 dislocated at 80%, requiring three consecutive samples for every transition.
+The `azbit-extreme-shadow-liquidity` profile is never selected automatically.
+It models five executable orders per side in memory for extreme-spread analysis
+and must retain both `AZBIT_READ_ONLY=true` and `AZBIT_SHADOW_MODE=true`.
 Override these values with the `AZBIT_ENTER_DISLOCATED_SPREAD_PERCENT`,
 `AZBIT_EXIT_DISLOCATED_SPREAD_PERCENT`,
 `AZBIT_ENTER_SELL_ONLY_SPREAD_PERCENT`,

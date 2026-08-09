@@ -14,6 +14,7 @@ PAIR="${AZBIT_PROFILE_PAIR:-EPWX_USDT}"
 PROFILE_NORMAL="azbit-conservative"
 PROFILE_DISLOCATED="azbit-dislocated"
 PROFILE_SELL_ONLY="azbit-sell-only-recovery"
+PROFILE_EXTREME_SHADOW="azbit-extreme-shadow-liquidity"
 
 ENTER_DISLOCATED="${AZBIT_ENTER_DISLOCATED_SPREAD_PERCENT:-12}"
 EXIT_DISLOCATED="${AZBIT_EXIT_DISLOCATED_SPREAD_PERCENT:-6}"
@@ -31,6 +32,7 @@ Profiles:
 	azbit-conservative
 	azbit-dislocated
 	azbit-sell-only-recovery
+	azbit-extreme-shadow-liquidity (manual only)
 
 Safety:
 	Dry-run is the default. --apply is required to modify .env.azbit and restart
@@ -60,7 +62,7 @@ profile_file() {
 }
 
 is_supported_profile() {
-	[[ "$1" == "$PROFILE_NORMAL" || "$1" == "$PROFILE_DISLOCATED" || "$1" == "$PROFILE_SELL_ONLY" ]]
+	[[ "$1" == "$PROFILE_NORMAL" || "$1" == "$PROFILE_DISLOCATED" || "$1" == "$PROFILE_SELL_ONLY" || "$1" == "$PROFILE_EXTREME_SHADOW" ]]
 }
 
 get_env_value() {
@@ -86,7 +88,7 @@ profile_matches_env() {
 
 current_profile_from_env() {
 	local profile
-	for profile in "$PROFILE_NORMAL" "$PROFILE_DISLOCATED" "$PROFILE_SELL_ONLY"; do
+	for profile in "$PROFILE_NORMAL" "$PROFILE_DISLOCATED" "$PROFILE_SELL_ONLY" "$PROFILE_EXTREME_SHADOW"; do
 		if profile_matches_env "$(profile_file "$profile")"; then
 			echo "$profile"
 			return

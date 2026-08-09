@@ -48,7 +48,7 @@ Do not set `AZBIT_READ_ONLY=false` as part of observation or troubleshooting. Do
 
 ## Public Chain Configuration
 
-All three tracked Azbit profiles contain:
+All tracked Azbit profiles contain:
 
 ```env
 EPWX_TOKEN_ADDRESS=0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb
@@ -60,6 +60,11 @@ Profiles:
 - `profiles/azbit/azbit-conservative.env`
 - `profiles/azbit/azbit-dislocated.env`
 - `profiles/azbit/azbit-sell-only-recovery.env`
+- `profiles/azbit/azbit-extreme-shadow-liquidity.env` (manual-only shadow experiment)
+
+The extreme-shadow profile models five executable orders per side during severe
+dislocation. It is excluded from automatic profile selection and must never be
+used without both `AZBIT_READ_ONLY=true` and `AZBIT_SHADOW_MODE=true`.
 
 ## Current Production Behavior
 
