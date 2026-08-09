@@ -39,14 +39,29 @@ describe('AzbitExchangeService order mapping', () => {
       id: 'partial-1',
       isBid: true,
       price: 1.49e-10,
-      initialAmount: 100,
-      amount: 60,
-      amountExecuted: 40,
-      status: 'PARTIALLY_FILLED',
+      initialAmount: 1_000_000_000,
+      amount: 691_566_535.5731438,
+      amountExecuted: 691_566_535.5731438,
+      status: 'PartiallyCompleted',
     });
 
-    expect(order.filled).toBe(40);
+    expect(order.filled).toBeCloseTo(308_433_464.4268562, 6);
     expect(order.status).toBe('PARTIALLY_FILLED');
+  });
+
+  it('keeps a Created order open when Azbit reports zero amount fields', () => {
+    const order = mapOrder({
+      id: 'created-1',
+      isBid: false,
+      price: 1.1e-9,
+      initialAmount: 1_000_000_000,
+      amount: 0,
+      amountExecuted: 0,
+      status: 'Created',
+    });
+
+    expect(order.filled).toBe(0);
+    expect(order.status).toBe('NEW');
   });
 
   it('marks an order filled when its executed amount reaches its initial amount', () => {
@@ -159,8 +174,8 @@ describe('AzbitExchangeService private API behavior', () => {
     const { service, client } = createService();
     client.request.mockResolvedValue({
       data: [
-        { id: 'active-1', initialAmount: 10, amount: 10, status: 'active' },
-        { id: 'partial-1', initialAmount: 10, amount: 6, amountExecuted: 4, status: 'partially_filled' },
+        { id: 'active-1', initialAmount: 10, amount: 0, amountExecuted: 0, status: 'Created' },
+        { id: 'partial-1', initialAmount: 10, amount: 6, amountExecuted: 6, status: 'PartiallyCompleted' },
         { id: 'filled-1', initialAmount: 10, amount: 0, amountExecuted: 10, status: 'filled' },
         { id: 'canceled-1', initialAmount: 10, amount: 10, isCanceled: true },
       ],

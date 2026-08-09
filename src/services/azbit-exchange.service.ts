@@ -129,18 +129,26 @@ export class AzbitExchangeService implements ExchangeService {
   private mapOrder(symbol: string, input: AzbitOrderViewModel): Order {
     const initialAmount = Number(input.initialAmount ?? input.amount ?? 0);
     const availableAmount = Number(input.amount ?? 0);
+    const statusText = String(input.status || '').toUpperCase();
     const executedFromDeals = Array.isArray(input.deals)
       ? input.deals.reduce((total, deal) => total + Math.max(Number(deal?.volume || 0), 0), 0)
       : 0;
-    const inferredFilled = Math.max(initialAmount - availableAmount, 0);
     const reportedFilled = Number(input.amountExecuted ?? 0);
+    const isCreated = statusText === 'CREATED';
+    const isPartiallyCompleted = statusText === 'PARTIALLYCOMPLETED';
+    const isTerminalStatus = ['FILLED', 'DONE', 'COMPLETE', 'COMPLETED'].includes(statusText);
+    const statusBasedFilled = isCreated
+      ? 0
+      : isPartiallyCompleted
+        ? Math.max(initialAmount - availableAmount, 0)
+        : isTerminalStatus
+          ? initialAmount
+          : Math.max(reportedFilled, initialAmount - availableAmount, 0);
     const filled = Math.min(
-      Math.max(reportedFilled, inferredFilled, executedFromDeals),
+      Math.max(statusBasedFilled, executedFromDeals),
       initialAmount > 0 ? initialAmount : Number.POSITIVE_INFINITY
     );
-    const statusText = String(input.status || '').toUpperCase();
     const isFullyExecuted = initialAmount > 0 && filled >= initialAmount;
-    const isTerminalStatus = ['FILLED', 'DONE', 'COMPLETE', 'COMPLETED'].includes(statusText);
 
     let status: Order['status'] = 'NEW';
     if (input.isCanceled || statusText.includes('CANCEL')) {
