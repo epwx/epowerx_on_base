@@ -1,4 +1,5 @@
-import { BiconomyExchangeService, Order, Trade } from '../services/biconomy-exchange.service';
+import { createExchangeService } from '../services/exchange.factory';
+import { ExchangeService, Order, Trade } from '../services/exchange.types';
 import { getEPWXPairInfo } from '../utils/exchange-info';
 import { logger } from '../utils/logger';
 import { config } from '../config';
@@ -73,7 +74,7 @@ export class VolumeGenerationStrategy {
   static readonly DEX_PROVIDER_URL = 'https://mainnet.base.org';
   static readonly DEX_PAIR_ADDRESS = '0x8c4fe7dd7f57c8da00ec0766a4767dacdab47bc8';
   static readonly EPWX_ADDRESS = '0xef5f5751cf3eca6cc3572768298b7783d33d60eb';
-  protected exchange: BiconomyExchangeService;
+  protected exchange: ExchangeService;
   private isRunning: boolean = false;
   private stepSize: number = 1;
   private tickSize: number = 1e-13;
@@ -103,16 +104,19 @@ export class VolumeGenerationStrategy {
   private lastRealFillAt: number = Date.now();
   private washAutoCooldownUntil: number = 0;
   private washAutoEnabled: boolean = false;
-  private readonly runtimeStatePath: string = path.resolve(process.cwd(), 'logs', 'runtime-pnl-state.json');
+  private readonly runtimeStatePath: string;
   private latestEpwxTotal: number | null = null;
   private latestUsdtTotal: number | null = null;
   private lifetimeBaselineEpwx: number | null = null;
   private lifetimeBaselineUsdt: number | null = null;
   private lastStatePersistAt: number = 0;
 
-  constructor(exchange?: BiconomyExchangeService) {
-    this.exchange = exchange || new BiconomyExchangeService();
+  constructor(exchange?: ExchangeService) {
+    this.exchange = exchange || createExchangeService();
     this.symbol = config.trading.pair;
+    this.runtimeStatePath = path.isAbsolute(config.runtime.stateFile)
+      ? config.runtime.stateFile
+      : path.resolve(process.cwd(), config.runtime.stateFile);
     this.volumeStats = this.initializeStats();
     this.profitStats = this.initializeProfitStats();
     this.loadPersistentRuntimeState();
@@ -363,6 +367,18 @@ export class VolumeGenerationStrategy {
 
   private getAdverseFillRatioMax(): number {
     return Math.max(config.volumeStrategy.adverseFillRatioMax, 1);
+  }
+
+  private getAdverseFillInventoryLimitUsd(targetBuyDepthUsd: number): number {
+    const configuredLimitUsd = config.volumeStrategy.adverseFillInventoryLimitUsd;
+    if (Number.isFinite(configuredLimitUsd) && configuredLimitUsd > 0) {
+      return configuredLimitUsd;
+    }
+
+    return Math.max(
+      targetBuyDepthUsd * VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_INVENTORY_DEPTH_MULTIPLIER,
+      VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD
+    );
   }
 
   private getSelfTradeMode(): SelfTradeMode {
@@ -770,10 +786,7 @@ export class VolumeGenerationStrategy {
     const buySellRatio = this.realBuyFills / Math.max(this.realSellFills, 1);
     const safeMarkPrice = Number.isFinite(markPrice) && markPrice > 0 ? markPrice : 0;
     const longInventoryUsd = Math.max(this.profitStats.inventoryQuantity, 0) * safeMarkPrice;
-    const inventoryLimitUsd = Math.max(
-      targetBuyDepthUsd * VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_INVENTORY_DEPTH_MULTIPLIER,
-      VolumeGenerationStrategy.ADVERSE_BUY_FILL_GUARD_MIN_INVENTORY_USD
-    );
+    const inventoryLimitUsd = this.getAdverseFillInventoryLimitUsd(targetBuyDepthUsd);
 
     const hasLongInventoryBias = this.profitStats.inventoryQuantity > 0 || this.currentPosition > 0;
     const hasPersistentBuyFillImbalance =

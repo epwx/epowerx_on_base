@@ -6,58 +6,15 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { getEPWXPairInfo, PairInfo } from '../utils/exchange-info';
+import { Balance, ExchangeService, Order, OrderBook, Ticker, Trade } from './exchange.types';
 
-export interface OrderBook {
-  bids: Array<[number, number]>;
-  asks: Array<[number, number]>;
-  timestamp: number;
-}
-
-export interface Balance {
-  asset: string;
-  free: number;
-  locked: number;
-  total: number;
-}
-
-export interface Order {
-  orderId: string;
-  symbol: string;
-  side: 'BUY' | 'SELL';
-  type: 'LIMIT' | 'MARKET';
-  price: number;
-  amount: number;
-  filled: number;
-  status: 'NEW' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED';
-  timestamp: number;
-  fee: number;
-}
-
-export interface Ticker {
-  symbol: string;
-  price: number;
-  bid: number;
-  ask: number;
-  volume24h: number;
-  high24h: number;
-  low24h: number;
-}
-
-export interface Trade {
-  tradeId: string;
-  orderId: string;
-  price: number;
-  amount: number;
-  side: 'BUY' | 'SELL';
-  timestamp: number;
-  fee: number;
-}
+export type { Balance, Order, OrderBook, Ticker, Trade } from './exchange.types';
 
 /**
  * Biconomy Exchange API Service
  * Zero-fee market maker account integration
  */
-export class BiconomyExchangeService {
+export class BiconomyExchangeService implements ExchangeService {
   private client: AxiosInstance;
   private apiKey: string;
   private apiSecret: string;

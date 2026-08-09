@@ -1549,6 +1549,26 @@ describe('Order Placement Logic', () => {
         }
       });
 
+      it('should honor an explicit adverse-fill inventory limit below the legacy floor', () => {
+        const config = require('../../config').config;
+        const originalInventoryLimitUsd = config.volumeStrategy.adverseFillInventoryLimitUsd;
+        config.volumeStrategy.adverseFillInventoryLimitUsd = 6;
+
+        try {
+          const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+          const strategy = new VolumeGenerationStrategy({});
+          (strategy as any).profitStats.inventoryQuantity = 7;
+
+          const guard = (strategy as any).evaluateAdverseBuyFillGuard(1, 5.25);
+
+          expect(guard.inventoryLimitUsd).toBe(6);
+          expect(guard.longInventoryUsd).toBe(7);
+          expect(guard.active).toBe(true);
+        } finally {
+          config.volumeStrategy.adverseFillInventoryLimitUsd = originalInventoryLimitUsd;
+        }
+      });
+
       it('should resume buy placements after adverse real-fill imbalance normalizes', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([

@@ -3,10 +3,22 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 interface Config {
+  exchange: {
+    name: 'biconomy' | 'azbit';
+  };
+
   biconomyExchange: {
     apiKey: string;
     apiSecret: string;
     baseUrl: string;
+  };
+
+  azbitExchange: {
+    accessToken: string;
+    apiKey: string;
+    apiSecret: string;
+    baseUrl: string;
+    readOnly: boolean;
   };
 
   trading: {
@@ -39,6 +51,7 @@ interface Config {
     minExecDepthBuyUsd: number;
     minExecDepthSellUsd: number;
     adverseFillRatioMax: number;
+    adverseFillInventoryLimitUsd: number;
     riskSizeMultiplierDefensive: number;
     riskSizeMultiplierNormal: number;
     selfTradeEnabled: boolean;
@@ -98,6 +111,11 @@ interface Config {
   operations: {
     cancelOrdersOnStart: boolean;
     cancelOrdersOnStop: boolean;
+  };
+
+  runtime: {
+    stateFile: string;
+    logFilePrefix: string;
   };
 
   logLevel: string;
@@ -167,6 +185,23 @@ const getEnvEthUsdSource = (
   return defaultValue;
 };
 
+const getEnvExchangeName = (
+  key: string,
+  defaultValue: 'biconomy' | 'azbit'
+): 'biconomy' | 'azbit' => {
+  const value = process.env[key];
+  if (!value) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'biconomy' || normalized === 'azbit') {
+    return normalized;
+  }
+
+  return defaultValue;
+};
+
 const getCancelOrdersDefault = (): boolean => {
   const legacyValue = process.env.CANCEL_ORDERS_ON_DEPLOY;
   if (!legacyValue) {
@@ -176,15 +211,34 @@ const getCancelOrdersDefault = (): boolean => {
   return legacyValue.trim().toLowerCase() === 'true';
 };
 
+const selectedExchange = getEnvExchangeName('EXCHANGE_NAME', 'biconomy');
+const azbitReadOnly = getEnvBoolean('AZBIT_READ_ONLY', true);
+
 export const config: Config = {
+  exchange: {
+    name: selectedExchange,
+  },
+
   biconomyExchange: {
-    apiKey: getEnvVariable('BICONOMY_EXCHANGE_API_KEY'),
-    apiSecret: getEnvVariable('BICONOMY_EXCHANGE_API_SECRET'),
+    apiKey: selectedExchange === 'biconomy'
+      ? getEnvVariable('BICONOMY_EXCHANGE_API_KEY')
+      : (process.env.BICONOMY_EXCHANGE_API_KEY || ''),
+    apiSecret: selectedExchange === 'biconomy'
+      ? getEnvVariable('BICONOMY_EXCHANGE_API_SECRET')
+      : (process.env.BICONOMY_EXCHANGE_API_SECRET || ''),
     baseUrl: getEnvVariable('BICONOMY_EXCHANGE_BASE_URL', 'https://api.biconomy.exchange'),
   },
 
+  azbitExchange: {
+    accessToken: process.env.AZBIT_ACCESS_TOKEN || '',
+    apiKey: process.env.AZBIT_API_KEY || '',
+    apiSecret: process.env.AZBIT_API_SECRET || '',
+    baseUrl: getEnvVariable('AZBIT_EXCHANGE_BASE_URL', 'https://api2.azbit.com'),
+    readOnly: azbitReadOnly,
+  },
+
   trading: {
-    pair: getEnvVariable('TRADING_PAIR', 'EPWX/USDT'),
+    pair: getEnvVariable('TRADING_PAIR', selectedExchange === 'azbit' ? 'EPWX_USDT' : 'EPWX/USDT'),
     epwxAddress: getEnvVariable('EPWX_TOKEN_ADDRESS', '0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb'),
     epwxWethPairAddress: getEnvVariable('EPWX_WETH_PAIR', ''),
     baseRpcUrl: getEnvVariable('BASE_RPC_URL', ''),
@@ -216,6 +270,7 @@ export const config: Config = {
     minExecDepthBuyUsd: getEnvNumber('MIN_EXEC_DEPTH_BUY_USD', 0),
     minExecDepthSellUsd: getEnvNumber('MIN_EXEC_DEPTH_SELL_USD', 0),
     adverseFillRatioMax: getEnvNumber('ADVERSE_FILL_RATIO_MAX', 1.6),
+    adverseFillInventoryLimitUsd: getEnvNumber('ADVERSE_FILL_INVENTORY_LIMIT_USD', 0),
     riskSizeMultiplierDefensive: getEnvNumber('RISK_SIZE_MULTIPLIER_DEFENSIVE', 1),
     riskSizeMultiplierNormal: getEnvNumber('RISK_SIZE_MULTIPLIER_NORMAL', 1),
     selfTradeEnabled: getEnvBoolean('SELF_TRADE_ENABLED', true),
@@ -278,6 +333,11 @@ export const config: Config = {
   operations: {
     cancelOrdersOnStart: getEnvBoolean('CANCEL_ORDERS_ON_START', getCancelOrdersDefault()),
     cancelOrdersOnStop: getEnvBoolean('CANCEL_ORDERS_ON_STOP', getCancelOrdersDefault()),
+  },
+
+  runtime: {
+    stateFile: getEnvVariable('RUNTIME_STATE_FILE', `logs/runtime-pnl-state.${selectedExchange}.json`),
+    logFilePrefix: process.env.LOG_FILE_PREFIX || '',
   },
 
   logLevel: getEnvVariable('LOG_LEVEL', 'info'),

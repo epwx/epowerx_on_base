@@ -10,13 +10,13 @@ async function main() {
     process.exit(1);
   }
 
-  const [{ BiconomyExchangeService }, { config }] = await Promise.all([
-    import('../services/biconomy-exchange.service'),
+  const [{ createExchangeService }, { config }] = await Promise.all([
+    import('../services/exchange.factory'),
     import('../config'),
   ]);
   const symbol = config.trading.pair || 'EPWX/USDT';
 
-  const exchange = new BiconomyExchangeService();
+  const exchange = createExchangeService();
   try {
     let totalCancelled = 0;
     while (true) {
@@ -25,14 +25,13 @@ async function main() {
       if (!openOrders.length) {
         break;
       }
-      // Cancel in batches of 100
-      for (let i = 0; i < openOrders.length; i += 100) {
-        const batch = openOrders.slice(i, i + 100);
-        const ordersJson = batch.map((order: { orderId: string }) => ({ market: symbol.replace('/', '_').toUpperCase(), order_id: order.orderId }));
-        const cancelled = await exchange.cancelOrdersBatch(ordersJson);
-        totalCancelled += cancelled;
-        console.log(`Batch cancelled: ${cancelled} orders`);
+
+      for (const order of openOrders) {
+        await exchange.cancelOrder(symbol, order.orderId);
+        totalCancelled += 1;
       }
+
+      console.log(`Cancelled ${openOrders.length} order(s) in this pass.`);
     }
     console.log(`✅ Cancelled ${totalCancelled} existing orders`);
   } catch (err: any) {

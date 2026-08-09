@@ -1,6 +1,6 @@
-# Biconomy Exchange Volume Generation Bot
+# Exchange Volume Generation Bot (Biconomy + Azbit)
 
-A high-performance volume generation bot for **Biconomy Exchange** (centralized exchange). Designed for market maker accounts with zero trading fees to efficiently generate trading volume on EPWX/USDT and other pairs.
+A high-performance volume generation bot with exchange adapters for **Biconomy** and **Azbit**. Designed to reuse one strategy engine across exchanges while keeping per-exchange credentials, runtime state, and logs isolated.
 
 ## Features
 
@@ -12,6 +12,7 @@ A high-performance volume generation bot for **Biconomy Exchange** (centralized 
 - **Self-Trading Support**: Optional self-trading for maximum volume efficiency
 - **Real-time Monitoring**: Live volume statistics and performance tracking
 - **Comprehensive Logging**: Detailed Winston logging for monitoring and debugging
+- **Adapter Architecture**: Exchange selection via `EXCHANGE_NAME` with a shared strategy contract
 
 ## Architecture
 
@@ -21,7 +22,10 @@ src/
 ├── config/
 │   └── index.ts                                # Configuration management
 ├── services/
-│   └── biconomy-exchange.service.ts            # Biconomy Exchange API integration
+│   ├── exchange.types.ts                        # Shared exchange interface
+│   ├── exchange.factory.ts                      # Exchange adapter selector
+│   ├── biconomy-exchange.service.ts             # Biconomy Exchange API integration
+│   └── azbit-exchange.service.ts                # Azbit API integration
 ├── strategies/
 │   └── volume-generation.strategy.ts           # Volume generation logic
 ├── scripts/
@@ -54,13 +58,26 @@ cp .env.example .env
 3. Configure your `.env` file:
 
 ```env
-# Biconomy Exchange API Configuration
+# Exchange selection
+EXCHANGE_NAME=biconomy
+
+# Biconomy Exchange API Configuration (required when EXCHANGE_NAME=biconomy)
 BICONOMY_EXCHANGE_API_KEY=your_api_key_here
 BICONOMY_EXCHANGE_API_SECRET=your_api_secret_here
 BICONOMY_EXCHANGE_BASE_URL=https://api.biconomy.exchange
 
+# Azbit API configuration (required when EXCHANGE_NAME=azbit and AZBIT_READ_ONLY=false)
+AZBIT_EXCHANGE_BASE_URL=https://api2.azbit.com
+AZBIT_ACCESS_TOKEN=your_azbit_access_token_here
+AZBIT_API_KEY=your_azbit_api_key_here
+AZBIT_API_SECRET=your_azbit_api_secret_here
+AZBIT_READ_ONLY=true
+
+# Private auth precedence: AZBIT_ACCESS_TOKEN first, then AZBIT_API_KEY + AZBIT_API_SECRET
+
 # Trading Configuration
 TRADING_PAIR=EPWX/USDT
+# For Azbit, use TRADING_PAIR=EPWX_USDT
 EPWX_TOKEN_ADDRESS=0xeF5f5751cf3eCA6cC3572768298B7783d33D60Eb
 EPWX_WETH_PAIR=your_epwx_weth_pair_address
 BASE_RPC_URL=your_base_rpc_url
@@ -91,7 +108,19 @@ ENABLE_POSITION_LIMITS=true
 
 # Logging
 LOG_LEVEL=info
+
+# Per-process runtime/log isolation
+RUNTIME_STATE_FILE=logs/runtime-pnl-state.biconomy.json
+LOG_FILE_PREFIX=
 ```
+
+### Running Azbit Safely As Separate Process
+
+- Use a separate `.env` file and PM2 process name (for example `epwx-azbit-bot`)
+- Use a distinct runtime state file, for example `RUNTIME_STATE_FILE=logs/runtime-pnl-state.azbit.json`
+- Use a distinct log prefix, for example `LOG_FILE_PREFIX=azbit`
+- Keep `AZBIT_READ_ONLY=true` until market data and balance parsing are validated
+- Do not reuse Biconomy runtime state files across exchanges
 
 ### Getting Biconomy Exchange API Keys
 

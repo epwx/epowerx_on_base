@@ -26,14 +26,22 @@ const BUILD_MARKER = RUNTIME_GIT_SHA === 'unknown'
   : `build-${RUNTIME_GIT_SHA}-marker`;
 
 async function main() {
+  const exchangeName = config.exchange.name.toUpperCase();
+
   logger.info('');
   logger.info('╔══════════════════════════════════════════════════════╗');
-  logger.info('║   BICONOMY EXCHANGE VOLUME GENERATION BOT           ║');
-  logger.info('║   Zero-Fee Market Maker Account                      ║');
+  logger.info(`║   ${exchangeName.padEnd(45, ' ')}║`);
+  logger.info('║   VOLUME GENERATION BOT                              ║');
   logger.info('╚══════════════════════════════════════════════════════╝');
   logger.info('');
   logger.info(`[BUILD MARKER] ${BUILD_MARKER}`);
   logger.info(`[RUNTIME GIT SHA] ${RUNTIME_GIT_SHA}`);
+
+  if (config.exchange.name === 'azbit' && config.azbitExchange.readOnly) {
+    logger.error('AZBIT_READ_ONLY=true. Trading loop is disabled to prevent accidental writes.');
+    logger.error('Run read-only diagnostics with npm run test:connection, then set AZBIT_READ_ONLY=false to trade.');
+    process.exit(1);
+  }
 
   const strategy = new VolumeGenerationStrategy();
   let isShuttingDown = false;

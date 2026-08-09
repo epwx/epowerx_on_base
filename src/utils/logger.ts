@@ -1,6 +1,12 @@
 import winston from 'winston';
 import { config } from '../config';
 
+const logPrefix = (config.runtime.logFilePrefix || '').trim();
+const errorLogFile = logPrefix ? `logs/${logPrefix}-error.log` : 'logs/error.log';
+const combinedLogFile = logPrefix ? `logs/${logPrefix}-combined.log` : 'logs/combined.log';
+const exceptionsLogFile = logPrefix ? `logs/${logPrefix}-exceptions.log` : 'logs/exceptions.log';
+const rejectionsLogFile = logPrefix ? `logs/${logPrefix}-rejections.log` : 'logs/rejections.log';
+
 const logFormat = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
   winston.format.errors({ stack: true }),
@@ -25,19 +31,19 @@ const consoleFormat = winston.format.combine(
 export const logger = winston.createLogger({
   level: config.logLevel,
   format: logFormat,
-  defaultMeta: { service: 'biconomy-volume-bot' },
+  defaultMeta: { service: `${config.exchange.name}-volume-bot` },
   transports: [
     new winston.transports.Console({
       format: consoleFormat,
     }),
     new winston.transports.File({
-      filename: 'logs/error.log',
+      filename: errorLogFile,
       level: 'error',
       maxsize: 5242880,
       maxFiles: 5,
     }),
     new winston.transports.File({
-      filename: 'logs/combined.log',
+      filename: combinedLogFile,
       maxsize: 5242880,
       maxFiles: 5,
     }),
@@ -45,11 +51,11 @@ export const logger = winston.createLogger({
 });
 
 logger.exceptions.handle(
-  new winston.transports.File({ filename: 'logs/exceptions.log' })
+  new winston.transports.File({ filename: exceptionsLogFile })
 );
 
 logger.rejections.handle(
-  new winston.transports.File({ filename: 'logs/rejections.log' })
+  new winston.transports.File({ filename: rejectionsLogFile })
 );
 
 export default logger;
