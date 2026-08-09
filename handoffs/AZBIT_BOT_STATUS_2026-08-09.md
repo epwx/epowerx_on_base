@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 15:50 UTC.
+This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 16:00 UTC.
 
 ## Executive Status
 
@@ -84,16 +84,25 @@ used without both `AZBIT_READ_ONLY=true` and `AZBIT_SHADOW_MODE=true`.
 
 ## Real Account State
 
-Last independent forced non-shadow read-only diagnostic at approximately 2026-08-09 15:43 UTC:
+Last independent forced non-shadow read-only diagnostic at approximately 2026-08-09 16:00 UTC:
 
 - Azbit API connection: passed
-- Real open orders: `0`
+- Real open orders: `1`
 - USDT free: `50.21741963`
 - USDT locked: `0.00000000`
-- EPWX free: `988716730227.38085938`
-- EPWX locked: `0.00000001`
+- EPWX free: `988166730227.38085938`
+- EPWX locked: `550000000.00000000`
 
-The shadow process did not create real orders or lock funds.
+The real order is a supervised bona fide SELL canary:
+
+- Order ID: `9b5118e0-3575-4a0f-91c3-16e40d1ebeef`
+- Amount: `550000000 EPWX`
+- Price: `9.998e-10 USDT`
+- Notional: approximately `$0.54989`
+- Status at verification: `NEW`
+
+It was submitted by the guarded one-shot canary command, not the shadow PM2
+process. The PM2 process remains read-only and in shadow mode.
 
 ## Profile Switching
 
