@@ -9,13 +9,14 @@ if [[ ! -f .env.azbit ]]; then
   exit 1
 fi
 
-set -a
-# shellcheck disable=SC1091
-. ./.env.azbit
-set +a
-
-echo "AZBIT_CHECK EXCHANGE_NAME=${EXCHANGE_NAME:-} TRADING_PAIR=${TRADING_PAIR:-} RUNTIME_STATE_FILE=${RUNTIME_STATE_FILE:-} LOG_FILE_PREFIX=${LOG_FILE_PREFIX:-}"
+echo "Starting Azbit with application-managed .env.azbit loading"
 
 pm2 delete epwx-azbit-bot >/dev/null 2>&1 || true
-pm2 start dist/index.js --name epwx-azbit-bot --time --update-env
+env -i \
+  HOME="$HOME" \
+  USER="$USER" \
+  PATH="$PATH" \
+  NODE_ENV=production \
+  ENV_FILE=.env.azbit \
+  pm2 start dist/index.js --name epwx-azbit-bot --time
 pm2 save
