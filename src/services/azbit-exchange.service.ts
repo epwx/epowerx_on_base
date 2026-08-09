@@ -1,21 +1,25 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import { createHmac } from 'crypto';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { Balance, ExchangeService, Order, OrderBook, Ticker, Trade } from './exchange.types';
 
 type AzbitPairData = {
-  pair?: {
-    code?: string;
-    dgp?: number;
-    dgam?: number;
-    mos?: number | null;
-    mkf?: number;
-    tkf?: number;
-  };
-  pr?: number | null;
-  qv?: number;
-  h?: number | null;
-  l?: number | null;
+  code?: string;
+  digitsPrice?: number;
+  digitsAmount?: number;
+  minQuoteAmount?: number;
+  minBaseAmount?: number;
+};
+
+type AzbitTicker = {
+  currencyPairCode?: string;
+  price?: number;
+  bidPrice?: number;
+  askPrice?: number;
+  volume24h?: number;
+  high24h?: number;
+  low24h?: number;
 };
 
 type AzbitOrderBookLevel = {
@@ -48,13 +52,11 @@ type AzbitDeal = {
 
 export class AzbitExchangeService implements ExchangeService {
   private readonly client: AxiosInstance;
-  private readonly accessToken: string;
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly readOnly: boolean;
 
   constructor() {
-    this.accessToken = config.azbitExchange.accessToken;
     this.apiKey = config.azbitExchange.apiKey;
     this.apiSecret = config.azbitExchange.apiSecret;
     this.readOnly = config.azbitExchange.readOnly;
@@ -79,57 +81,47 @@ export class AzbitExchangeService implements ExchangeService {
     }
   }
 
-  private requirePrivateAuth(action: string): { token?: string; apiKey?: string; apiSecret?: string } {
-    if (this.accessToken) {
-      return { token: this.accessToken };
-    }
-
+  private requirePrivateAuth(action: string): void {
     if (this.apiKey && this.apiSecret) {
-      return {
-        apiKey: this.apiKey,
-        apiSecret: this.apiSecret,
-      };
+      return;
     }
 
-    throw new Error(
-      `Azbit private auth is required to ${action}. Set AZBIT_ACCESS_TOKEN or AZBIT_API_KEY and AZBIT_API_SECRET.`
-    );
+    throw new Error(`Azbit API keys are required to ${action}. Set AZBIT_API_KEY and AZBIT_API_SECRET.`);
   }
 
-  private withAuth(cfg: AxiosRequestConfig): AxiosRequestConfig {
-    const auth = this.requirePrivateAuth('call private Azbit endpoints');
-    const headers: Record<string, string> = {
-      ...((cfg.headers || {}) as Record<string, string>),
-    };
-    const params: Record<string, string> = {
-      ...((cfg.params || {}) as Record<string, string>),
-    };
+  private async signedRequest<T>(request: AxiosRequestConfig): Promise<T> {
+    this.requirePrivateAuth('call private Azbit endpoints');
 
-    if (auth.token) {
-      headers.Authorization = `Bearer ${auth.token}`;
-      headers.access_token = auth.token;
-      params.access_token = auth.token;
+    const requestUrl = new URL(request.url || '', `${config.azbitExchange.baseUrl.replace(/\/$/, '')}/`);
+    for (const [key, value] of Object.entries(request.params || {})) {
+      if (value !== undefined && value !== null && value !== '') {
+        requestUrl.searchParams.append(key, String(value));
+      }
     }
 
-    if (auth.apiKey && auth.apiSecret) {
-      headers.publicKey = auth.apiKey;
-      headers.privateKey = auth.apiSecret;
-      headers['X-API-KEY'] = auth.apiKey;
-      params.publicKey = auth.apiKey;
-      params.privateKey = auth.apiSecret;
-    }
+    const body = request.data === undefined ? '' : JSON.stringify(request.data);
+    const signature = createHmac('sha256', this.apiSecret)
+      .update(this.apiKey + requestUrl.toString() + body, 'utf8')
+      .digest('hex');
 
-    return {
-      ...cfg,
-      headers,
-      params,
-    };
+    const response = await this.client.request<T>({
+      ...request,
+      url: requestUrl.toString(),
+      params: undefined,
+      data: body || undefined,
+      headers: {
+        ...request.headers,
+        'API-PublicKey': this.apiKey,
+        'API-Signature': signature,
+      },
+    });
+    return response.data;
   }
 
   private async getPairData(symbol: string): Promise<AzbitPairData | undefined> {
     const market = this.normalizeSymbol(symbol);
-    const response = await this.client.get<AzbitPairData[]>('/api/currency-pairs/price-and-volume/v2');
-    return response.data.find((row: AzbitPairData) => row?.pair?.code?.toUpperCase() === market);
+    const response = await this.client.get<AzbitPairData[]>('/api/currencies/pairs');
+    return response.data.find((row: AzbitPairData) => row?.code?.toUpperCase() === market);
   }
 
   private mapOrder(symbol: string, input: AzbitOrderViewModel): Order {
@@ -163,7 +155,9 @@ export class AzbitExchangeService implements ExchangeService {
 
   async getOrderBook(symbol: string): Promise<OrderBook> {
     const market = this.normalizeSymbol(symbol);
-    const response = await this.client.get<AzbitOrderBookLevel[]>(`/api/orders/book/${market}`);
+    const response = await this.client.get<AzbitOrderBookLevel[]>('/api/orderbook', {
+      params: { currencyPairCode: market },
+    });
     const rows = Array.isArray(response.data) ? response.data : [];
 
     const bids: Array<[number, number]> = [];
@@ -195,33 +189,31 @@ export class AzbitExchangeService implements ExchangeService {
 
   async getTicker(symbol: string): Promise<Ticker> {
     const market = this.normalizeSymbol(symbol);
-    const pairData = await this.getPairData(market);
+    const response = await this.client.get<AzbitTicker[]>('/api/tickers', {
+      params: { currencyPairCode: market },
+    });
+    const pairData = response.data.find((row) => row?.currencyPairCode?.toUpperCase() === market);
 
     if (!pairData) {
       throw new Error(`Azbit pair not found: ${market}`);
     }
 
-    const orderBook = await this.getOrderBook(market);
-    const bid = orderBook.bids[0]?.[0] || 0;
-    const ask = orderBook.asks[0]?.[0] || 0;
-    const last = Number(pairData.pr || 0);
-
     return {
       symbol,
-      price: last,
-      bid,
-      ask,
-      volume24h: Number(pairData.qv || 0),
-      high24h: Number(pairData.h || 0),
-      low24h: Number(pairData.l || 0),
+      price: Number(pairData.price || 0),
+      bid: Number(pairData.bidPrice || 0),
+      ask: Number(pairData.askPrice || 0),
+      volume24h: Number(pairData.volume24h || 0),
+      high24h: Number(pairData.high24h || 0),
+      low24h: Number(pairData.low24h || 0),
     };
   }
 
   async getBalances(): Promise<Balance[]> {
-    const response = await this.client.get<any>('/api/users/balances', this.withAuth({}));
-    const balances = Array.isArray(response.data?.balances) ? response.data.balances : [];
-    const blocked = Array.isArray(response.data?.balancesBlockedInOrder)
-      ? response.data.balancesBlockedInOrder
+    const response = await this.signedRequest<any>({ method: 'GET', url: '/api/wallets/balances' });
+    const balances = Array.isArray(response?.balances) ? response.balances : [];
+    const blocked = Array.isArray(response?.balancesBlockedInOrder)
+      ? response.balancesBlockedInOrder
       : [];
 
     const blockedByAsset = new Map<string, number>();
@@ -275,9 +267,13 @@ export class AzbitExchangeService implements ExchangeService {
       throw new Error(`Azbit pair not found: ${market}`);
     }
 
-    const amountDigits = Math.max(0, Number(pairData.pair?.dgam ?? 8));
-    const priceDigits = Math.max(0, Number(pairData.pair?.dgp ?? 8));
-    const minimumOrderSize = Number(pairData.pair?.mos ?? 0);
+    if (type !== 'LIMIT') {
+      throw new Error('Azbit Spot API only supports LIMIT orders');
+    }
+
+    const amountDigits = Math.max(0, Number(pairData.digitsAmount ?? 8));
+    const priceDigits = Math.max(0, Number(pairData.digitsPrice ?? 8));
+    const minimumOrderSize = Number(pairData.minBaseAmount ?? 0);
     const normalizedAmount = Number(amount.toFixed(Math.min(amountDigits, 14)));
 
     if (minimumOrderSize > 0 && normalizedAmount < minimumOrderSize) {
@@ -286,21 +282,20 @@ export class AzbitExchangeService implements ExchangeService {
       );
     }
 
-    const requestPrice = type === 'MARKET' ? 0 : Number((price || 0).toFixed(Math.min(priceDigits, 14)));
-    if (type === 'LIMIT' && requestPrice <= 0) {
+    const requestPrice = Number((price || 0).toFixed(Math.min(priceDigits, 14)));
+    if (requestPrice <= 0) {
       throw new Error('Azbit limit order requires a positive price');
     }
 
     const payload = {
-      isBid: side === 'BUY',
+      side: side.toLowerCase(),
       currencyPairCode: market,
       amount: normalizedAmount,
       price: requestPrice,
-      isMarket: type === 'MARKET',
     };
 
-    const response = await this.client.post<any>('/api/orders', payload, this.withAuth({}));
-    const responseOrderId = String(response.data?.id || response.data?.orderId || '');
+    const response = await this.signedRequest<any>({ method: 'POST', url: '/api/orders', data: payload });
+    const responseOrderId = String(response?.id || response?.orderId || response || '');
 
     return {
       orderId: responseOrderId || `azbit-${Date.now()}`,
@@ -318,7 +313,7 @@ export class AzbitExchangeService implements ExchangeService {
 
   async cancelOrder(symbol: string, orderId: string): Promise<boolean> {
     this.requireWritable('cancel orders');
-    await this.client.delete(`/api/orders/${orderId}`, this.withAuth({}));
+    await this.signedRequest({ method: 'DELETE', url: `/api/orders/${orderId}` });
     return true;
   }
 
@@ -327,7 +322,11 @@ export class AzbitExchangeService implements ExchangeService {
 
     const market = this.normalizeSymbol(symbol);
     try {
-      await this.client.delete(`/api/orders/users/all/${market}`, this.withAuth({}));
+      await this.signedRequest({
+        method: 'DELETE',
+        url: '/api/orders',
+        params: { currencyPairCode: market },
+      });
       return 0;
     } catch (error) {
       logger.warn('Azbit bulk cancel endpoint failed, falling back to per-order cancel', error as any);
@@ -362,23 +361,10 @@ export class AzbitExchangeService implements ExchangeService {
 
   async getFinishedOrder(symbol: string, orderId: string): Promise<Order | null> {
     try {
-      const market = this.normalizeSymbol(symbol);
-      const response = await this.client.get<AzbitOrderViewModel[]>('/api/orders/user-order-history',
-        this.withAuth({
-          params: {
-            currencyPairCode: market,
-            pageNumber: 1,
-            pageSize: 200,
-          },
-        })
-      );
-
-      const rows = Array.isArray(response.data) ? response.data : [];
-      const row = rows.find((entry) => String(entry?.id || '') === orderId);
-      if (!row) {
-        return null;
-      }
-
+      const row = await this.signedRequest<AzbitOrderViewModel>({
+        method: 'GET',
+        url: `/api/orders/${orderId}/deals`,
+      });
       const mapped = this.mapOrder(symbol, row);
       if (mapped.status === 'NEW') {
         mapped.status = mapped.filled > 0 ? 'PARTIALLY_FILLED' : 'CANCELED';
@@ -395,31 +381,30 @@ export class AzbitExchangeService implements ExchangeService {
       throw new Error('Azbit getOpenOrders requires a symbol');
     }
 
-    const pageNumber = Math.floor(Math.max(offset, 0) / Math.max(limit, 1)) + 1;
+    const response = await this.signedRequest<AzbitOrderViewModel[]>({
+      method: 'GET',
+      url: '/api/user/orders',
+      params: {
+        currencyPairCode: market,
+        status: 'active',
+      },
+    });
 
-    const response = await this.client.get<AzbitOrderViewModel[]>(`/api/orders/users/${market}`,
-      this.withAuth({
-        params: {
-          status: 'active',
-          pageNumber,
-          pageSize: Math.max(1, Math.min(limit, 200)),
-        },
-      })
-    );
-
-    const rows = Array.isArray(response.data) ? response.data : [];
-    return rows.map((row) => this.mapOrder(symbol || market, row));
+    const rows = Array.isArray(response) ? response : [];
+    return rows
+      .slice(Math.max(offset, 0), Math.max(offset, 0) + Math.max(limit, 1))
+      .map((row) => this.mapOrder(symbol || market, row));
   }
 
   async getRecentTrades(symbol: string, limit: number = 50, orderId?: string): Promise<Trade[]> {
     const market = this.normalizeSymbol(symbol);
-    const response = await this.client.get<AzbitDeal[]>(`/api/deals/main/${market}`,
-      {
-        params: {
-          pageSize: Math.max(1, Math.min(limit, 200)),
-        },
-      }
-    );
+    const response = await this.client.get<AzbitDeal[]>('/api/deals', {
+      params: {
+        currencyPairCode: market,
+        pageNumber: 1,
+        pageSize: Math.max(1, Math.min(limit, 100)),
+      },
+    });
 
     const rows = Array.isArray(response.data) ? response.data : [];
     const filtered = orderId

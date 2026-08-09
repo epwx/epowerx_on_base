@@ -67,13 +67,13 @@ BICONOMY_EXCHANGE_API_SECRET=your_api_secret_here
 BICONOMY_EXCHANGE_BASE_URL=https://api.biconomy.exchange
 
 # Azbit API configuration (required when EXCHANGE_NAME=azbit and AZBIT_READ_ONLY=false)
-AZBIT_EXCHANGE_BASE_URL=https://api2.azbit.com
-AZBIT_ACCESS_TOKEN=your_azbit_access_token_here
+AZBIT_EXCHANGE_BASE_URL=https://data.azbit.com
 AZBIT_API_KEY=your_azbit_api_key_here
 AZBIT_API_SECRET=your_azbit_api_secret_here
 AZBIT_READ_ONLY=true
 
-# Private auth precedence: AZBIT_ACCESS_TOKEN first, then AZBIT_API_KEY + AZBIT_API_SECRET
+# Enable Receiving user info and Trading, disable Withdrawal, and optionally
+# restrict the key to the deployment server's public IP.
 
 # Trading Configuration
 TRADING_PAIR=EPWX/USDT

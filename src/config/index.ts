@@ -14,7 +14,6 @@ interface Config {
   };
 
   azbitExchange: {
-    accessToken: string;
     apiKey: string;
     apiSecret: string;
     baseUrl: string;
@@ -230,10 +229,9 @@ export const config: Config = {
   },
 
   azbitExchange: {
-    accessToken: process.env.AZBIT_ACCESS_TOKEN || '',
     apiKey: process.env.AZBIT_API_KEY || '',
     apiSecret: process.env.AZBIT_API_SECRET || '',
-    baseUrl: getEnvVariable('AZBIT_EXCHANGE_BASE_URL', 'https://api2.azbit.com'),
+    baseUrl: getEnvVariable('AZBIT_EXCHANGE_BASE_URL', 'https://data.azbit.com'),
     readOnly: azbitReadOnly,
   },
 

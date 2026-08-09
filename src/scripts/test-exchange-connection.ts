@@ -10,7 +10,6 @@ async function testConnection() {
   const symbol = config.trading.pair;
   const hasPrivateAuth =
     config.exchange.name !== 'azbit' ||
-    Boolean(config.azbitExchange.accessToken) ||
     (Boolean(config.azbitExchange.apiKey) && Boolean(config.azbitExchange.apiSecret));
 
   try {
@@ -65,7 +64,7 @@ async function testConnection() {
       }
       logger.info('');
     } else {
-      logger.info('⚠️  Skipping private account tests (balances/open orders): set AZBIT_ACCESS_TOKEN or AZBIT_API_KEY/AZBIT_API_SECRET.');
+      logger.info('⚠️  Skipping private account tests (balances/open orders): set AZBIT_API_KEY and AZBIT_API_SECRET.');
       logger.info('');
     }
 
