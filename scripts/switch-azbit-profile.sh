@@ -115,8 +115,8 @@ merge_env_files() {
 			remember(key, value)
 		}
 		END {
-			for (index=1; index<=count; index++) {
-				key = order[index]
+			for (i=1; i<=count; i++) {
+				key = order[i]
 				print key "=" values[key]
 			}
 		}
