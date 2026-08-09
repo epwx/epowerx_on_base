@@ -37,7 +37,12 @@ async function main() {
   logger.info(`[BUILD MARKER] ${BUILD_MARKER}`);
   logger.info(`[RUNTIME GIT SHA] ${RUNTIME_GIT_SHA}`);
 
-  if (config.exchange.name === 'azbit' && config.azbitExchange.readOnly) {
+  if (config.exchange.name === 'azbit' && config.azbitExchange.shadowMode) {
+    if (!config.azbitExchange.readOnly) {
+      throw new Error('AZBIT_SHADOW_MODE=true requires AZBIT_READ_ONLY=true');
+    }
+    logger.warn('AZBIT_SHADOW_MODE=true. Strategy decisions will run, but all exchange writes are simulated in memory.');
+  } else if (config.exchange.name === 'azbit' && config.azbitExchange.readOnly) {
     logger.warn('AZBIT_READ_ONLY=true. Trading loop is disabled; process will remain online for health monitoring.');
     logger.info('Run read-only diagnostics with npm run test:connection, then set AZBIT_READ_ONLY=false to trade.');
 

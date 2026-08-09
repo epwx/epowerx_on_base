@@ -130,6 +130,17 @@ ticker, so it can evaluate market regimes while the trading process is
 read-only. It defaults to dry-run and cannot change `.env.azbit` without the
 explicit `--apply` option.
 
+The profiles also enable `AZBIT_SHADOW_MODE=true`. In shadow mode the normal
+strategy loop reads live Azbit ticker, book, balances, orders, and private fills,
+but an in-memory exchange wrapper simulates every placement and cancellation.
+Shadow orders reserve virtual balances and persist across strategy cycles; they
+never reach Azbit. Startup refuses shadow mode unless `AZBIT_READ_ONLY=true`,
+leaving the underlying adapter write guard enabled as a second safety layer.
+
+Shadow decisions are marked with `[AZBIT SHADOW]` in the Azbit PM2 log. Health-
+only mode remains available by setting `AZBIT_SHADOW_MODE=false` while retaining
+`AZBIT_READ_ONLY=true`.
+
 ```bash
 # Observe one automatic decision (dry-run is the default)
 scripts/switch-azbit-profile.sh --auto

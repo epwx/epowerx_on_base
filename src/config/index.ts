@@ -18,6 +18,7 @@ interface Config {
     apiSecret: string;
     baseUrl: string;
     readOnly: boolean;
+    shadowMode: boolean;
   };
 
   trading: {
@@ -233,6 +234,7 @@ export const config: Config = {
     apiSecret: process.env.AZBIT_API_SECRET || '',
     baseUrl: getEnvVariable('AZBIT_EXCHANGE_BASE_URL', 'https://data.azbit.com'),
     readOnly: azbitReadOnly,
+    shadowMode: getEnvBoolean('AZBIT_SHADOW_MODE', false),
   },
 
   trading: {
