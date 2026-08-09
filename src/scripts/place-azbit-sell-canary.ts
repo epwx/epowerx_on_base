@@ -19,8 +19,8 @@ async function main(): Promise<void> {
   if (config.azbitExchange.readOnly) {
     throw new Error('AZBIT_READ_ONLY must be false for the one-shot canary process');
   }
-  if (config.azbitExchange.shadowMode) {
-    throw new Error('AZBIT_SHADOW_MODE must be false for the one-shot canary process');
+  if ((process.env.AZBIT_SHADOW_MODE || '').toLowerCase() !== 'false') {
+    throw new Error('Explicit AZBIT_SHADOW_MODE=false is required for the one-shot canary process');
   }
 
   const amount = getRequiredPositiveNumber('AZBIT_CANARY_AMOUNT_EPWX');
