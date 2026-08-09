@@ -1412,7 +1412,7 @@ export class VolumeGenerationStrategy {
         return;
       }
       logger.debug(`DEBUG: After DEX price fetch and markup, lastPrice=${lastPrice}`);
-      if (!lastPrice || lastPrice === 0) {
+      if (!Number.isFinite(lastPrice) || lastPrice <= 0) {
         logger.warn('⚠️  No valid DEX price available after USD conversion, skipping');
         logger.debug('DEBUG: Early return due to invalid lastPrice');
         return;

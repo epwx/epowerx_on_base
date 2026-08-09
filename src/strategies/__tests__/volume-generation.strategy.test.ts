@@ -623,6 +623,21 @@ it('honors a lower configured target orders per side during cleanup', async () =
 jest.setTimeout(20000);
 
 describe('Order Placement Logic', () => {
+    it('should stop the cycle when the DEX price fetch returns an error sentinel', async () => {
+      const mockExchange = {
+        getTicker: jest.fn(),
+      };
+
+      jest.spyOn(require('../../utils/dex-price'), 'fetchEpwXPriceFromPancake').mockResolvedValue(-1);
+      const { VolumeGenerationStrategy } = require('../volume-generation.strategy');
+      const strategy = new VolumeGenerationStrategy(mockExchange);
+      (strategy as any).isRunning = true;
+
+      await (strategy as any).placeVolumeOrders();
+
+      expect(mockExchange.getTicker).not.toHaveBeenCalled();
+    });
+
       it('should EXECUTE real user SELL order even if MM USDT balance < $1000 and price is away from market', async () => {
         const mockExchange = {
           getBalances: jest.fn().mockResolvedValue([
