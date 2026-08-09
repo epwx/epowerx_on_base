@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 15:44 UTC.
+This is the handoff document for continuing work on `epwx-azbit-bot` in a new context window. It records the production safety state, deployed artifact differences, validation evidence, known issues, and next actions as of 2026-08-09 15:50 UTC.
 
 ## Executive Status
 
@@ -104,6 +104,11 @@ profile=azbit-extreme-shadow-liquidity
 mode=apply
 spread_percent=manual
 ```
+
+The decision-only cron recommendation is stored separately in
+`logs/azbit-profile-switch-dry-run-state.env`. At the latest sample it
+recommended `azbit-sell-only-recovery` for the `3210.927%` public spread, but
+did not alter `.env.azbit` or restart either process.
 
 Production cron remains decision-only:
 
