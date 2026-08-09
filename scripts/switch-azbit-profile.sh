@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILES_DIR="$ROOT_DIR/profiles/azbit"
 ENV_FILE="${AZBIT_ENV_FILE:-$ROOT_DIR/.env.azbit}"
 STATE_FILE="${AZBIT_PROFILE_STATE_FILE:-$ROOT_DIR/logs/azbit-profile-switch-state.env}"
+DRY_RUN_STATE_FILE="${AZBIT_PROFILE_DRY_RUN_STATE_FILE:-$ROOT_DIR/logs/azbit-profile-switch-dry-run-state.env}"
 CURSOR_FILE="${AZBIT_PROFILE_CURSOR_FILE:-$ROOT_DIR/logs/azbit-profile-switch-cursor.env}"
 START_SCRIPT="${AZBIT_START_SCRIPT:-$ROOT_DIR/scripts/start-azbit.sh}"
 TICKER_URL="${AZBIT_TICKER_URL:-https://data.azbit.com/api/tickers}"
@@ -204,12 +205,13 @@ write_cursor() {
 }
 
 write_state() {
-	local profile="$1"
-	local mode="$2"
-	local spread="$3"
+	local state_file="$1"
+	local profile="$2"
+	local mode="$3"
+	local spread="$4"
 	local temp_file
-	mkdir -p "$(dirname "$STATE_FILE")"
-	temp_file="$(mktemp "${STATE_FILE}.XXXXXX")"
+	mkdir -p "$(dirname "$state_file")"
+	temp_file="$(mktemp "${state_file}.XXXXXX")"
 	chmod 600 "$temp_file"
 	{
 		echo "last_decision_ts=$(date +%s)"
@@ -217,7 +219,7 @@ write_state() {
 		echo "mode=$mode"
 		echo "spread_percent=$spread"
 	} > "$temp_file"
-	mv "$temp_file" "$STATE_FILE"
+	mv "$temp_file" "$state_file"
 }
 
 apply_profile() {
@@ -242,7 +244,7 @@ auto_switch() {
 
 	read -r bid ask spread <<< "$(sample_public_spread)"
 	env_profile="$(current_profile_from_env)"
-	simulated_profile="$(get_env_value "$STATE_FILE" profile 2>/dev/null || true)"
+	simulated_profile="$(get_env_value "$DRY_RUN_STATE_FILE" profile 2>/dev/null || true)"
 	current_profile="$env_profile"
 	if [[ "$mode" == "dry-run" ]] && is_supported_profile "$simulated_profile"; then
 		current_profile="$simulated_profile"
@@ -277,7 +279,11 @@ auto_switch() {
 	else
 		log_info "[DRY-RUN] Would apply $target and restart epwx-azbit-bot through scripts/start-azbit.sh."
 	fi
-	write_state "$target" "$mode" "$spread"
+	if [[ "$mode" == "apply" ]]; then
+		write_state "$STATE_FILE" "$target" "$mode" "$spread"
+	else
+		write_state "$DRY_RUN_STATE_FILE" "$target" "$mode" "$spread"
+	fi
 	write_cursor "$target" 0 "$spread"
 }
 
@@ -286,7 +292,7 @@ manual_switch() {
 	local mode="$2"
 	if [[ "$mode" == "apply" ]]; then
 		apply_profile "$target" "manual selection"
-		write_state "$target" "$mode" "manual"
+		write_state "$STATE_FILE" "$target" "$mode" "manual"
 	else
 		log_info "[DRY-RUN] Would apply $target and restart epwx-azbit-bot through scripts/start-azbit.sh."
 	fi

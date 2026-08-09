@@ -170,8 +170,9 @@ Use an exchange-specific lock and log when installing observation cron:
 */2 * * * * flock -n /tmp/epwx-azbit-switch.lock bash -lc 'cd /mnt/volume1_nyc3_1778885684099/epowerx_on_base && scripts/switch-azbit-profile.sh --auto --dry-run >> logs/azbit-profile-switch.log 2>&1'
 ```
 
-Dry-run decisions are isolated in `logs/azbit-profile-switch-state.env` and
-`logs/azbit-profile-switch-cursor.env`. Do not replace `--dry-run` with
+Applied profile state remains in `logs/azbit-profile-switch-state.env`. Dry-run
+recommendations are isolated in `logs/azbit-profile-switch-dry-run-state.env`
+and `logs/azbit-profile-switch-cursor.env`. Do not replace `--dry-run` with
 `--apply` until Azbit order status, fill reconciliation, existing open orders,
 and a supervised writable canary have all been validated. Applied switches
 restart only through `scripts/start-azbit.sh`; they never export credentials or
