@@ -38,9 +38,18 @@ async function main() {
   logger.info(`[RUNTIME GIT SHA] ${RUNTIME_GIT_SHA}`);
 
   if (config.exchange.name === 'azbit' && config.azbitExchange.readOnly) {
-    logger.error('AZBIT_READ_ONLY=true. Trading loop is disabled to prevent accidental writes.');
-    logger.error('Run read-only diagnostics with npm run test:connection, then set AZBIT_READ_ONLY=false to trade.');
-    process.exit(1);
+    logger.warn('AZBIT_READ_ONLY=true. Trading loop is disabled; process will remain online for health monitoring.');
+    logger.info('Run read-only diagnostics with npm run test:connection, then set AZBIT_READ_ONLY=false to trade.');
+
+    const shutdownReadOnly = () => {
+      logger.info('Received shutdown signal in read-only mode.');
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdownReadOnly);
+    process.on('SIGTERM', shutdownReadOnly);
+    await new Promise<void>(() => undefined);
+    return;
   }
 
   const strategy = new VolumeGenerationStrategy();
