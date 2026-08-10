@@ -9,6 +9,14 @@ const getRequiredPositiveNumber = (key: string): number => {
   return value;
 };
 
+const getExpectedOpenOrderCount = (): number => {
+  const value = Number(process.env.AZBIT_CANARY_EXPECTED_OPEN_ORDERS || 0);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('AZBIT_CANARY_EXPECTED_OPEN_ORDERS must be a non-negative integer');
+  }
+  return value;
+};
+
 async function main(): Promise<void> {
   if (process.env.CONFIRM_AZBIT_SELL_CANARY !== 'true') {
     throw new Error('Refusing placement: set CONFIRM_AZBIT_SELL_CANARY=true');
@@ -26,6 +34,7 @@ async function main(): Promise<void> {
   const amount = getRequiredPositiveNumber('AZBIT_CANARY_AMOUNT_EPWX');
   const price = getRequiredPositiveNumber('AZBIT_CANARY_PRICE_USDT');
   const maxNotionalUsd = Number(process.env.AZBIT_CANARY_MAX_NOTIONAL_USD || 0.6);
+  const expectedOpenOrders = getExpectedOpenOrderCount();
   const notionalUsd = amount * price;
 
   if (!Number.isFinite(maxNotionalUsd) || maxNotionalUsd <= 0 || notionalUsd > maxNotionalUsd) {
@@ -37,8 +46,19 @@ async function main(): Promise<void> {
   const exchange = new AzbitExchangeService();
   const symbol = config.trading.pair;
   const existingOrders = await exchange.getOpenOrders(symbol);
-  if (existingOrders.length > 0) {
-    throw new Error(`Refusing placement: account already has ${existingOrders.length} open order(s)`);
+  if (existingOrders.length !== expectedOpenOrders) {
+    throw new Error(
+      `Refusing placement: expected ${expectedOpenOrders} open order(s), found ${existingOrders.length}`
+    );
+  }
+
+  const orderBook = await exchange.getOrderBook(symbol);
+  const bestBid = orderBook.bids[0]?.[0] ?? 0;
+  if (!Number.isFinite(bestBid) || bestBid <= 0) {
+    throw new Error('Refusing placement: live best bid is unavailable');
+  }
+  if (price <= bestBid) {
+    throw new Error(`Refusing placement: SELL price ${price} would cross best bid ${bestBid}`);
   }
 
   const order = await exchange.placeOrder(symbol, 'SELL', 'LIMIT', amount, price);
@@ -47,10 +67,16 @@ async function main(): Promise<void> {
 
   console.log(`Accepted Azbit SELL canary order ${order.orderId}`);
   console.log(`Requested amount=${amount} price=${price} notional=$${notionalUsd.toFixed(8)}`);
+  console.log(`Guarded against bestBid=${bestBid} expectedOpenOrders=${expectedOpenOrders}`);
   console.log(`Visible in open orders=${Boolean(visibleOrder)} totalOpenOrders=${openOrders.length}`);
 
   if (!visibleOrder) {
     throw new Error('Canary was accepted but is not visible in open orders; inspect private fills before retrying');
+  }
+  if (openOrders.length !== expectedOpenOrders + 1) {
+    throw new Error(
+      `Canary is visible but open-order count is ${openOrders.length}; expected ${expectedOpenOrders + 1}`
+    );
   }
 }
 
