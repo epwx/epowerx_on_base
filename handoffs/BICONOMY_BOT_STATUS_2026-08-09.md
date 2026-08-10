@@ -61,29 +61,27 @@ Do not enable BUY placement or self-trading without reviewing inventory, balance
 State file at capture:
 
 ```text
-profile=legit-market-making-sell-only-recovery
-reason=manual switch
+profile=legit-market-making-real-user
+reason=auto-switch: spread normalized below exit threshold
 ```
 
-Important profile values from `profiles/legit-market-making-sell-only-recovery.env`:
+The operator first switched to `legit-market-making-dislocated`, which seeded
+both sides and tightened the spread below the automatic `6%` exit threshold.
+Cron then selected `legit-market-making-real-user` as designed. Important
+active values are:
 
 ```env
-BUY_REACTIVATION_MODE=off
-FORCE_BUY_PAUSE=true
+BUY_REACTIVATION_MODE=auto
+FORCE_BUY_PAUSE=false
 DEX_PRICE_DISCOUNT_PERCENT=26
 SELF_TRADE_ENABLED=false
 SELF_TRADE_MODE=off
-MAX_DEX_CEX_DRIFT_PERCENT=45
-MAX_EXEC_SPREAD_PERCENT=600
-MAX_EXECUTABLE_SPREAD_CIRCUIT_BREAKER_PERCENT=220
+MAX_DEX_CEX_DRIFT_PERCENT=25
 TARGET_ORDERS_PER_SIDE=3
-TARGET_BUY_DEPTH_USD=0
-TARGET_SELL_DEPTH_USD=6
+TARGET_BUY_DEPTH_USD=24
+TARGET_SELL_DEPTH_USD=24
 ORDER_FREQUENCY=7000
-QUOTE_CHURN_REFRESH_PER_SIDE=2
-MAX_ORDER_AMOUNT_TOKENS=12000000000
-CANCEL_ORDERS_ON_START=true
-CANCEL_ORDERS_ON_STOP=false
+QUOTE_CHURN_REFRESH_PER_SIDE=1
 ```
 
 The profile uses the Base Chainlink ETH/USD feed and has a static fallback configured. The actual RPC URL remains secret in `.env`.
@@ -93,7 +91,7 @@ The profile uses the Base Chainlink ETH/USD feed and has a static fallback confi
 Production cron is live and can apply profile changes:
 
 ```cron
-*/2 * * * * cd /mnt/volume1_nyc3_1778885684099/epowerx_on_base && AUTO_SWITCH_USE_SELL_ONLY_RECOVERY=true AUTO_SWITCH_EXIT_DISLOCATED_SPREAD_PERCENT=6 AUTO_SWITCH_CONFIRM_CYCLES=3 /usr/bin/flock -n /tmp/epwx-switch.lock ./scripts/switch-profile.sh --auto >> /mnt/volume1_nyc3_1778885684099/epowerx_on_base/logs/profile-switch-cron.log 2>&1
+*/2 * * * * cd /mnt/volume1_nyc3_1778885684099/epowerx_on_base && AUTO_SWITCH_USE_SELL_ONLY_RECOVERY=false AUTO_SWITCH_EXIT_DISLOCATED_SPREAD_PERCENT=6 AUTO_SWITCH_CONFIRM_CYCLES=3 /usr/bin/flock -n /tmp/epwx-switch.lock ./scripts/switch-profile.sh --auto >> /mnt/volume1_nyc3_1778885684099/epowerx_on_base/logs/profile-switch-cron.log 2>&1
 ```
 
 Current behavior:
@@ -103,63 +101,67 @@ Current behavior:
 - Requires 3 confirming samples.
 - Enters dislocated handling at spread `>= 18%`.
 - Exits dislocated handling at spread `<= 6%`.
-- Sell-only recovery is enabled in the automatic path.
-- Recent samples were repeatedly `27.586%`.
-- Cron retained `legit-market-making-sell-only-recovery` and performed no switch.
+- Persistent stress now selects the two-sided `legit-market-making-dislocated`
+  profile instead of sell-only recovery.
+- A spread at or below `6%` selects `legit-market-making-real-user`.
+- Self-trading remains disabled in both profiles.
 
 Unlike the Azbit cron, this Biconomy cron is not dry-run. A confirmed profile change updates `.env` and restarts `epwx-bot`. Because `CANCEL_ORDERS_ON_START=true`, that restart cancels and reseeds open orders.
 
 ## Current Market Snapshot
 
-Read-only connection diagnostic at approximately 2026-08-09 10:56 UTC:
+Read-only connection diagnostic at approximately 2026-08-10 03:21 UTC:
 
-- Last price: `1.043e-10`
-- Best bid: `8.12e-11`
-- Best ask: `1.036e-10`
-- Executable spread: approximately `27.586%`
-- DEX EPWX price: approximately `8.4311e-11`
-- Discounted DEX reference at 26%: approximately `6.2390e-11`
-- DEX/CEX drift: approximately `32.48%`
-- Configured drift limit: `45%`
+- Best bid: `1.004e-10`
+- Best ask: `1.007e-10`
+- Executable spread: approximately `0.299%`
+- Discounted DEX reference at 26%: approximately `6.2313e-11`
+- DEX/CEX drift: approximately `38.03%`
+- Active normal-profile drift limit: `25%`
 
-The strategy considers the executable book too wide for direct book-mid anchoring and falls back to the Biconomy ticker mid around `9.24e-11` for placement calculations.
+The normal profile retains existing quotes but pauses additional BUY
+replenishment while drift remains above `25%`.
 
 ## Account and Orders
 
-Read-only connection diagnostic at approximately 2026-08-09 10:56 UTC:
+Read-only connection diagnostic at approximately 2026-08-10 03:21 UTC:
 
-- EPWX total: `1560605204728.5`
-- EPWX free: `1528531237290.5`
-- EPWX locked: `32073967438`
-- USDT total/free: `676.09202716`
-- USDT locked: `0`
-- Open orders: `3`
-- Recent trades returned by the diagnostic: none
+- EPWX total: `1582512618113.5`
+- EPWX free: `1532586998927.5`
+- EPWX locked: `49925619186`
+- USDT total: `673.88156915`
+- USDT free: `668.86156915`
+- USDT locked: `5.02`
+- Open orders: `4` (`2 BUY`, `2 SELL`)
 
-All three open orders were real SELL orders:
+The resting real orders were:
 
 ```text
-SELL 10680114185 EPWX @ 1.037e-10
-SELL 10679580259 EPWX @ 1.037e-10
-SELL 10714272994 EPWX @ 1.037e-10
+BUY  25000000000 EPWX @ 1.004e-10
+BUY  25000000000 EPWX @ 1.004e-10
+SELL 24975189997 EPWX @ 1.007e-10
+SELL 24950429189 EPWX @ 1.010e-10
 ```
 
-The sum of open SELL quantities matches the locked EPWX. No USDT is locked because BUY placement is paused.
+The initial two-sided seed also produced one reconciled external BUY fill:
+
+```text
+BUY 21907413385 EPWX
+USDT balance delta: -2.2105
+Estimated balance delta at mark: -$0.0077
+```
+
+The initial requested BUY was repriced to `1.037785e-10`, above the then-best
+ask `1.009e-10`, and filled immediately. Treat post-clamp non-crossing
+validation as a required follow-up before another reseed.
 
 ## Current Runtime Behavior
 
-Recent cycles showed:
-
-- Biconomy ticker and order book reads succeeding.
-- DEX pricing succeeding.
-- `0` BUY and `3` SELL open orders before and after cleanup.
-- Sell-side imbalance guard detecting `0/3` book imbalance.
-- Buy-side prioritization being suppressed by `FORCE_BUY_PAUSE=true`.
-- BUY placement also blocked by `BUY_REACTIVATION_MODE=off`.
-- Self-trading disabled by `SELF_TRADE_MODE=off`.
-- SELL target already satisfied, so no additional order was required.
-
-This is expected behavior for the current sell-only recovery profile.
+Recent cycles showed stable `2 BUY / 2 SELL` real orders and no further fills.
+The process is online, self-trading remains disabled, and the error log has not
+changed since 2026-08-07. BUY replenishment is currently blocked by the normal
+profile's `25%` drift gate; if spread again persists above `18%`, cron will use
+the two-sided dislocated profile rather than sell-only recovery.
 
 ## Persistent Accounting
 
