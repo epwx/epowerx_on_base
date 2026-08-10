@@ -84,25 +84,40 @@ used without both `AZBIT_READ_ONLY=true` and `AZBIT_SHADOW_MODE=true`.
 
 ## Real Account State
 
-Last independent forced non-shadow read-only diagnostic at approximately 2026-08-09 16:00 UTC:
+Last independent forced non-shadow read-only diagnostic at approximately 2026-08-10 02:28 UTC:
 
 - Azbit API connection: passed
-- Real open orders: `1`
+- Real open orders: `2`
 - USDT free: `50.21741963`
 - USDT locked: `0.00000000`
-- EPWX free: `988166730227.38085938`
-- EPWX locked: `550000000.00000000`
+- EPWX free: `983876730227.38085938`
+- EPWX locked: `4840000000.00000000`
 
-The real order is a supervised bona fide SELL canary:
+The real orders are supervised bona fide SELL canaries:
 
 - Order ID: `9b5118e0-3575-4a0f-91c3-16e40d1ebeef`
 - Amount: `550000000 EPWX`
 - Price: `9.998e-10 USDT`
 - Notional: approximately `$0.54989`
 - Status at verification: `NEW`
+- Order ID: `0d115d90-b6f3-433e-bb5a-3055cc5c8caf`
+- Amount: `4290000000 EPWX`
+- Price: `1.282e-10 USDT`
+- Notional: approximately `$0.549978`
+- Status at verification: `NEW`
 
-It was submitted by the guarded one-shot canary command, not the shadow PM2
-process. The PM2 process remains read-only and in shadow mode.
+They were submitted by the guarded one-shot canary command, not the shadow PM2
+process. The second placement required exactly one pre-existing open order and
+was rejected unless its price remained above the fresh live best bid. The PM2
+process remains read-only and in shadow mode.
+
+After the second order propagated, three consecutive strategy cycles reported:
+
+- Best bid: `3.02e-11 USDT`
+- Best ask: `1.282e-10 USDT`
+- Executable spread: `324.503%` (previously `3210.596%`)
+- DEX/CEX drift: `0.24%` (previously `84.65%`)
+- Both real orders remained `NEW`; no real fill was observed
 
 ## Profile Switching
 
@@ -272,4 +287,4 @@ env -i HOME="$HOME" USER="$USER" PATH="$PATH" NODE_ENV=production \
 3. Do not weaken the 650% spread breaker while the executable spread is above 3000%.
 4. Fix test runtime-state isolation so the complete strategy suite becomes deterministic.
 5. Commit the five intentional local code/profile changes plus this handoff document after review.
-6. Before any future writable canary, require explicit approval and re-verify `0` real open orders, balances, minimum quote amount, and cancellation behavior.
+6. Before any future writable canary, require explicit approval and an exact expected real-open-order count, then re-verify balances, minimum quote amount, a non-crossing live price, and cancellation behavior.
