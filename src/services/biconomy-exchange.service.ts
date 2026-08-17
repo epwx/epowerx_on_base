@@ -128,8 +128,8 @@ export class BiconomyExchangeService implements ExchangeService {
     return (normalizedValue / scale).toFixed(decimals);
   }
 
-  private quantizeEpwxPrice(value: number, decimals: number): string {
-    const effectiveStep = 0.00000000000030;
+  private quantizeEpwxPrice(value: number, decimals: number, tickSize?: string): string {
+    const effectiveStep = Number(tickSize) > 0 ? Number(tickSize) : 0.00000000000010;
     const effectiveAnchor = 0.00000000008210;
     const nearestStepCount = Math.max(0, Math.round((value - effectiveAnchor) / effectiveStep));
     const quantizedValue = effectiveAnchor + nearestStepCount * effectiveStep;
@@ -276,7 +276,7 @@ export class BiconomyExchangeService implements ExchangeService {
           const decimals = (pairInfo?.tickSize || '').includes('.')
             ? (pairInfo?.tickSize || '').split('.')[1].length
             : pairInfo?.quoteAssetPrecision ?? 13;
-          priceStr = this.quantizeEpwxPrice(price, decimals);
+          priceStr = this.quantizeEpwxPrice(price, decimals, pairInfo?.tickSize);
         }
       } else if (pairInfo) {
         const minQty = pairInfo.minQty ?? 5;
