@@ -1970,8 +1970,23 @@ describe('Wash trading logic', () => {
       'completed'
     );
 
-    expect(reconciled).toBe(false);
+    expect(reconciled).toBe('NO_FILL');
     expect(applyEconomicFill).not.toHaveBeenCalled();
+  });
+
+  it('should classify missing finished-order history as unresolved', async () => {
+    const strategy = new VolumeGenerationStrategy({
+      getFinishedOrder: jest.fn().mockResolvedValue(null),
+    } as any);
+
+    const resolution = await (strategy as any).reconcileCompletedOrderWithoutTrades(
+      'missing-order',
+      'SELL',
+      false,
+      'completed'
+    );
+
+    expect(resolution).toBe('UNRESOLVED');
   });
 });
 describe('MM account balance < $1000 order execution', () => {

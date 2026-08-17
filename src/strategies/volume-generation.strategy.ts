@@ -49,6 +49,7 @@ interface PersistentRuntimeState {
 type PlacementPriceSource = 'EXECUTABLE_BOOK_MID' | 'CEX_TICKER_MID' | 'DEX_FALLBACK';
 type BuyReactivationMode = 'off' | 'auto' | 'on';
 type SelfTradeMode = 'off' | 'on' | 'auto';
+type CompletedOrderResolution = 'FILLED' | 'NO_FILL' | 'UNRESOLVED';
 
 /**
  * Volume Generation Strategy
@@ -2585,7 +2586,7 @@ export class VolumeGenerationStrategy {
         }
       } else {
         const reconciled = await this.reconcileCompletedOrderWithoutTrades(orderId, side, isWashTrade, 'poll');
-        if (!reconciled) {
+        if (reconciled !== 'FILLED') {
           logger.info(`No fills detected for order ${orderId} (${side}) after 1s.`);
           await this.logNoFillDiagnostics(orderId, side);
         }
@@ -2824,7 +2825,13 @@ export class VolumeGenerationStrategy {
         if (!trackedOrderSide) {
           return false;
         }
-        return this.reconcileCompletedOrderWithoutTrades(orderId, trackedOrderSide, isWashTrade, 'completed');
+        const resolution = await this.reconcileCompletedOrderWithoutTrades(orderId, trackedOrderSide, isWashTrade, 'completed');
+        if (resolution === 'NO_FILL') {
+          logger.info(`📭 [ORDER-NO-FILL] ${orderId} completed without executed quantity.`);
+        } else if (resolution === 'UNRESOLVED') {
+          logger.warn(`❓ [ORDER-UNRESOLVED] ${orderId} could not be classified from exchange history.`);
+        }
+        return resolution === 'FILLED';
       }
 
       this.recordTrades(trades, orderId, isWashTrade, trackedOrderSide);
@@ -2852,21 +2859,24 @@ export class VolumeGenerationStrategy {
     side: 'BUY' | 'SELL',
     isWashTrade: boolean,
     source: 'poll' | 'completed'
-  ): Promise<boolean> {
+  ): Promise<CompletedOrderResolution> {
     if (this.pnlSettledOrderIds.has(orderId)) {
-      return true;
+      return 'FILLED';
     }
 
     if (this.reconcilingCompletedOrderIds.has(orderId)) {
-      return true;
+      return 'UNRESOLVED';
     }
 
     this.reconcilingCompletedOrderIds.add(orderId);
 
     try {
       const finishedOrder = await this.exchange.getFinishedOrder(this.symbol, orderId);
-      if (!finishedOrder || finishedOrder.filled <= 0) {
-        return false;
+      if (!finishedOrder) {
+        return 'UNRESOLVED';
+      }
+      if (finishedOrder.filled <= 0) {
+        return 'NO_FILL';
       }
 
       const fallbackPrice = this.orderPrices.get(orderId)?.price ?? 0;
@@ -2875,7 +2885,7 @@ export class VolumeGenerationStrategy {
         : fallbackPrice;
 
       if (!Number.isFinite(fillPrice) || fillPrice <= 0) {
-        return false;
+        return 'UNRESOLVED';
       }
 
       const filledAmount = finishedOrder.filled;
@@ -2905,7 +2915,7 @@ export class VolumeGenerationStrategy {
       }
 
       this.pnlSettledOrderIds.add(orderId);
-      return true;
+      return 'FILLED';
     } finally {
       this.reconcilingCompletedOrderIds.delete(orderId);
     }
