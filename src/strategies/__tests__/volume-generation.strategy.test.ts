@@ -2005,6 +2005,64 @@ describe('MM account balance < $1000 order execution', () => {
     console.log('mockExchange.placeOrder call count:', mockExchange.placeOrder.mock.calls.length);
     expect(mockExchange.placeOrder).toHaveBeenCalled();
   });
+
+  it('should reject a BUY that crosses an existing ask', async () => {
+    const mockExchange = {
+      getBalances: async () => [
+        { asset: 'EPWX', free: 1000 },
+        { asset: 'USDT', free: 500, locked: 0 }
+      ],
+      getTicker: async () => ({ price: 10 }),
+      getOpenOrders: jest.fn().mockResolvedValue([
+        { side: 'SELL', price: 9.99 }
+      ]),
+      placeOrder: jest.fn()
+    };
+    class CrossingBuyStrategy extends VolumeGenerationStrategy {
+      constructor() {
+        super(mockExchange as any);
+        (this as any).symbol = 'EPWXUSDT';
+        (this as any).isRunning = true;
+      }
+      public testPlaceBuyOrder(price: number, amount: number) {
+        return this.placeBuyOrder(price, amount, false);
+      }
+    }
+
+    const strategy = new CrossingBuyStrategy();
+    await strategy.testPlaceBuyOrder(10, 1);
+
+    expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+  });
+
+  it('should reject a SELL that crosses an existing bid', async () => {
+    const mockExchange = {
+      getBalances: async () => [
+        { asset: 'EPWX', free: 1000 },
+        { asset: 'USDT', free: 500, locked: 0 }
+      ],
+      getTicker: async () => ({ price: 10 }),
+      getOpenOrders: jest.fn().mockResolvedValue([
+        { side: 'BUY', price: 10.01 }
+      ]),
+      placeOrder: jest.fn()
+    };
+    class CrossingSellStrategy extends VolumeGenerationStrategy {
+      constructor() {
+        super(mockExchange as any);
+        (this as any).symbol = 'EPWXUSDT';
+        (this as any).isRunning = true;
+      }
+      public testPlaceSellOrder(price: number, amount: number) {
+        return this.placeSellOrder(price, amount, false);
+      }
+    }
+
+    const strategy = new CrossingSellStrategy();
+    await strategy.testPlaceSellOrder(10, 1);
+
+    expect(mockExchange.placeOrder).not.toHaveBeenCalled();
+  });
 });
 it('should handle floating-point precision and not miss the 500 USDT threshold', async () => {
   const strategy = new DepthStrategy();

@@ -1027,6 +1027,35 @@ export class VolumeGenerationStrategy {
     return adjustedPrice;
   }
 
+  private async wouldCrossOpenBook(side: 'BUY' | 'SELL', price: number): Promise<boolean> {
+    const exchangeWithOpenOrders = this.exchange as any;
+    if (typeof exchangeWithOpenOrders.getOpenOrders !== 'function') {
+      return false;
+    }
+
+    try {
+      const openOrders: Order[] = await exchangeWithOpenOrders.getOpenOrders(this.symbol);
+      const tick = this.getEffectiveTickSize();
+
+      if (side === 'BUY') {
+        const bestAsk = openOrders
+          .filter(order => order.side === 'SELL' && Number.isFinite(order.price))
+          .reduce((best, order) => Math.min(best, order.price), Number.POSITIVE_INFINITY);
+
+        return Number.isFinite(bestAsk) && price >= bestAsk - (tick / 2);
+      }
+
+      const bestBid = openOrders
+        .filter(order => order.side === 'BUY' && Number.isFinite(order.price))
+        .reduce((best, order) => Math.max(best, order.price), 0);
+
+      return bestBid > 0 && price <= bestBid + (tick / 2);
+    } catch (error) {
+      logger.warn(`⚠️  Skipping ${side} placement because the open book could not be verified before submission.`, error);
+      return true;
+    }
+  }
+
   private recalculateExecutableOrderAmount(
     side: 'BUY' | 'SELL',
     requestedPrice: number,
@@ -2342,6 +2371,11 @@ export class VolumeGenerationStrategy {
         );
       }
 
+      if (!isWashTrade && await this.wouldCrossOpenBook('BUY', price)) {
+        logger.warn(`🛑 Skipping BUY at ${price.toExponential(4)} because it would cross the open ask book.`);
+        return;
+      }
+
       const executableAmount = this.recalculateExecutableOrderAmount('BUY', requestedPrice, requestedAmount, price, availableUSDT, 0);
       if (executableAmount === null) {
         logger.warn(
@@ -2466,6 +2500,11 @@ export class VolumeGenerationStrategy {
       }
 
       price = await this.offsetSellPriceFromOpenLevels(price);
+
+      if (!isWashTrade && await this.wouldCrossOpenBook('SELL', price)) {
+        logger.warn(`🛑 Skipping SELL at ${price.toExponential(4)} because it would cross the open bid book.`);
+        return;
+      }
 
       if (this.isExtremeClampReprice(requestedPrice, price)) {
         logger.warn(
