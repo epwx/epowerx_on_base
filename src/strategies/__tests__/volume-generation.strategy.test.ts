@@ -1912,6 +1912,67 @@ describe('Wash trading logic', () => {
     expect(strategy.getVolumeStats().sellVolume).toBe(5);
     expect(strategy.getProfitStats().washTrades).toBe(1);
   });
+
+  it('should settle a trade-based fill only once across repeated polls', async () => {
+    const getRecentTrades = jest.fn()
+      .mockResolvedValueOnce([
+        { tradeId: 'real-trade-1', orderId: 'real-order-1', side: 'BUY', amount: 5, price: 1, timestamp: Date.now(), fee: 0 }
+      ])
+      .mockResolvedValueOnce([]);
+    const getFinishedOrder = jest.fn().mockResolvedValue({
+      orderId: 'real-order-1',
+      side: 'BUY',
+      price: 1,
+      amount: 5,
+      filled: 5,
+      status: 'FILLED',
+      timestamp: Date.now(),
+      fee: 0,
+    });
+    const strategy = new VolumeGenerationStrategy({
+      getRecentTrades,
+      getFinishedOrder,
+    } as any);
+
+    (strategy as any).symbol = 'EPWXUSDT';
+    (strategy as any).orderPrices.set('real-order-1', { side: 'BUY', price: 1 });
+    const applyEconomicFill = jest.spyOn(strategy as any, 'applyEconomicFill');
+
+    await (strategy as any).pollOrderFills('real-order-1', 'BUY', false);
+    await (strategy as any).pollOrderFills('real-order-1', 'BUY', false);
+
+    expect(applyEconomicFill).toHaveBeenCalledTimes(1);
+    expect(getFinishedOrder).not.toHaveBeenCalled();
+  });
+
+  it('should not classify a zero-filled finished order as a real fill', async () => {
+    const strategy = new VolumeGenerationStrategy({
+      getFinishedOrder: jest.fn().mockResolvedValue({
+        orderId: 'zero-fill-order',
+        side: 'BUY',
+        price: 1,
+        amount: 5,
+        filled: 0,
+        status: 'CANCELED',
+        timestamp: Date.now(),
+        fee: 0,
+      }),
+    } as any);
+
+    (strategy as any).symbol = 'EPWXUSDT';
+    (strategy as any).orderPrices.set('zero-fill-order', { side: 'BUY', price: 1 });
+    const applyEconomicFill = jest.spyOn(strategy as any, 'applyEconomicFill');
+
+    const reconciled = await (strategy as any).reconcileCompletedOrderWithoutTrades(
+      'zero-fill-order',
+      'BUY',
+      false,
+      'completed'
+    );
+
+    expect(reconciled).toBe(false);
+    expect(applyEconomicFill).not.toHaveBeenCalled();
+  });
 });
 describe('MM account balance < $1000 order execution', () => {
   class TestMMStrategy extends VolumeGenerationStrategy {

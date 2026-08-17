@@ -2576,6 +2576,7 @@ export class VolumeGenerationStrategy {
       const trades = await this.exchange.getRecentTrades(this.symbol, 10, orderId);
       if (trades && trades.length > 0) {
         this.recordTrades(trades, orderId, isWashTrade, side);
+        this.pnlSettledOrderIds.add(orderId);
         const filledAmount = trades.reduce((sum, trade) => sum + trade.amount, 0);
         const filledVolumeUSD = trades.reduce((sum, trade) => sum + trade.amount * trade.price, 0);
         this.applyPositionForFilledOrder(orderId, side, filledAmount);
