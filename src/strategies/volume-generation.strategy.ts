@@ -857,6 +857,32 @@ export class VolumeGenerationStrategy {
     return { priceReference: washPriceReference, source: 'DEX_FALLBACK' };
   }
 
+  private getDexAnchoredQuotePolicy(
+    dexPrice: number,
+    cexPrice: number
+  ): { allowBuys: boolean; allowSells: boolean; buyReference: number; sellReference: number } {
+    if (
+      !config.volumeStrategy.dexAnchoredQuotingEnabled ||
+      !Number.isFinite(dexPrice) ||
+      dexPrice <= 0 ||
+      !Number.isFinite(cexPrice) ||
+      cexPrice <= 0
+    ) {
+      return { allowBuys: true, allowSells: true, buyReference: cexPrice, sellReference: cexPrice };
+    }
+
+    const sellPremiumBps = Math.max(config.volumeStrategy.dexAnchoredSellMinPremiumBps, 0);
+    const buyDiscountBps = Math.max(config.volumeStrategy.dexAnchoredBuyMaxDiscountBps, 0);
+    const cexBelowDex = cexPrice < dexPrice;
+
+    return {
+      allowBuys: !cexBelowDex,
+      allowSells: cexBelowDex,
+      buyReference: dexPrice * (1 - buyDiscountBps / 10000),
+      sellReference: dexPrice * (1 + sellPremiumBps / 10000),
+    };
+  }
+
   private selectQuotePlacementDriftMode(
     placementPriceSource: PlacementPriceSource,
     hasValidBiconomyReference: boolean,
@@ -1551,6 +1577,13 @@ export class VolumeGenerationStrategy {
         return;
       }
 
+      const dexAnchoredQuotePolicy = this.getDexAnchoredQuotePolicy(washPriceReference, biconomyPrice);
+      if (config.volumeStrategy.dexAnchoredQuotingEnabled) {
+        logger.info(
+          `⚓ DEX-anchored policy: buys=${dexAnchoredQuotePolicy.allowBuys ? 'allowed' : 'blocked'} sells=${dexAnchoredQuotePolicy.allowSells ? 'allowed' : 'blocked'} buyRef=${dexAnchoredQuotePolicy.buyReference.toExponential(4)} sellRef=${dexAnchoredQuotePolicy.sellReference.toExponential(4)}`
+        );
+      }
+
       // Place and maintain the configured live-book targets for this deployment profile.
       const targetOrdersPerSide = this.getTargetOrdersPerSide();
       const targetBuyDepthUsd = this.getTargetBuyDepthUsd();
@@ -1577,6 +1610,20 @@ export class VolumeGenerationStrategy {
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
       let sellOrders = openOrders.filter(o => o.side === 'SELL');
       logger.info(`📊 [PRE-CLEANUP] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      if (config.volumeStrategy.dexAnchoredQuotingEnabled && dexAnchoredQuotePolicy.allowSells) {
+        const belowDexSells = sellOrders.filter(order => order.price < dexAnchoredQuotePolicy.sellReference);
+        for (const order of belowDexSells) {
+          logger.info(
+            `[DEX-ANCHOR] Cancelling SELL below anchor: ${order.orderId} @ ${order.price.toExponential(4)} < ${dexAnchoredQuotePolicy.sellReference.toExponential(4)}`
+          );
+          await this.exchange.cancelOrder(this.symbol, order.orderId);
+        }
+        if (belowDexSells.length > 0) {
+          openOrders = await this.exchange.getOpenOrders(this.symbol);
+          buyOrders = openOrders.filter(o => o.side === 'BUY');
+          sellOrders = openOrders.filter(o => o.side === 'SELL');
+        }
+      }
       if (buyOrders.length > targetOrdersPerSide) {
         // Sort by timestamp descending, keep newest 30
         const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
@@ -1715,7 +1762,9 @@ export class VolumeGenerationStrategy {
       const canPlaceBuysThisCycle =
         canPlaceReserveConstrainedBuys &&
         !forceBuyPause &&
-        buyReactivationGate.allowBuys;
+        buyReactivationGate.allowBuys &&
+        dexAnchoredQuotePolicy.allowBuys;
+      const canPlaceSellsThisCycle = dexAnchoredQuotePolicy.allowSells;
       const availableSellUsd = availableEPWX * priceReference;
       const baseBuySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
       const buySizingDecision = this.resolveAutoBuySizingDecision(
@@ -1855,7 +1904,10 @@ export class VolumeGenerationStrategy {
         );
 
         if (canPlaceBuysThisCycle && hasBuyPlacementBudget() && passiveTopTouchPrices) {
-          const buyTouchPrice = this.applyInventorySkewToQuotePrice(passiveTopTouchPrices.buyPrice);
+          const buyTouchAnchor = config.volumeStrategy.dexAnchoredQuotingEnabled
+            ? Math.min(passiveTopTouchPrices.buyPrice, dexAnchoredQuotePolicy.buyReference)
+            : passiveTopTouchPrices.buyPrice;
+          const buyTouchPrice = this.applyInventorySkewToQuotePrice(buyTouchAnchor);
           const buyTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const buyTouchRawAmount = buyTouchUsd / buyTouchPrice;
           const buyTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(buyTouchRawAmount, this.stepSize), buyTouchPrice, availableUSDT);
@@ -1869,10 +1921,12 @@ export class VolumeGenerationStrategy {
           }
         }
 
-        if (hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth && passiveTopTouchPrices) {
+        if (canPlaceSellsThisCycle && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth && passiveTopTouchPrices) {
           const sellTouchAnchorPrice = sellPlacementMode === 'EXCHANGE_BAND_FALLBACK'
             ? sellPlacementPriceReference
-            : passiveTopTouchPrices.sellPrice;
+            : (config.volumeStrategy.dexAnchoredQuotingEnabled
+              ? Math.max(passiveTopTouchPrices.sellPrice, dexAnchoredQuotePolicy.sellReference)
+              : passiveTopTouchPrices.sellPrice);
           const sellTouchPrice = this.applyInventorySkewToQuotePrice(sellTouchAnchorPrice);
           const sellTouchUsd = this.getDynamicOrderUsdTarget(topTouchBaseUsd);
           const sellTouchRawAmount = sellTouchUsd / sellTouchPrice;
@@ -1914,8 +1968,14 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      const { minBuyPrice, maxBuyPrice } = this.getPassiveQuoteBands(skewedPriceReference);
-      const { minSellPrice, maxSellPrice } = this.getPassiveQuoteBands(sellPlacementPriceReference);
+      const buyBandReference = config.volumeStrategy.dexAnchoredQuotingEnabled
+        ? dexAnchoredQuotePolicy.buyReference
+        : skewedPriceReference;
+      const sellBandReference = config.volumeStrategy.dexAnchoredQuotingEnabled
+        ? dexAnchoredQuotePolicy.sellReference
+        : sellPlacementPriceReference;
+      const { minBuyPrice, maxBuyPrice } = this.getPassiveQuoteBands(buyBandReference);
+      const { minSellPrice, maxSellPrice } = this.getPassiveQuoteBands(sellBandReference);
       const buyBandLabel = `${((minBuyPrice / skewedPriceReference) * 100).toFixed(2)}%-${((maxBuyPrice / skewedPriceReference) * 100).toFixed(2)}%`;
       const sellBandLabel = `${((minSellPrice / sellPlacementPriceReference) * 100).toFixed(2)}%-${((maxSellPrice / sellPlacementPriceReference) * 100).toFixed(2)}%`;
 
@@ -1983,7 +2043,7 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      if (sellDepthShortfall > 0 && !shouldPrioritizeBuysForDepth) {
+      if (sellDepthShortfall > 0 && canPlaceSellsThisCycle && !shouldPrioritizeBuysForDepth) {
         if (sellPlacementMode === 'EXCHANGE_BAND_FALLBACK') {
           logger.info(
             `🔁 Using exchange-band fallback sell pricing this cycle to keep sell depth building inside the latest-price band.`
@@ -2063,7 +2123,7 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
+      if (sellOrders.length < targetOrdersPerSide && canPlaceSellsThisCycle && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
         const needSells = targetOrdersPerSide - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;

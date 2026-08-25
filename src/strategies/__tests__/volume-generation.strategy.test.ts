@@ -2507,6 +2507,48 @@ describe('Placement price anchor selection', () => {
       source: 'DEX_FALLBACK'
     });
   });
+
+  it('allows only DEX-premium sells when CEX is below DEX', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+    const config = require('../../config').config;
+    const originalEnabled = config.volumeStrategy.dexAnchoredQuotingEnabled;
+    const originalSellPremium = config.volumeStrategy.dexAnchoredSellMinPremiumBps;
+
+    try {
+      config.volumeStrategy.dexAnchoredQuotingEnabled = true;
+      config.volumeStrategy.dexAnchoredSellMinPremiumBps = 100;
+
+      const result = (strategy as any).getDexAnchoredQuotePolicy(1.269e-10, 1.181e-10);
+
+      expect(result.allowBuys).toBe(false);
+      expect(result.allowSells).toBe(true);
+      expect(result.sellReference).toBeCloseTo(1.28169e-10, 20);
+    } finally {
+      config.volumeStrategy.dexAnchoredQuotingEnabled = originalEnabled;
+      config.volumeStrategy.dexAnchoredSellMinPremiumBps = originalSellPremium;
+    }
+  });
+
+  it('allows only DEX-discounted buys when CEX is above DEX', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+    const config = require('../../config').config;
+    const originalEnabled = config.volumeStrategy.dexAnchoredQuotingEnabled;
+    const originalBuyDiscount = config.volumeStrategy.dexAnchoredBuyMaxDiscountBps;
+
+    try {
+      config.volumeStrategy.dexAnchoredQuotingEnabled = true;
+      config.volumeStrategy.dexAnchoredBuyMaxDiscountBps = 100;
+
+      const result = (strategy as any).getDexAnchoredQuotePolicy(1.269e-10, 1.35e-10);
+
+      expect(result.allowBuys).toBe(true);
+      expect(result.allowSells).toBe(false);
+      expect(result.buyReference).toBeCloseTo(1.25631e-10, 20);
+    } finally {
+      config.volumeStrategy.dexAnchoredQuotingEnabled = originalEnabled;
+      config.volumeStrategy.dexAnchoredBuyMaxDiscountBps = originalBuyDiscount;
+    }
+  });
 });
 
 describe('Passive top-touch selection', () => {

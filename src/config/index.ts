@@ -91,6 +91,9 @@ interface Config {
     sellNearBidMinMarkupBps: number;
     latestPriceBandHalfWidthPercent: number;
     dexPriceDiscountPercent: number;
+    dexAnchoredQuotingEnabled: boolean;
+    dexAnchoredSellMinPremiumBps: number;
+    dexAnchoredBuyMaxDiscountBps: number;
   };
 
   marketMaking: {
@@ -317,6 +320,9 @@ export const config: Config = {
     sellNearBidTicks: getEnvNumber('SELL_NEAR_BID_TICKS', 1),
     sellNearBidMinMarkupBps: getEnvNumber('SELL_NEAR_BID_MIN_MARKUP_BPS', 1),
     latestPriceBandHalfWidthPercent: getEnvNumber('LATEST_PRICE_BAND_HALF_WIDTH_PERCENT', 0.5),
+    dexAnchoredQuotingEnabled: getEnvBoolean('DEX_ANCHORED_QUOTING_ENABLED', false),
+    dexAnchoredSellMinPremiumBps: getEnvNumber('DEX_ANCHORED_SELL_MIN_PREMIUM_BPS', 100),
+    dexAnchoredBuyMaxDiscountBps: getEnvNumber('DEX_ANCHORED_BUY_MAX_DISCOUNT_BPS', 100),
   },
 
   marketMaking: {

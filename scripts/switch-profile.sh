@@ -14,6 +14,8 @@ CURSOR_FILE="${CURSOR_FILE:-$ROOT_DIR/logs/profile-switch-cursor.env}"
 PROFILE_REAL_USER="legit-market-making-real-user"
 PROFILE_DISLOCATED="legit-market-making-dislocated"
 PROFILE_SELL_ONLY="legit-market-making-sell-only-recovery"
+PROFILE_COMPLIANCE="legit-market-making-biconomy-compliance"
+PROFILE_DEX_ANCHORED="legit-market-making-dex-anchored"
 AUTO_SWITCH_USE_SELL_ONLY_RECOVERY="${AUTO_SWITCH_USE_SELL_ONLY_RECOVERY:-false}"
 
 ENTER_DISLOCATED_SPREAD="${AUTO_SWITCH_ENTER_DISLOCATED_SPREAD_PERCENT:-18}"
@@ -37,6 +39,8 @@ Profiles:
 	legit-market-making-real-user
 	legit-market-making-dislocated
 	legit-market-making-sell-only-recovery
+	legit-market-making-biconomy-compliance
+	legit-market-making-dex-anchored
 
 Auto mode:
 	- Switches to dislocated profile when last N spreads are all >= ENTER threshold.
@@ -107,9 +111,13 @@ current_profile_from_env() {
 	local real_user_file
 	local dislocated_file
 	local sell_only_file
+	local compliance_file
+	local dex_anchored_file
 	real_user_file="$(profile_file "$PROFILE_REAL_USER")"
 	dislocated_file="$(profile_file "$PROFILE_DISLOCATED")"
 	sell_only_file="$(profile_file "$PROFILE_SELL_ONLY")"
+	compliance_file="$(profile_file "$PROFILE_COMPLIANCE")"
+	dex_anchored_file="$(profile_file "$PROFILE_DEX_ANCHORED")"
 
 	if profile_matches_env "$real_user_file"; then
 		echo "$PROFILE_REAL_USER"
@@ -123,6 +131,16 @@ current_profile_from_env() {
 
 	if profile_matches_env "$sell_only_file"; then
 		echo "$PROFILE_SELL_ONLY"
+		return
+	fi
+
+	if profile_matches_env "$compliance_file"; then
+		echo "$PROFILE_COMPLIANCE"
+		return
+	fi
+
+	if profile_matches_env "$dex_anchored_file"; then
+		echo "$PROFILE_DEX_ANCHORED"
 		return
 	fi
 
@@ -228,12 +246,39 @@ merge_env_files() {
 	' "$base_file" "$override_file" > "$out_file"
 }
 
+validate_compliance_profile_ready() {
+	local target_profile="$1"
+	if [[ "$target_profile" != "$PROFILE_COMPLIANCE" ]]; then
+		return 0
+	fi
+
+	if ! command -v npx >/dev/null 2>&1; then
+		log_error "npx is required to validate the Biconomy compliance profile."
+		return 1
+	fi
+
+	log_info "Validating live market against Biconomy liquidity requirements before enabling compliance profile..."
+	(
+		cd "$ROOT_DIR"
+		npx ts-node src/scripts/check-biconomy-compliance.ts
+	) || {
+		log_error "Compliance profile switch blocked: live market does not satisfy Biconomy liquidity requirements."
+		return 1
+	}
+
+	return 0
+}
+
 switch_profile() {
 	local target_profile="$1"
 	local reason="$2"
 	local target_file
 	target_file="$(profile_file "$target_profile")"
 	ensure_file_exists "$target_file"
+
+	if ! validate_compliance_profile_ready "$target_profile"; then
+		return 1
+	fi
 
 	if [[ -f "$BASE_ENV_FILE" ]]; then
 		merge_env_files "$BASE_ENV_FILE" "$target_file" "$ENV_FILE"
@@ -376,6 +421,7 @@ main() {
 	ensure_file_exists "$(profile_file "$PROFILE_REAL_USER")"
 	ensure_file_exists "$(profile_file "$PROFILE_DISLOCATED")"
 	ensure_file_exists "$(profile_file "$PROFILE_SELL_ONLY")"
+	ensure_file_exists "$(profile_file "$PROFILE_DEX_ANCHORED")"
 
 	if [[ "$1" == "--auto" ]]; then
 		local dry_run="false"
@@ -392,13 +438,15 @@ main() {
 	fi
 
 	local target_profile="$1"
-	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" && "$target_profile" != "$PROFILE_SELL_ONLY" ]]; then
+	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" && "$target_profile" != "$PROFILE_SELL_ONLY" && "$target_profile" != "$PROFILE_COMPLIANCE" && "$target_profile" != "$PROFILE_DEX_ANCHORED" ]]; then
 		log_error "Unsupported profile: $target_profile"
 		usage
 		exit 1
 	fi
 
-	switch_profile "$target_profile" "manual switch"
+	if ! switch_profile "$target_profile" "manual switch"; then
+		exit 1
+	fi
 }
 
 main "$@"
