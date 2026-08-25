@@ -2544,6 +2544,15 @@ export class VolumeGenerationStrategy {
   ): Promise<string | void> {
     try {
       const referencePrice = price; // Save original reference before any adjustments
+
+      if (
+        config.volumeStrategy.dexAnchoredQuotingEnabled &&
+        !isWashTrade &&
+        (!Number.isFinite(minPriceAnchor) || minPriceAnchor! <= 0)
+      ) {
+        logger.warn('⚓ Skipping unanchored SELL: DEX-anchored mode requires a valid DEX sell floor.');
+        return;
+      }
       
       // EMERGENCY SHORT POSITION BRAKE: Refuse sells if position is dangerously short
       const maxShortPosition = -config.marketMaking.maxPositionSize * 0.9; // Allow 90% of max as short
