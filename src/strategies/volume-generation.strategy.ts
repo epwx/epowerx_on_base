@@ -1938,7 +1938,12 @@ export class VolumeGenerationStrategy {
           const sellTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(sellTouchRawAmount, this.stepSize), sellTouchPrice, availableSellUsd);
           if (sellTouchAmount !== null && this.isValidOrderAmount(sellTouchAmount, sellTouchPrice)) {
             logger.info(`🎯 Placing passive top-touch SELL: ${sellTouchAmount} EPWX @ ${sellTouchPrice.toExponential(4)} (bestAsk)`);
-            const topTouchSellOrderId = await this.placeSellOrder(sellTouchPrice, sellTouchAmount);
+            const topTouchSellOrderId = await this.placeSellOrder(
+              sellTouchPrice,
+              sellTouchAmount,
+              false,
+              config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.sellReference : undefined
+            );
             if (topTouchSellOrderId) {
               placementsThisCycle++;
               sellPlacementsThisCycle++;
@@ -2088,7 +2093,12 @@ export class VolumeGenerationStrategy {
             break;
           }
           logger.info(`🔴 Placing depth sell order: ${sellOrderAmount} EPWX @ ${sellPrice.toExponential(4)} (${sellBandLabel} of Mid-Price)`);
-          const sellOrderId = await this.placeSellOrder(sellPrice, sellOrderAmount);
+          const sellOrderId = await this.placeSellOrder(
+            sellPrice,
+            sellOrderAmount,
+            false,
+            config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.sellReference : undefined
+          );
           if (!sellOrderId) {
             break;
           }
@@ -2165,7 +2175,12 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needSells}] Placing book-depth sell order: ${bookSellAmount} EPWX @ ${sellPrice.toExponential(4)} [Book Depth]`);
-          const bookSellOrderId = await this.placeSellOrder(sellPrice, bookSellAmount);
+          const bookSellOrderId = await this.placeSellOrder(
+            sellPrice,
+            bookSellAmount,
+            false,
+            config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.sellReference : undefined
+          );
           if (!bookSellOrderId) {
             break;
           }
@@ -2521,7 +2536,12 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  protected async placeSellOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeSellOrder(
+    price: number,
+    amount: number,
+    isWashTrade: boolean = false,
+    minPriceAnchor?: number
+  ): Promise<string | void> {
     try {
       const referencePrice = price; // Save original reference before any adjustments
       
@@ -2585,6 +2605,13 @@ export class VolumeGenerationStrategy {
           `⚠️  Clamping sell price from ${price.toExponential(4)} to ${clampedPrice.toExponential(4)} to stay within the latest-price band`
         );
         price = clampedPrice;
+      }
+
+      if (!isWashTrade && Number.isFinite(minPriceAnchor) && minPriceAnchor! > 0 && price < minPriceAnchor!) {
+        logger.info(
+          `⚓ Raising sell price to DEX anchor: ${price.toExponential(4)} -> ${minPriceAnchor!.toExponential(4)}`
+        );
+        price = minPriceAnchor!;
       }
 
       price = await this.offsetSellPriceFromOpenLevels(price);
