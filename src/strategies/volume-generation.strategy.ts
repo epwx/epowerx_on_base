@@ -1913,7 +1913,12 @@ export class VolumeGenerationStrategy {
           const buyTouchAmount = this.normalizeOrderAmount(quantizeToStepSize(buyTouchRawAmount, this.stepSize), buyTouchPrice, availableUSDT);
           if (buyTouchAmount !== null && this.isValidOrderAmount(buyTouchAmount, buyTouchPrice)) {
             logger.info(`🎯 Placing passive top-touch BUY: ${buyTouchAmount} EPWX @ ${buyTouchPrice.toExponential(4)} (bestBid)`);
-            const topTouchBuyOrderId = await this.placeBuyOrder(buyTouchPrice, buyTouchAmount);
+            const topTouchBuyOrderId = await this.placeBuyOrder(
+              buyTouchPrice,
+              buyTouchAmount,
+              false,
+              config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.buyReference : undefined
+            );
             if (topTouchBuyOrderId) {
               placementsThisCycle++;
               buyPlacementsThisCycle++;
@@ -2023,7 +2028,12 @@ export class VolumeGenerationStrategy {
             break;
           }
           logger.info(`🟢 Placing depth buy order: ${buyOrderAmount} EPWX @ ${buyPrice.toExponential(4)} (${buyBandLabel} of Mid-Price)`);
-          const buyOrderId = await this.placeBuyOrder(buyPrice, buyOrderAmount);
+          const buyOrderId = await this.placeBuyOrder(
+            buyPrice,
+            buyOrderAmount,
+            false,
+            config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.buyReference : undefined
+          );
           if (!buyOrderId) {
             break;
           }
@@ -2114,7 +2124,12 @@ export class VolumeGenerationStrategy {
             continue;
           }
           logger.info(`[${i+1}/${needBuys}] Placing book-depth buy order: ${bookBuyAmount} EPWX @ ${buyPrice.toExponential(4)} [Book Depth]`);
-          const bookBuyOrderId = await this.placeBuyOrder(buyPrice, bookBuyAmount);
+          const bookBuyOrderId = await this.placeBuyOrder(
+            buyPrice,
+            bookBuyAmount,
+            false,
+            config.volumeStrategy.dexAnchoredQuotingEnabled ? dexAnchoredQuotePolicy.buyReference : undefined
+          );
           if (!bookBuyOrderId) {
             break;
           }
@@ -2393,7 +2408,12 @@ export class VolumeGenerationStrategy {
     }
   }
 
-  protected async placeBuyOrder(price: number, amount: number, isWashTrade: boolean = false): Promise<string | void> {
+  protected async placeBuyOrder(
+    price: number,
+    amount: number,
+    isWashTrade: boolean = false,
+    maxPriceAnchor?: number
+  ): Promise<string | void> {
     try {
       if (this.getForceBuyPause()) {
         logger.info('⏭️  Skipping buy order: FORCE_BUY_PAUSE=true.');
@@ -2430,6 +2450,13 @@ export class VolumeGenerationStrategy {
         logger.warn(
           `⚠️  Buy price would extreme-clamp from ${requestedPrice.toExponential(4)} to ${price.toExponential(4)}; using exchange-band fallback buy pricing this cycle.`
         );
+      }
+
+      if (!isWashTrade && Number.isFinite(maxPriceAnchor) && maxPriceAnchor! > 0 && price > maxPriceAnchor!) {
+        logger.info(
+          `⚓ Capping buy price at DEX anchor: ${price.toExponential(4)} -> ${maxPriceAnchor!.toExponential(4)}`
+        );
+        price = maxPriceAnchor!;
       }
 
       if (!isWashTrade && await this.wouldCrossOpenBook('BUY', price)) {
