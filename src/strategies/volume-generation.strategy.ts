@@ -877,7 +877,7 @@ export class VolumeGenerationStrategy {
 
     return {
       allowBuys: !cexBelowDex,
-      allowSells: cexBelowDex,
+      allowSells: true,
       buyReference: dexPrice * (1 - buyDiscountBps / 10000),
       sellReference: dexPrice * (1 + sellPremiumBps / 10000),
     };

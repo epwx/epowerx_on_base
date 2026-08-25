@@ -2529,7 +2529,7 @@ describe('Placement price anchor selection', () => {
     }
   });
 
-  it('allows only DEX-discounted buys when CEX is above DEX', () => {
+  it('allows DEX-premium sells and DEX-discounted buys when CEX is above DEX', () => {
     const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
     const config = require('../../config').config;
     const originalEnabled = config.volumeStrategy.dexAnchoredQuotingEnabled;
@@ -2542,8 +2542,9 @@ describe('Placement price anchor selection', () => {
       const result = (strategy as any).getDexAnchoredQuotePolicy(1.269e-10, 1.35e-10);
 
       expect(result.allowBuys).toBe(true);
-      expect(result.allowSells).toBe(false);
+      expect(result.allowSells).toBe(true);
       expect(result.buyReference).toBeCloseTo(1.25631e-10, 20);
+      expect(result.sellReference).toBeCloseTo(1.28169e-10, 20);
     } finally {
       config.volumeStrategy.dexAnchoredQuotingEnabled = originalEnabled;
       config.volumeStrategy.dexAnchoredBuyMaxDiscountBps = originalBuyDiscount;
