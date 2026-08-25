@@ -408,6 +408,11 @@ auto_switch() {
 		return
 	fi
 
+	if [[ "$current_profile" == "$PROFILE_DEX_ANCHORED" ]]; then
+		log_info "No switch: DEX-anchored profile is manual-only and retained."
+		return
+	fi
+
 	log_warn "Current .env does not exactly match known legit profiles; no auto-switch performed."
 }
 
