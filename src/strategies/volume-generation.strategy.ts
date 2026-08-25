@@ -2135,7 +2135,7 @@ export class VolumeGenerationStrategy {
             break;
           }
 
-          const sellPrice = this.getPassiveSeededQuotePrice(sellPlacementPriceReference, 'SELL', i);
+          const sellPrice = this.getPassiveSeededQuotePrice(sellBandReference, 'SELL', i);
           const sellOrderUsdTarget = this.getDynamicOrderUsdTarget(sellSafeOrderSizeUSD);
           let rawAmount = sellOrderUsdTarget / sellPrice;
           let amount = quantizeToStepSize(rawAmount, this.stepSize);
