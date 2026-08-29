@@ -1923,9 +1923,17 @@ export class VolumeGenerationStrategy {
       }
 
       const shouldFreezeSellPlacementsBecauseNoSellTarget = targetSellDepthUsd <= 0 && !canPlaceBuysThisCycle;
+      const allowDexAnchoredSellOnlyQuotes =
+        config.volumeStrategy.allowDexAnchoredSellsWhenBuysGated &&
+        config.volumeStrategy.dexAnchoredQuotingEnabled &&
+        dexAnchoredQuotePolicy.allowSells;
       const shouldFreezeSellPlacements =
         shouldFreezeSellPlacementsBecauseNoSellTarget ||
-        buyBlockedByMarketQualityGate;
+        (buyBlockedByMarketQualityGate && !allowDexAnchoredSellOnlyQuotes);
+
+      if (buyBlockedByMarketQualityGate && allowDexAnchoredSellOnlyQuotes) {
+        logger.info('⚓ Retaining DEX-anchored sells while the buy market-quality gate is blocked.');
+      }
 
       if (shouldFreezeSellPlacements) {
         const sellFreezeReason = shouldFreezeSellPlacementsBecauseNoSellTarget

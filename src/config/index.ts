@@ -103,6 +103,7 @@ interface Config {
     dexAnchoredQuotingEnabled: boolean;
     dexAnchoredSellMinPremiumBps: number;
     dexAnchoredBuyMaxDiscountBps: number;
+    allowDexAnchoredSellsWhenBuysGated: boolean;
   };
 
   marketMaking: {
@@ -338,6 +339,7 @@ export const config: Config = {
     dexAnchoredQuotingEnabled: getEnvBoolean('DEX_ANCHORED_QUOTING_ENABLED', false),
     dexAnchoredSellMinPremiumBps: getEnvNumber('DEX_ANCHORED_SELL_MIN_PREMIUM_BPS', 100),
     dexAnchoredBuyMaxDiscountBps: getEnvNumber('DEX_ANCHORED_BUY_MAX_DISCOUNT_BPS', 100),
+    allowDexAnchoredSellsWhenBuysGated: getEnvBoolean('ALLOW_DEX_ANCHORED_SELLS_WHEN_BUYS_GATED', false),
   },
 
   marketMaking: {
