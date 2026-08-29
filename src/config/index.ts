@@ -1,6 +1,9 @@
 import dotenv from 'dotenv';
 
-dotenv.config({ path: process.env.ENV_FILE || '.env' });
+dotenv.config({
+  path: process.env.ENV_FILE || '.env',
+  override: process.env.NODE_ENV !== 'test',
+});
 
 interface Config {
   exchange: {
