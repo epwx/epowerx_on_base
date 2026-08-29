@@ -258,8 +258,12 @@ export class VolumeGenerationStrategy {
       (this.profitStats.realizedPnl / Math.max(runtimeHours, 0.01)) * 24;
   }
 
-  private getTargetOrdersPerSide(): number {
-    return Math.max(1, Math.floor(config.volumeStrategy.targetOrdersPerSide));
+  private getTargetBuyOrders(): number {
+    return Math.max(1, Math.floor(config.volumeStrategy.targetBuyOrders));
+  }
+
+  private getTargetSellOrders(): number {
+    return Math.max(1, Math.floor(config.volumeStrategy.targetSellOrders));
   }
 
   private getTargetBuyDepthUsd(): number {
@@ -1585,12 +1589,13 @@ export class VolumeGenerationStrategy {
       }
 
       // Place and maintain the configured live-book targets for this deployment profile.
-      const targetOrdersPerSide = this.getTargetOrdersPerSide();
+      const targetBuyOrders = this.getTargetBuyOrders();
+      const targetSellOrders = this.getTargetSellOrders();
       const targetBuyDepthUsd = this.getTargetBuyDepthUsd();
       const targetSellDepthUsd = this.getTargetSellDepthUsd();
       const maxPlacementsPerCycle = Math.max(
         2,
-        Math.min(targetOrdersPerSide, Math.floor(config.volumeStrategy.orderFrequency / 4000))
+        Math.min(Math.max(targetBuyOrders, targetSellOrders), Math.floor(config.volumeStrategy.orderFrequency / 4000))
       );
       const configuredWashReservedPlacements = Math.max(
         0,
@@ -1609,7 +1614,7 @@ export class VolumeGenerationStrategy {
       let openOrders = await this.exchange.getOpenOrders(this.symbol);
       let buyOrders = openOrders.filter(o => o.side === 'BUY');
       let sellOrders = openOrders.filter(o => o.side === 'SELL');
-      logger.info(`📊 [PRE-CLEANUP] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      logger.info(`📊 [PRE-CLEANUP] Current orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetBuyOrders} buys/${targetSellOrders} sells)`);
       if (config.volumeStrategy.dexAnchoredQuotingEnabled && dexAnchoredQuotePolicy.allowSells) {
         const belowDexSells = sellOrders.filter(order => order.price < dexAnchoredQuotePolicy.sellReference);
         for (const order of belowDexSells) {
@@ -1624,19 +1629,19 @@ export class VolumeGenerationStrategy {
           sellOrders = openOrders.filter(o => o.side === 'SELL');
         }
       }
-      if (buyOrders.length > targetOrdersPerSide) {
+      if (buyOrders.length > targetBuyOrders) {
         // Sort by timestamp descending, keep newest 30
         const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
+        const excessBuyOrders = sortedBuys.slice(targetBuyOrders);
         for (const order of excessBuyOrders) {
           logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
           cleanupCancelledCount++;
         }
       }
-      if (sellOrders.length > targetOrdersPerSide) {
+      if (sellOrders.length > targetSellOrders) {
         const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessSellOrders = sortedSells.slice(targetOrdersPerSide);
+        const excessSellOrders = sortedSells.slice(targetSellOrders);
         for (const order of excessSellOrders) {
           logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
@@ -1647,9 +1652,9 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
-      logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetOrdersPerSide} each)`);
+      logger.info(`📊 [POST-CLEANUP] Orders: ${buyOrders.length} buys, ${sellOrders.length} sells (target: ${targetBuyOrders} buys/${targetSellOrders} sells)`);
 
-      const bookAlreadyFull = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+      const bookAlreadyFull = buyOrders.length >= targetBuyOrders && sellOrders.length >= targetSellOrders;
       if (bookAlreadyFull && cleanupCancelledCount === 0) {
         const configuredRefreshPerSide = Math.max(
           Math.floor(config.volumeStrategy.quoteChurnRefreshPerSide),
@@ -1684,8 +1689,8 @@ export class VolumeGenerationStrategy {
         }
       }
 
-      const missingBuyOrders = Math.max(targetOrdersPerSide - buyOrders.length, 0);
-      const missingSellOrders = Math.max(targetOrdersPerSide - sellOrders.length, 0);
+      const missingBuyOrders = Math.max(targetBuyOrders - buyOrders.length, 0);
+      const missingSellOrders = Math.max(targetSellOrders - sellOrders.length, 0);
       const missingTotalOrders = missingBuyOrders + missingSellOrders;
       let buyPlacementCap = missingBuyOrders > 0 ? bookPlacementBudget : 0;
       let sellPlacementCap = missingSellOrders > 0 ? bookPlacementBudget : 0;
@@ -1766,7 +1771,7 @@ export class VolumeGenerationStrategy {
         dexAnchoredQuotePolicy.allowBuys;
       const canPlaceSellsThisCycle = dexAnchoredQuotePolicy.allowSells;
       const availableSellUsd = availableEPWX * priceReference;
-      const baseBuySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetOrdersPerSide, this.getBalanceUtilizationPercent());
+      const baseBuySafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableUSDT, targetBuyOrders, this.getBalanceUtilizationPercent());
       const buySizingDecision = this.resolveAutoBuySizingDecision(
         buyReactivationMode,
         buyReactivationGate,
@@ -1775,7 +1780,7 @@ export class VolumeGenerationStrategy {
       const buySafeOrderSizeUSD = canPlaceBuysThisCycle
         ? Math.max(this.getMinimumOrderUsdTarget(), baseBuySafeOrderSizeUSD * buySizingDecision.multiplier)
         : baseBuySafeOrderSizeUSD;
-      const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetOrdersPerSide, this.getBalanceUtilizationPercent());
+      const sellSafeOrderSizeUSD = this.getBalanceAwareOrderUsdTarget(availableSellUsd, targetSellOrders, this.getBalanceUtilizationPercent());
       const washOrderSizeCapUsd = Math.max(config.volumeStrategy.washOrderSizeCapUsd, this.getMinimumOrderUsdTarget());
       const washSafeOrderSizeUSD = Math.min(
         Math.min(buySafeOrderSizeUSD, sellSafeOrderSizeUSD),
@@ -2016,7 +2021,7 @@ export class VolumeGenerationStrategy {
         // Place as many orders as needed to fill the gap, using safe order size
         let remaining = buyDepthShortfall;
         let supportBuysPlaced = 0;
-        const maxSupportBuys = Math.max(targetOrdersPerSide - buyOrders.length, 0);
+        const maxSupportBuys = Math.max(targetBuyOrders - buyOrders.length, 0);
         while (remaining > 0 && supportBuysPlaced < maxSupportBuys && hasBuyPlacementBudget()) {
           const buyPrice = minBuyPrice + ((maxBuyPrice - minBuyPrice) * Math.random());
           const targetOrderUsd = this.getDynamicOrderUsdTarget(buySafeOrderSizeUSD, remaining);
@@ -2067,7 +2072,7 @@ export class VolumeGenerationStrategy {
         logger.info(`🔴 Need to add $${sellDepthShortfall.toFixed(2)} sell orders in ${sellBandLabel} of Fallback Mid-Price (Business Support)`);
         let remaining = sellDepthShortfall;
         let supportSellsPlaced = 0;
-        const maxSupportSells = Math.max(targetOrdersPerSide - sellOrders.length, 0);
+        const maxSupportSells = Math.max(targetSellOrders - sellOrders.length, 0);
         while (remaining > 0 && supportSellsPlaced < maxSupportSells && hasSellPlacementBudget()) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
           const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
@@ -2113,11 +2118,11 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
-      const bookSeeded = buyOrders.length >= targetOrdersPerSide && sellOrders.length >= targetOrdersPerSide;
+      const bookSeeded = buyOrders.length >= targetBuyOrders && sellOrders.length >= targetSellOrders;
 
       // 1. Maintain exactly 30 buy and 30 sell orders at staggered prices for book depth
-      if (buyOrders.length < targetOrdersPerSide && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
-        const needBuys = targetOrdersPerSide - buyOrders.length;
+      if (buyOrders.length < targetBuyOrders && hasBuyPlacementBudget() && canPlaceBuysThisCycle) {
+        const needBuys = targetBuyOrders - buyOrders.length;
         for (let i = 0; i < needBuys && hasBuyPlacementBudget(); i++) {
           const buyPrice = this.getPassiveSeededQuotePrice(skewedPriceReference, 'BUY', i);
           const buyOrderUsdTarget = this.getDynamicOrderUsdTarget(buySafeOrderSizeUSD);
@@ -2148,8 +2153,8 @@ export class VolumeGenerationStrategy {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
       }
-      if (sellOrders.length < targetOrdersPerSide && canPlaceSellsThisCycle && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
-        const needSells = targetOrdersPerSide - sellOrders.length;
+      if (sellOrders.length < targetSellOrders && canPlaceSellsThisCycle && hasSellPlacementBudget() && !shouldPrioritizeBuysForDepth) {
+        const needSells = targetSellOrders - sellOrders.length;
         for (let i = 0; i < needSells && hasSellPlacementBudget(); i++) {
           const projectedBuyCount = buyOrders.length + buyPlacementsThisCycle;
           const projectedSellCount = sellOrders.length + sellPlacementsThisCycle;
@@ -2218,7 +2223,7 @@ export class VolumeGenerationStrategy {
         logger.info(`⏭️  Wash trades disabled this cycle: ${washDecision.reason}`);
       }
       if (!bookSeeded) {
-        logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetOrdersPerSide} buys, ${sellOrders.length}/${targetOrdersPerSide} sells)`);
+        logger.info(`⏭️  Deferring wash trades until the order book is seeded (${buyOrders.length}/${targetBuyOrders} buys, ${sellOrders.length}/${targetSellOrders} sells)`);
       }
       if (bookSeeded && washTradePairs === 0) {
         logger.info('⏭️  No wash trades this cycle because wash placement budget is exhausted.');
@@ -2255,18 +2260,18 @@ export class VolumeGenerationStrategy {
       openOrders = await this.exchange.getOpenOrders(this.symbol);
       buyOrders = openOrders.filter(o => o.side === 'BUY');
       sellOrders = openOrders.filter(o => o.side === 'SELL');
-      if (buyOrders.length > targetOrdersPerSide) {
+      if (buyOrders.length > targetBuyOrders) {
         // Sort by timestamp descending, keep newest 30
         const sortedBuys = buyOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessBuyOrders = sortedBuys.slice(targetOrdersPerSide);
+        const excessBuyOrders = sortedBuys.slice(targetBuyOrders);
         for (const order of excessBuyOrders) {
           logger.info(`[Cleanup] Cancelling excess BUY order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
         }
       }
-      if (sellOrders.length > targetOrdersPerSide) {
+      if (sellOrders.length > targetSellOrders) {
         const sortedSells = sellOrders.sort((a, b) => b.timestamp - a.timestamp);
-        const excessSellOrders = sortedSells.slice(targetOrdersPerSide);
+        const excessSellOrders = sortedSells.slice(targetSellOrders);
         for (const order of excessSellOrders) {
           logger.info(`[Cleanup] Cancelling excess SELL order: ${order.orderId}`);
           await this.exchange.cancelOrder(this.symbol, order.orderId);
