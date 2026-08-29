@@ -16,6 +16,7 @@ PROFILE_DISLOCATED="legit-market-making-dislocated"
 PROFILE_SELL_ONLY="legit-market-making-sell-only-recovery"
 PROFILE_COMPLIANCE="legit-market-making-biconomy-compliance"
 PROFILE_DEX_ANCHORED="legit-market-making-dex-anchored"
+PROFILE_DEX_TWO_SIDED="legit-market-making-dex-two-sided-low-notional"
 AUTO_SWITCH_USE_SELL_ONLY_RECOVERY="${AUTO_SWITCH_USE_SELL_ONLY_RECOVERY:-false}"
 
 ENTER_DISLOCATED_SPREAD="${AUTO_SWITCH_ENTER_DISLOCATED_SPREAD_PERCENT:-18}"
@@ -41,6 +42,7 @@ Profiles:
 	legit-market-making-sell-only-recovery
 	legit-market-making-biconomy-compliance
 	legit-market-making-dex-anchored
+	legit-market-making-dex-two-sided-low-notional
 
 Auto mode:
 	- Switches to dislocated profile when last N spreads are all >= ENTER threshold.
@@ -113,11 +115,13 @@ current_profile_from_env() {
 	local sell_only_file
 	local compliance_file
 	local dex_anchored_file
+	local dex_two_sided_file
 	real_user_file="$(profile_file "$PROFILE_REAL_USER")"
 	dislocated_file="$(profile_file "$PROFILE_DISLOCATED")"
 	sell_only_file="$(profile_file "$PROFILE_SELL_ONLY")"
 	compliance_file="$(profile_file "$PROFILE_COMPLIANCE")"
 	dex_anchored_file="$(profile_file "$PROFILE_DEX_ANCHORED")"
+	dex_two_sided_file="$(profile_file "$PROFILE_DEX_TWO_SIDED")"
 
 	if profile_matches_env "$real_user_file"; then
 		echo "$PROFILE_REAL_USER"
@@ -141,6 +145,11 @@ current_profile_from_env() {
 
 	if profile_matches_env "$dex_anchored_file"; then
 		echo "$PROFILE_DEX_ANCHORED"
+		return
+	fi
+
+	if profile_matches_env "$dex_two_sided_file"; then
+		echo "$PROFILE_DEX_TWO_SIDED"
 		return
 	fi
 
@@ -413,6 +422,11 @@ auto_switch() {
 		return
 	fi
 
+	if [[ "$current_profile" == "$PROFILE_DEX_TWO_SIDED" ]]; then
+		log_info "No switch: DEX two-sided low-notional profile is manual-only and retained."
+		return
+	fi
+
 	log_warn "Current .env does not exactly match known legit profiles; no auto-switch performed."
 }
 
@@ -427,6 +441,7 @@ main() {
 	ensure_file_exists "$(profile_file "$PROFILE_DISLOCATED")"
 	ensure_file_exists "$(profile_file "$PROFILE_SELL_ONLY")"
 	ensure_file_exists "$(profile_file "$PROFILE_DEX_ANCHORED")"
+	ensure_file_exists "$(profile_file "$PROFILE_DEX_TWO_SIDED")"
 
 	if [[ "$1" == "--auto" ]]; then
 		local dry_run="false"
@@ -443,7 +458,7 @@ main() {
 	fi
 
 	local target_profile="$1"
-	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" && "$target_profile" != "$PROFILE_SELL_ONLY" && "$target_profile" != "$PROFILE_COMPLIANCE" && "$target_profile" != "$PROFILE_DEX_ANCHORED" ]]; then
+	if [[ "$target_profile" != "$PROFILE_REAL_USER" && "$target_profile" != "$PROFILE_DISLOCATED" && "$target_profile" != "$PROFILE_SELL_ONLY" && "$target_profile" != "$PROFILE_COMPLIANCE" && "$target_profile" != "$PROFILE_DEX_ANCHORED" && "$target_profile" != "$PROFILE_DEX_TWO_SIDED" ]]; then
 		log_error "Unsupported profile: $target_profile"
 		usage
 		exit 1

@@ -274,6 +274,64 @@ export class VolumeGenerationStrategy {
     return Math.max(0, config.volumeStrategy.targetSellDepthUsd);
   }
 
+  private getRemainingOpenNotionalUsd(openOrders: Order[], side: 'BUY' | 'SELL', capUsd: number): number {
+    if (!Number.isFinite(capUsd) || capUsd <= 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    const openNotionalUsd = openOrders
+      .filter(order => order.side === side)
+      .reduce((sum, order) => sum + (Math.max(order.amount - order.filled, 0) * order.price), 0);
+
+    return Math.max(capUsd - openNotionalUsd, 0);
+  }
+
+  private async applyQuoteNotionalCaps(side: 'BUY' | 'SELL', amount: number, price: number): Promise<number | null> {
+    const clipCapUsd = side === 'BUY'
+      ? config.volumeStrategy.maxBuyClipUsd
+      : config.volumeStrategy.maxSellClipUsd;
+    const openNotionalCapUsd = side === 'BUY'
+      ? config.volumeStrategy.maxOpenBuyNotionalUsd
+      : config.volumeStrategy.maxOpenSellNotionalUsd;
+    const configuredCapUsd = Math.min(
+      clipCapUsd > 0 ? clipCapUsd : Number.POSITIVE_INFINITY,
+      openNotionalCapUsd > 0 ? openNotionalCapUsd : Number.POSITIVE_INFINITY
+    );
+
+    if (!Number.isFinite(configuredCapUsd)) {
+      return amount;
+    }
+
+    const exchangeWithOpenOrders = this.exchange as any;
+    if (typeof exchangeWithOpenOrders.getOpenOrders !== 'function') {
+      logger.warn(`⚠️  Skipping ${side} quote because open-order notional caps cannot be verified.`);
+      return null;
+    }
+
+    const openOrders: Order[] = await exchangeWithOpenOrders.getOpenOrders(this.symbol);
+    const remainingOpenNotionalUsd = this.getRemainingOpenNotionalUsd(openOrders, side, openNotionalCapUsd);
+    const allowedNotionalUsd = Math.min(
+      clipCapUsd > 0 ? clipCapUsd : Number.POSITIVE_INFINITY,
+      remainingOpenNotionalUsd
+    );
+    const cappedAmount = Math.floor(Math.min(amount, allowedNotionalUsd / price));
+
+    if (cappedAmount < this.minQty || !this.isValidOrderAmount(cappedAmount, price)) {
+      logger.info(
+        `⏭️  Skipping ${side} quote: remaining open-notional capacity is $${remainingOpenNotionalUsd.toFixed(2)}.`
+      );
+      return null;
+    }
+
+    if (cappedAmount < amount) {
+      logger.info(
+        `🧮 Capping ${side} quote to $${(cappedAmount * price).toFixed(2)} by clip/open-notional limits.`
+      );
+    }
+
+    return cappedAmount;
+  }
+
   private applyEconomicFill(side: 'BUY' | 'SELL', amount: number, price: number, isWashTrade: boolean): number {
     if (!Number.isFinite(amount) || !Number.isFinite(price) || amount <= 0 || price <= 0) {
       return 0;
@@ -2500,6 +2558,12 @@ export class VolumeGenerationStrategy {
 
       amount = executableAmount;
 
+      const cappedAmount = await this.applyQuoteNotionalCaps('BUY', amount, price);
+      if (cappedAmount === null) {
+        return;
+      }
+      amount = cappedAmount;
+
       const orderValue = amount * price;
       const spendableUSDT = Math.max(availableUSDT - this.getIdleBalanceReserveUsd(), 0);
       if (orderValue > spendableUSDT) {
@@ -2657,6 +2721,12 @@ export class VolumeGenerationStrategy {
       }
 
       amount = executableAmount;
+
+      const cappedAmount = await this.applyQuoteNotionalCaps('SELL', amount, price);
+      if (cappedAmount === null) {
+        return;
+      }
+      amount = cappedAmount;
 
       if (amount > availableEPWX) {
         logger.warn(`⚠️  Skipping sell order: requested ${amount.toFixed(2)} EPWX > available ${availableEPWX.toFixed(2)} EPWX`);

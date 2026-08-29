@@ -2552,6 +2552,19 @@ describe('Placement price anchor selection', () => {
   });
 });
 
+describe('Open quote notional caps', () => {
+  it('calculates remaining per-side notional capacity from open orders', () => {
+    const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);
+    const remaining = (strategy as any).getRemainingOpenNotionalUsd([
+      { side: 'BUY', amount: 100, filled: 0, price: 0.1 },
+      { side: 'BUY', amount: 50, filled: 20, price: 0.1 },
+      { side: 'SELL', amount: 500, filled: 0, price: 0.1 },
+    ], 'BUY', 30);
+
+    expect(remaining).toBeCloseTo(17, 10);
+  });
+});
+
 describe('Passive top-touch selection', () => {
   it('keeps the top-touch buy at or below the best bid', () => {
     const strategy = new VolumeGenerationStrategy(new MockExchangeService() as any);

@@ -43,6 +43,10 @@ interface Config {
     targetSellOrders: number;
     targetBuyDepthUsd: number;
     targetSellDepthUsd: number;
+    maxBuyClipUsd: number;
+    maxSellClipUsd: number;
+    maxOpenBuyNotionalUsd: number;
+    maxOpenSellNotionalUsd: number;
     spreadPercentage: number;
     orderFrequency: number;
     forceBuyPause: boolean;
@@ -271,6 +275,10 @@ export const config: Config = {
     targetSellOrders: getEnvNumber('TARGET_SELL_ORDERS', getEnvNumber('TARGET_ORDERS_PER_SIDE', 30)),
     targetBuyDepthUsd: getEnvNumber('TARGET_BUY_DEPTH_USD', 200),
     targetSellDepthUsd: getEnvNumber('TARGET_SELL_DEPTH_USD', 200),
+    maxBuyClipUsd: getEnvNumber('MAX_BUY_CLIP_USD', 0),
+    maxSellClipUsd: getEnvNumber('MAX_SELL_CLIP_USD', 0),
+    maxOpenBuyNotionalUsd: getEnvNumber('MAX_OPEN_BUY_NOTIONAL_USD', 0),
+    maxOpenSellNotionalUsd: getEnvNumber('MAX_OPEN_SELL_NOTIONAL_USD', 0),
     spreadPercentage: getEnvNumber('SPREAD_PERCENTAGE', 0.1),
     orderFrequency: getEnvNumber('ORDER_FREQUENCY', 5000),
     forceBuyPause: getEnvBoolean('FORCE_BUY_PAUSE', false),
